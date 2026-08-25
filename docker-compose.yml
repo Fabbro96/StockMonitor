@@ -13,6 +13,13 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    labels:
+      - "wud.watch=true"
+      - "wud.tag.include=^latest$$"
+      - "wud.display.name=Stock Monitor"
+      - "wud.display.icon=chart-line"
+      - "wud.link.template=https://github.com/Fabbro96/stock_monitor/commits/main"
+      - "com.centurylinklabs.watchtower.enable=true"
     logging:
       driver: "json-file"
       options:

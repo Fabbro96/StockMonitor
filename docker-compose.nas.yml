@@ -48,6 +48,14 @@ services:
       - LOG_LEVEL=INFO
 
     labels:
+      # --- What's Up Docker? (WUD) Auto-Detection & Update Labels ---
+      - "wud.watch=true"
+      - "wud.tag.include=^latest$$"
+      - "wud.display.name=Stock Monitor"
+      - "wud.display.icon=chart-line"
+      - "wud.link.template=https://github.com/Fabbro96/stock_monitor/commits/main"
+      # --- Watchtower Scope Labels ---
+      - "com.centurylinklabs.watchtower.enable=true"
       - "com.centurylinklabs.watchtower.scope=stock-monitor-scope"
 
     logging:

@@ -1,6 +1,8 @@
 services:
   stock-monitor:
-    build: .
+    image: ghcr.io/fabbro96/stock_monitor:latest
+    build:
+      context: .
     container_name: stock-monitor
     ports:
       - "8000:8000"

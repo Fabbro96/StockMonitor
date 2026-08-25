@@ -8,6 +8,7 @@ class WatchlistItem(Base):
     __tablename__ = "watchlist_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     stock_id: Mapped[int] = mapped_column(Integer, ForeignKey("stocks.id", ondelete="CASCADE"), nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     alert_above: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

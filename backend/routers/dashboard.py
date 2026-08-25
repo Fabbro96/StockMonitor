@@ -16,15 +16,21 @@ from backend.services.market_data import MarketDataService
 from backend.services.portfolio_service import build_portfolio_summary, build_portfolio_rows
 from backend.services.analytics import build_portfolio_daily_series
 
+from backend.models.user import User
+from backend.services.auth import get_current_user
+
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 import json
 from backend.models.stock import Stock
 
 @router.get("/")
-async def get_dashboard(db: AsyncSession = Depends(get_db)):
-    # 1. Portfolio summary
-    portfolio_summary = await build_portfolio_summary(db)
+async def get_dashboard(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    # 1. Portfolio summary for logged-in user
+    portfolio_summary = await build_portfolio_summary(db, user_id=current_user.id)
     
     # 2. Recent advices
     advices_result = await db.execute(
@@ -144,14 +150,17 @@ async def get_market_heatmap(db: AsyncSession = Depends(get_db)):
     return heatmap_items
 
 @router.get("/performance")
-async def get_performance(days: int = Query(30), db: AsyncSession = Depends(get_db)):
+async def get_performance(
+    days: int = Query(30),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Ritorna l'andamento calcolato del valore complessivo del portafoglio giorno
-    per giorno (PriceHistory + backfill Yahoo). 'source' indica se la serie è
-    reale ('real') oppure un fallback piatto ('fallback').
+    Ritorna l'andamento calcolato del valore complessivo del portafoglio dell'utente giorno
+    per giorno (PriceHistory + backfill Yahoo).
     """
-    portfolio = await build_portfolio_rows(db)
-    series = await build_portfolio_daily_series(db, days=days)
+    portfolio = await build_portfolio_rows(db, user_id=current_user.id)
+    series = await build_portfolio_daily_series(db, days=days, user_id=current_user.id)
     if series:
         return {"data": series, "source": "real", "points": len(series)}
 

@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import math
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,6 +11,16 @@ from backend.services.market_data import MarketDataService
 from backend.utils.helpers import calculate_pnl
 
 logger = logging.getLogger(__name__)
+
+
+def _is_valid_float(v) -> bool:
+    if v is None:
+        return False
+    try:
+        f = float(v)
+        return not (math.isnan(f) or math.isinf(f)) and f > 0
+    except (ValueError, TypeError):
+        return False
 
 
 async def get_latest_price(db: AsyncSession, stock_id: int, ticker: str, fallback_price: float | None = None) -> dict:
@@ -28,8 +39,8 @@ async def get_latest_price(db: AsyncSession, stock_id: int, ticker: str, fallbac
         .limit(2)
     )
     latest_rows = price_result.scalars().all()
-    if latest_rows and latest_rows[0].close:
-        prev_close = latest_rows[1].close if len(latest_rows) > 1 else None
+    if latest_rows and _is_valid_float(latest_rows[0].close):
+        prev_close = latest_rows[1].close if (len(latest_rows) > 1 and _is_valid_float(latest_rows[1].close)) else None
         return {
             "price": float(latest_rows[0].close),
             "stale": False,
@@ -37,43 +48,46 @@ async def get_latest_price(db: AsyncSession, stock_id: int, ticker: str, fallbac
         }
 
     price_data = await MarketDataService.fetch_current_price(ticker)
-    if price_data and price_data.get("close"):
+    if price_data and _is_valid_float(price_data.get("close")):
+        prev_c = price_data.get("previous_close")
         return {
             "price": float(price_data["close"]),
             "stale": bool(price_data.get("stale", False)),
-            "previous_close": float(price_data["previous_close"]) if price_data.get("previous_close") else None,
+            "previous_close": float(prev_c) if _is_valid_float(prev_c) else None,
         }
 
-    if fallback_price:
+    if _is_valid_float(fallback_price):
         return {"price": float(fallback_price), "stale": True, "previous_close": None}
     return {"price": None, "stale": True, "previous_close": None}
 
 
-async def build_portfolio_rows(db: AsyncSession) -> list[dict]:
+async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None) -> list[dict]:
     """
-    Costruisce le righe complete del portafoglio (holdings + prezzi live/DB).
+    Costruisce le righe complete del portafoglio (holdings + prezzi live/DB) filtrate per utente.
     Usa selectinload per eliminare query N+1 ed esegue conversione valuta FX.
     """
-    result = await db.execute(
+    query = (
         select(Holding)
         .join(Stock)
         .where(Stock.is_active == True)
         .options(selectinload(Holding.stock))
     )
+    if user_id is not None:
+        query = query.where(Holding.user_id == user_id)
+
+    result = await db.execute(query)
     holdings = result.scalars().all()
     usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
 
     portfolio = []
     for h in holdings:
         stock = h.stock
-        if not stock:
-            continue
-
         price_info = await get_latest_price(
             db, h.stock_id, stock.ticker, fallback_price=h.avg_purchase_price
         )
-        current_price = price_info["price"] if price_info["price"] is not None else h.avg_purchase_price
-        previous_close = price_info.get("previous_close")
+        raw_p = price_info.get("price")
+        current_price = float(raw_p) if _is_valid_float(raw_p) else (float(h.avg_purchase_price) if _is_valid_float(h.avg_purchase_price) else 0.0)
+        previous_close = float(price_info["previous_close"]) if _is_valid_float(price_info.get("previous_close")) else None
 
         pnl = calculate_pnl(current_price, h.avg_purchase_price, h.quantity)
 
@@ -112,9 +126,9 @@ async def build_portfolio_rows(db: AsyncSession) -> list[dict]:
     return portfolio
 
 
-async def build_portfolio_summary(db: AsyncSession) -> dict:
-    """Riepilogo aggregato del portafoglio in valuta base EUR con allocazione e stima dividendi."""
-    portfolio = await build_portfolio_rows(db)
+async def build_portfolio_summary(db: AsyncSession, user_id: int | None = None) -> dict:
+    """Riepilogo aggregato del portafoglio in valuta base EUR filtrato per utente."""
+    portfolio = await build_portfolio_rows(db, user_id=user_id)
     usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
 
     total_invested = sum(h.get("total_invested_eur", h["total_invested"]) for h in portfolio)

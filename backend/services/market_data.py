@@ -498,36 +498,59 @@ class MarketDataService:
                 volume = 0
 
                 if not hist.empty:
-                    closes = hist['Close']
-                    current_price = float(closes.iloc[-1])
-                    day_high = float(hist['High'].iloc[-1])
-                    day_low = float(hist['Low'].iloc[-1])
-                    volume = int(hist['Volume'].iloc[-1])
+                    closes = hist['Close'].dropna()
+                    if not closes.empty:
+                        last_c = float(closes.iloc[-1])
+                        if not math.isnan(last_c) and last_c > 0:
+                            current_price = last_c
+                            try:
+                                h_val = float(hist['High'].iloc[-1])
+                                day_high = h_val if not math.isnan(h_val) else current_price
+                            except Exception:
+                                day_high = current_price
+                            try:
+                                l_val = float(hist['Low'].iloc[-1])
+                                day_low = l_val if not math.isnan(l_val) else current_price
+                            except Exception:
+                                day_low = current_price
+                            try:
+                                v_val = float(hist['Volume'].iloc[-1])
+                                volume = int(v_val) if not math.isnan(v_val) else 0
+                            except Exception:
+                                volume = 0
 
-                    if len(closes) > 1:
-                        prev_close = float(closes.iloc[-2])
-                        change_abs = current_price - prev_close
-                        change_percent = (change_abs / prev_close * 100) if prev_close else 0.0
-                    else:
-                        prev_close = current_price
+                            if len(closes) > 1:
+                                prev_c = float(closes.iloc[-2])
+                                if not math.isnan(prev_c) and prev_c > 0:
+                                    prev_close = prev_c
+                                    change_abs = current_price - prev_close
+                                    change_percent = (change_abs / prev_close * 100)
+                                else:
+                                    prev_close = current_price
+                            else:
+                                prev_close = current_price
 
-                    if len(closes) >= 15:
-                        delta = closes.diff()
-                        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                        rs = gain / loss.replace(0, np.nan)
-                        rsi_series = 100 - (100 / (1 + rs))
-                        last_rsi = rsi_series.iloc[-1]
-                        if not np.isnan(last_rsi):
-                            rsi_val = round(float(last_rsi), 1)
+                            if len(closes) >= 15:
+                                delta = closes.diff()
+                                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                                rs = gain / loss.replace(0, np.nan)
+                                rsi_series = 100 - (100 / (1 + rs))
+                                last_rsi = rsi_series.iloc[-1]
+                                if not np.isnan(last_rsi) and not math.isnan(float(last_rsi)):
+                                    rsi_val = round(float(last_rsi), 1)
 
-                    if len(closes) >= 20:
-                        sma20_val = round(float(closes.rolling(window=20).mean().iloc[-1]), 2)
-                    
-                    if len(closes) >= 50:
-                        sma50_val = round(float(closes.rolling(window=50).mean().iloc[-1]), 2)
+                            if len(closes) >= 20:
+                                s20 = float(closes.rolling(window=20).mean().iloc[-1])
+                                if not math.isnan(s20):
+                                    sma20_val = round(s20, 2)
+                            
+                            if len(closes) >= 50:
+                                s50 = float(closes.rolling(window=50).mean().iloc[-1])
+                                if not math.isnan(s50):
+                                    sma50_val = round(s50, 2)
 
-                if current_price == 0.0:
+                if current_price <= 0.0 or math.isnan(current_price):
                     fb = MarketDataService._generate_fallback_price(ticker_up)
                     current_price = fb['close']
                     prev_close = fb['previous_close']
@@ -537,8 +560,17 @@ class MarketDataService:
                     day_low = fb['low']
                     volume = fb['volume']
 
-                fifty_two_high = float(info.get('fiftyTwoWeekHigh') or (current_price * 1.25))
-                fifty_two_low = float(info.get('fiftyTwoWeekLow') or (current_price * 0.78))
+                def _safe_float(val, default=None):
+                    if val is None:
+                        return default
+                    try:
+                        f = float(val)
+                        return None if (math.isnan(f) or math.isinf(f)) else f
+                    except (ValueError, TypeError):
+                        return default
+
+                fifty_two_high = _safe_float(info.get('fiftyTwoWeekHigh'), current_price * 1.25)
+                fifty_two_low = _safe_float(info.get('fiftyTwoWeekLow'), current_price * 0.78)
                 
                 range_span = fifty_two_high - fifty_two_low
                 range_pct = round(((current_price - fifty_two_low) / range_span * 100), 1) if range_span > 0 else 50.0
@@ -559,6 +591,16 @@ class MarketDataService:
                 elif sma20_val and current_price < sma20_val:
                     trend = "Ribassista (Bearish)" if (not sma50_val or sma20_val < sma50_val) else "Correzione"
 
+                pe = _safe_float(info.get('trailingPE'), ref.get('pe'))
+                fwd_pe = _safe_float(info.get('forwardPE'), (ref.get('pe', 15) * 0.95 if ref.get('pe') else None))
+                eps = _safe_float(info.get('trailingEps'), (round(current_price / (ref.get('pe') or 15), 2)))
+                beta = _safe_float(info.get('beta'), 1.15)
+                div_yield = _safe_float(info.get('dividendYield'), None)
+                if div_yield is not None:
+                    div_yield = round(div_yield * 100, 2)
+                else:
+                    div_yield = ref.get('div')
+
                 return {
                     "ticker": ticker_up,
                     "name": info.get('shortName') or info.get('longName') or ref.get('name', ticker_up),
@@ -573,11 +615,11 @@ class MarketDataService:
                     "volume": volume,
                     "avg_volume": int(info.get('averageVolume') or volume),
                     "market_cap": info.get('marketCap') or (volume * current_price * 100),
-                    "pe_ratio": round(float(info.get('trailingPE')), 2) if info.get('trailingPE') else ref.get('pe'),
-                    "forward_pe": round(float(info.get('forwardPE')), 2) if info.get('forwardPE') else (ref.get('pe', 15) * 0.95 if ref.get('pe') else None),
-                    "eps": round(float(info.get('trailingEps')), 2) if info.get('trailingEps') else (round(current_price / (ref.get('pe') or 15), 2)),
-                    "beta": round(float(info.get('beta')), 2) if info.get('beta') else 1.15,
-                    "dividend_yield": round(float(info.get('dividendYield') * 100), 2) if info.get('dividendYield') else ref.get('div'),
+                    "pe_ratio": round(pe, 2) if pe is not None else None,
+                    "forward_pe": round(fwd_pe, 2) if fwd_pe is not None else None,
+                    "eps": round(eps, 2) if eps is not None else None,
+                    "beta": round(beta, 2) if beta is not None else 1.0,
+                    "dividend_yield": div_yield,
                     "fifty_two_week_high": round(fifty_two_high, 2),
                     "fifty_two_week_low": round(fifty_two_low, 2),
                     "fifty_two_week_pct": range_pct,
@@ -629,8 +671,28 @@ class MarketDataService:
                 stock = yf.Ticker(ticker_up, session=_yf_session)
                 hist = stock.history(period=period, interval=interval)
                 if not hist.empty:
+                    hist_clean = hist.dropna(subset=['Close'])
                     results = []
-                    for index, row in hist.iterrows():
+                    for index, row in hist_clean.iterrows():
+                        c_val = float(row["Close"])
+                        if math.isnan(c_val) or math.isinf(c_val) or c_val <= 0:
+                            continue
+
+                        o_raw = float(row["Open"])
+                        o_val = o_raw if not (math.isnan(o_raw) or math.isinf(o_raw)) else c_val
+
+                        h_raw = float(row["High"])
+                        h_val = h_raw if not (math.isnan(h_raw) or math.isinf(h_raw)) else max(o_val, c_val)
+
+                        l_raw = float(row["Low"])
+                        l_val = l_raw if not (math.isnan(l_raw) or math.isinf(l_raw)) else min(o_val, c_val)
+
+                        try:
+                            v_raw = float(row.get("Volume", 0))
+                            v_val = int(v_raw) if not (math.isnan(v_raw) or math.isinf(v_raw)) else 0
+                        except Exception:
+                            v_val = 0
+
                         if interval in ["5m", "15m", "30m", "60m", "1h"]:
                             time_val = int(index.timestamp())
                         else:
@@ -638,14 +700,15 @@ class MarketDataService:
                         
                         results.append({
                             "time": time_val,
-                            "open": round(float(row["Open"]), 2),
-                            "high": round(float(row["High"]), 2),
-                            "low": round(float(row["Low"]), 2),
-                            "close": round(float(row["Close"]), 2),
-                            "value": round(float(row["Close"]), 2),
-                            "volume": int(row.get("Volume", 0))
+                            "open": round(o_val, 2),
+                            "high": round(h_val, 2),
+                            "low": round(l_val, 2),
+                            "close": round(c_val, 2),
+                            "value": round(c_val, 2),
+                            "volume": v_val
                         })
-                    return results
+                    if results:
+                        return results
             except Exception:
                 pass
 

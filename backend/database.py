@@ -73,6 +73,29 @@ async def init_db() -> None:
             except Exception:
                 pass
 
+        # Migrazioni sicure per multi-utente (user_id per isolamento portfolio e watchlist)
+        for user_col in [
+            "ALTER TABLE holdings ADD COLUMN user_id INTEGER REFERENCES users(id)",
+            "ALTER TABLE transactions ADD COLUMN user_id INTEGER REFERENCES users(id)",
+            "ALTER TABLE watchlist_items ADD COLUMN user_id INTEGER REFERENCES users(id)",
+            "ALTER TABLE user_settings ADD COLUMN user_id INTEGER REFERENCES users(id)",
+            "ALTER TABLE alert_rules ADD COLUMN user_id INTEGER REFERENCES users(id)"
+        ]:
+            try:
+                await conn.execute(text(user_col))
+            except Exception:
+                pass
+
+        # Assegna eventuali dati storici orfani (senza user_id) all'admin id=1
+        try:
+            await conn.execute(text("UPDATE holdings SET user_id = 1 WHERE user_id IS NULL"))
+            await conn.execute(text("UPDATE transactions SET user_id = 1 WHERE user_id IS NULL"))
+            await conn.execute(text("UPDATE watchlist_items SET user_id = 1 WHERE user_id IS NULL"))
+            await conn.execute(text("UPDATE user_settings SET user_id = 1 WHERE user_id IS NULL"))
+            await conn.execute(text("UPDATE alert_rules SET user_id = 1 WHERE user_id IS NULL"))
+        except Exception:
+            pass
+
 
 from contextlib import asynccontextmanager
 

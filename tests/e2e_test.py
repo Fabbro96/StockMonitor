@@ -448,6 +448,73 @@ async def test_trade_ledger_and_dividends(c: httpx.AsyncClient, h: dict):
     check("dividends ha portfolio_yield_on_cost", "portfolio_yield_on_cost" in div_cal)
 
 
+async def test_multi_user_isolation(c: httpx.AsyncClient, admin_h: dict):
+    print("\n[13] Multi-User Isolation & Zero-Holdings Start")
+    # 1. Admin creates user investor_bob
+    r = await c.post("/api/auth/users", json={
+        "username": "investor_bob",
+        "password": "Password123!",
+        "is_admin": False
+    }, headers=admin_h)
+    check("Admin POST /api/auth/users -> 200", r.status_code == 200)
+
+    # 2. Login as investor_bob
+    r = await c.post("/api/auth/login", json={
+        "username": "investor_bob",
+        "password": "Password123!"
+    })
+    check("investor_bob login -> 200", r.status_code == 200)
+    bob_token = r.json().get("access_token")
+    check("investor_bob has token", bool(bob_token))
+    bob_h = {"Authorization": f"Bearer {bob_token}"}
+
+    # 3. New user starts with exactly 0 holdings
+    r = await c.get("/api/portfolio/", headers=bob_h)
+    check("investor_bob GET /api/portfolio/ -> 200", r.status_code == 200)
+    bob_holdings = r.json()
+    check("investor_bob starts with 0 holdings", len(bob_holdings) == 0)
+
+    # 4. Summary starts with 0 value
+    r = await c.get("/api/portfolio/summary", headers=bob_h)
+    check("investor_bob GET /api/portfolio/summary -> 200", r.status_code == 200)
+    bob_summary = r.json()
+    check("investor_bob summary total_value == 0", bob_summary.get("total_value") == 0.0)
+    check("investor_bob summary holdings_count == 0", bob_summary.get("holdings_count") == 0)
+
+    # 5. Watchlist starts empty
+    r = await c.get("/api/watchlist/", headers=bob_h)
+    check("investor_bob GET /api/watchlist/ -> 200", r.status_code == 200)
+    bob_watchlist = r.json()
+    check("investor_bob starts with 0 watchlist items", len(bob_watchlist) == 0)
+
+    # 6. Investor bob adds a holding
+    r = await c.post("/api/portfolio/holdings", json={
+        "ticker": "AAPL",
+        "quantity": 10,
+        "avg_purchase_price": 150.0,
+        "notes": "Bob private holding"
+    }, headers=bob_h)
+    check("investor_bob add holding -> 200", r.status_code == 200)
+    bob_holding_id = r.json().get("id")
+
+    # 7. Admin portfolio does NOT include Bob's holding
+    r = await c.get("/api/portfolio/", headers=admin_h)
+    admin_holdings = r.json()
+    admin_holding_ids = [h["id"] for h in admin_holdings]
+    check("Bob's holding is isolated from Admin", bob_holding_id not in admin_holding_ids)
+
+    # 8. User settings budget isolation
+    r = await c.put("/api/settings/", json={
+        "budget": 35000.0,
+        "strategy": "long"
+    }, headers=bob_h)
+    check("investor_bob PUT /api/settings/ budget=35000 -> 200", r.status_code == 200)
+    check("investor_bob settings budget updated", r.json().get("budget") == 35000.0)
+
+    r = await c.get("/api/settings/", headers=admin_h)
+    check("Admin settings budget unchanged by Bob", r.json().get("budget") != 35000.0)
+
+
 # ===========================================================================
 # MAIN RUNNER
 # ===========================================================================
@@ -480,6 +547,7 @@ async def run_all():
             await test_settings_and_alerts(c, h)
             await test_dashboard(c, h)
             await test_advice_fallback(c, h)
+            await test_multi_user_isolation(c, h)
             await test_concurrency(c, h)
             await test_sqlite_integrity()
 

@@ -25,15 +25,15 @@ _RISK_CACHE_TTL = 300.0  # 5 minuti
 # ---------------------------------------------------------------------------
 # Serie storica giornaliera del valore del portafoglio
 # ---------------------------------------------------------------------------
-async def build_portfolio_daily_series(db: AsyncSession, days: int = 180) -> list[dict]:
+async def build_portfolio_daily_series(db: AsyncSession, days: int = 180, user_id: int | None = None) -> list[dict]:
     """
-    Costruisce la serie giornaliera del valore del portafoglio:
+    Costruisce la serie giornaliera del valore del portafoglio per un utente:
     1. chiusura giornaliera da PriceHistory (dati raccolti dallo scheduler)
     2. backfill con candele giornaliere Yahoo (fetch_stock_candles '1y')
     3. forward-fill dei giorni mancanti; prezzo corrente per l'ultimo giorno
     Ritorna [{"date": "YYYY-MM-DD", "value": float}] ordinato per data.
     """
-    portfolio = await build_portfolio_rows(db)
+    portfolio = await build_portfolio_rows(db, user_id=user_id)
     if not portfolio:
         return []
 
@@ -78,13 +78,13 @@ async def build_portfolio_daily_series(db: AsyncSession, days: int = 180) -> lis
     series = []
     last_known: dict[int, float] = {}
     for h in portfolio:
-        price = h.get("current_price") or h.get("avg_purchase_price")
-        if price:
-            last_known[h["stock_id"]] = float(price)
+        if h["stock_id"] in daily_close and daily_close[h["stock_id"]]:
+            first_day = sorted(daily_close[h["stock_id"]].keys())[0]
+            last_known[h["stock_id"]] = daily_close[h["stock_id"]][first_day]
 
     current = start_date
     while current <= today:
-        day_str = current.strftime("%Y-%m-%d")
+        day_str = current.isoformat()
         total = 0.0
         has_data = False
         for h in portfolio:
@@ -120,19 +120,19 @@ def normalize_growth(series: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Metriche di rischio quantitative
 # ---------------------------------------------------------------------------
-async def compute_risk_metrics(db: AsyncSession, days: int = 180) -> dict:
+async def compute_risk_metrics(db: AsyncSession, days: int = 180, user_id: int | None = None) -> dict:
     """
-    Calcola le metriche di rischio/performance del portafoglio:
+    Calcola le metriche di rischio/performance del portafoglio per utente:
     Max Drawdown, Volatilità annualizzata, Sharpe Ratio, Beta pesato,
     Rendimento annualizzato.
     """
-    cache_key = f"risk:{days}"
+    cache_key = f"risk:{user_id}:{days}"
     now_ts = time.time()
     cached = _RISK_CACHE.get(cache_key)
     if cached and now_ts - cached[1] < _RISK_CACHE_TTL:
         return cached[0]
 
-    series = await build_portfolio_daily_series(db, days=days)
+    series = await build_portfolio_daily_series(db, days=days, user_id=user_id)
     values = [p["value"] for p in series if p["value"] > 0]
 
     metrics = {
@@ -176,7 +176,7 @@ async def compute_risk_metrics(db: AsyncSession, days: int = 180) -> dict:
             metrics["sharpe_ratio"] = round((ann_return - settings.RISK_FREE_RATE) / ann_vol, 2)
 
     # --- Beta pesato (pesi = controvalore attuale) ---
-    portfolio = await build_portfolio_rows(db)
+    portfolio = await build_portfolio_rows(db, user_id=user_id)
     total_value = sum(h["total_value"] for h in portfolio)
     if portfolio and total_value > 0:
         deep_tasks = [MarketDataService.fetch_stock_deep_dive(h["ticker"]) for h in portfolio]
@@ -219,20 +219,25 @@ def _period_for_days(days: int) -> str:
     return "5y"
 
 
-async def compute_benchmark_comparison(db: AsyncSession, days: int = 90, benchmark_tickers: list[str] | None = None) -> dict:
+async def compute_benchmark_comparison(
+    db: AsyncSession,
+    days: int = 90,
+    benchmark_tickers: list[str] | None = None,
+    user_id: int | None = None
+) -> dict:
     """
-    Confronta la curva di crescita % del portafoglio con uno o più indici di mercato.
+    Confronta la crescita percentuale del portafoglio dell'utente con gli indici benchmark.
     """
     if benchmark_tickers is None:
-        benchmark_tickers = list(BENCHMARKS.keys())
+        benchmark_tickers = ["^GSPC", "FTSEMIB.MI"]
 
-    series = await build_portfolio_daily_series(db, days=days)
+    period = _period_for_days(days)
+    series = await build_portfolio_daily_series(db, days=days, user_id=user_id)
     portfolio_growth = normalize_growth(series)
 
     start_date = series[0]["date"] if series else None
     end_date = series[-1]["date"] if series else None
 
-    period = _period_for_days(max(days, 90))
     tasks = [MarketDataService.fetch_index_history(t, period) for t in benchmark_tickers]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 

@@ -12,6 +12,8 @@ from backend.database import get_db
 from backend.models.portfolio import Holding, Transaction
 from backend.models.stock import Stock, PriceHistory
 from backend.models.target_allocation import TargetAllocation
+from backend.models.user import User
+from backend.services.auth import get_current_user
 from backend.services.market_data import MarketDataService
 from backend.services.portfolio_service import build_portfolio_rows, build_portfolio_summary
 from backend.services.analytics import (
@@ -47,26 +49,37 @@ class BatchUpdateRequest(BaseModel):
     holdings: List[HoldingBatchItem]
 
 @router.get("/")
-async def get_portfolio(db: AsyncSession = Depends(get_db)):
-    """Lista posizioni con prezzi live (fallback DB/cache mai bloccante)."""
-    return await build_portfolio_rows(db)
+async def get_portfolio(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Lista posizioni dell'utente con prezzi live (fallback DB/cache mai bloccante)."""
+    return await build_portfolio_rows(db, user_id=current_user.id)
 
 @router.get("/summary")
-async def get_summary(db: AsyncSession = Depends(get_db)):
-    return await build_portfolio_summary(db)
+async def get_summary(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    return await build_portfolio_summary(db, user_id=current_user.id)
 
 @router.get("/risk-metrics")
-async def get_risk_metrics(days: int = Query(180, ge=30, le=3650), db: AsyncSession = Depends(get_db)):
+async def get_risk_metrics(
+    days: int = Query(180, ge=30, le=3650),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Metriche quantitative di rischio/performance del portafoglio:
+    Metriche quantitative di rischio/performance del portafoglio dell'utente:
     Max Drawdown, Volatilità annualizzata, Sharpe Ratio, Beta pesato.
     """
-    return await compute_risk_metrics(db, days=days)
+    return await compute_risk_metrics(db, days=days, user_id=current_user.id)
 
 @router.get("/benchmarks")
 async def get_benchmark_comparison(
     days: int = Query(90, ge=7, le=1825),
     tickers: Optional[str] = Query(None, description="Comma-separated: ^GSPC,FTSEMIB.MI"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -78,7 +91,7 @@ async def get_benchmark_comparison(
         benchmark_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
         for t in benchmark_list:
             BENCHMARKS.setdefault(t, {"name": t, "flag": "📊"})
-    return await compute_benchmark_comparison(db, days=days, benchmark_tickers=benchmark_list)
+    return await compute_benchmark_comparison(db, days=days, benchmark_tickers=benchmark_list, user_id=current_user.id)
 
 # ---------------------------------------------------------------------------
 # Rebalancer: Target Allocation CRUD + Preview ordini
@@ -143,9 +156,13 @@ async def delete_target(target_id: int, db: AsyncSession = Depends(get_db)):
     return {"status": "success"}
 
 @router.post("/rebalance/preview")
-async def rebalance_preview(data: RebalancePreviewRequest, db: AsyncSession = Depends(get_db)):
+async def rebalance_preview(
+    data: RebalancePreviewRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Calcola il piano di ribilanciamento: delta per bucket e ordini buy/sell
+    Calcola il piano di ribilanciamento per il portafoglio dell'utente: delta per bucket e ordini buy/sell
     (quantità stimate) necessari per raggiungere le allocazioni target.
     """
     result = await db.execute(select(TargetAllocation).order_by(TargetAllocation.id))
@@ -158,14 +175,18 @@ async def rebalance_preview(data: RebalancePreviewRequest, db: AsyncSession = De
          "scope_type": t.scope_type, "scope_value": t.scope_value or ""}
         for t in targets
     ]
-    portfolio = await build_portfolio_rows(db)
+    portfolio = await build_portfolio_rows(db, user_id=current_user.id)
     plan = compute_rebalance_plan(portfolio, target_dicts, extra_cash=data.extra_cash)
     plan["portfolio_empty"] = len(portfolio) == 0
     return plan
 
 
 @router.post("/holdings")
-async def add_holding(holding_data: HoldingCreate, db: AsyncSession = Depends(get_db)):
+async def add_holding(
+    holding_data: HoldingCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     stock_id = holding_data.stock_id
 
     # If stock_id not provided but ticker is, find or create Stock
@@ -189,8 +210,11 @@ async def add_holding(holding_data: HoldingCreate, db: AsyncSession = Depends(ge
     if not stock_id:
         raise HTTPException(status_code=400, detail="Specificare stock_id o ticker valido.")
 
-    # Check if a holding for this stock already exists -> if so, update weighted average
-    existing_result = await db.execute(select(Holding).where(Holding.stock_id == stock_id))
+    # Check if a holding for this stock already exists for THIS user -> if so, update weighted average
+    existing_result = await db.execute(
+        select(Holding)
+        .where(Holding.stock_id == stock_id, Holding.user_id == current_user.id)
+    )
     existing_holding = existing_result.scalars().first()
     if existing_holding:
         total_qty = existing_holding.quantity + holding_data.quantity
@@ -208,6 +232,7 @@ async def add_holding(holding_data: HoldingCreate, db: AsyncSession = Depends(ge
             return existing_holding
 
     new_holding = Holding(
+        user_id=current_user.id,
         stock_id=stock_id,
         quantity=holding_data.quantity,
         avg_purchase_price=holding_data.avg_purchase_price,
@@ -220,9 +245,14 @@ async def add_holding(holding_data: HoldingCreate, db: AsyncSession = Depends(ge
     return new_holding
 
 @router.put("/holdings/{holding_id}")
-async def update_holding(holding_id: int, holding_update: HoldingUpdate, db: AsyncSession = Depends(get_db)):
+async def update_holding(
+    holding_id: int,
+    holding_update: HoldingUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     holding = await db.get(Holding, holding_id)
-    if not holding:
+    if not holding or (holding.user_id is not None and holding.user_id != current_user.id):
         raise HTTPException(status_code=404, detail="Holding non trovata")
         
     update_data = holding_update.dict(exclude_unset=True)
@@ -235,14 +265,18 @@ async def update_holding(holding_id: int, holding_update: HoldingUpdate, db: Asy
     return holding
 
 @router.put("/batch")
-async def batch_update_holdings(batch_data: BatchUpdateRequest, db: AsyncSession = Depends(get_db)):
+async def batch_update_holdings(
+    batch_data: BatchUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Aggiorna più posizioni contemporaneamente con una singola transazione sicura.
+    Aggiorna più posizioni dell'utente contemporaneamente con una singola transazione sicura.
     """
     updated_count = 0
     for item in batch_data.holdings:
         holding = await db.get(Holding, item.id)
-        if holding:
+        if holding and (holding.user_id is None or holding.user_id == current_user.id):
             holding.quantity = item.quantity
             holding.avg_purchase_price = item.avg_purchase_price
             if item.notes is not None:
@@ -253,9 +287,13 @@ async def batch_update_holdings(batch_data: BatchUpdateRequest, db: AsyncSession
     return {"status": "success", "updated_count": updated_count}
 
 @router.delete("/holdings/{holding_id}")
-async def remove_holding(holding_id: int, db: AsyncSession = Depends(get_db)):
+async def remove_holding(
+    holding_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     holding = await db.get(Holding, holding_id)
-    if not holding:
+    if not holding or (holding.user_id is not None and holding.user_id != current_user.id):
         raise HTTPException(status_code=404, detail="Holding non trovata")
         
     await db.delete(holding)
@@ -263,11 +301,15 @@ async def remove_holding(holding_id: int, db: AsyncSession = Depends(get_db)):
     return {"status": "success", "message": "Holding rimossa"}
 
 @router.get("/export")
-async def export_portfolio(format: str = Query("csv", pattern="^(csv|json)$"), db: AsyncSession = Depends(get_db)):
+async def export_portfolio(
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Esporta il portafoglio corrente in formato CSV o JSON.
+    Esporta il portafoglio dell'utente corrente in formato CSV o JSON.
     """
-    portfolio = await get_portfolio(db)
+    portfolio = await build_portfolio_rows(db, user_id=current_user.id)
     
     if format == "json":
         return portfolio
@@ -300,9 +342,13 @@ async def export_portfolio(format: str = Query("csv", pattern="^(csv|json)$"), d
     )
 
 @router.post("/import")
-async def import_holdings(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+async def import_holdings(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Importa posizioni azionarie da un file CSV. Supporta virgola e punto e virgola come separatori.
+    Importa posizioni azionarie da un file CSV assegnandole all'utente autenticato.
     """
     content = await file.read()
     text = content.decode("utf-8-sig", errors="ignore")
@@ -373,8 +419,11 @@ async def import_holdings(file: UploadFile = File(...), db: AsyncSession = Depen
             await db.commit()
             await db.refresh(stock)
             
-        # Find if holding exists
-        h_result = await db.execute(select(Holding).where(Holding.stock_id == stock.id))
+        # Find if holding exists for this user
+        h_result = await db.execute(
+            select(Holding)
+            .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
+        )
         holding = h_result.scalars().first()
         
         if holding:
@@ -387,6 +436,7 @@ async def import_holdings(file: UploadFile = File(...), db: AsyncSession = Depen
             updated += 1
         else:
             h = Holding(
+                user_id=current_user.id,
                 stock_id=stock.id,
                 quantity=quantity,
                 avg_purchase_price=avg_price,
@@ -405,9 +455,12 @@ async def import_holdings(file: UploadFile = File(...), db: AsyncSession = Depen
     }
 
 @router.post("/seed-demo")
-async def seed_demo_data(db: AsyncSession = Depends(get_db)):
+async def seed_demo_data(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Inizializza posizioni demo bilanciate (Italia + USA) per un'esperienza immediata.
+    Inizializza posizioni demo bilanciate (Italia + USA) per l'utente autenticato.
     """
     from backend.models.watchlist import WatchlistItem
 
@@ -438,10 +491,14 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             await db.commit()
             await db.refresh(stock)
 
-        # Check holding
-        h_res = await db.execute(select(Holding).where(Holding.stock_id == stock.id))
+        # Check holding for this user
+        h_res = await db.execute(
+            select(Holding)
+            .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
+        )
         if not h_res.scalars().first():
             h = Holding(
+                user_id=current_user.id,
                 stock_id=stock.id,
                 quantity=item["qty"],
                 avg_purchase_price=item["price"],
@@ -461,9 +518,13 @@ async def seed_demo_data(db: AsyncSession = Depends(get_db)):
             await db.commit()
             await db.refresh(stock)
 
-        w_res = await db.execute(select(WatchlistItem).where(WatchlistItem.stock_id == stock.id))
+        w_res = await db.execute(
+            select(WatchlistItem)
+            .where(WatchlistItem.stock_id == stock.id, WatchlistItem.user_id == current_user.id)
+        )
         if not w_res.scalars().first():
             w = WatchlistItem(
+                user_id=current_user.id,
                 stock_id=stock.id,
                 notes=item["notes"],
                 alert_above=item.get("alert_above"),
@@ -500,10 +561,16 @@ async def list_transactions(
     ticker: Optional[str] = None,
     limit: int = 100,
     skip: int = 0,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Restituisce lo storico completo delle transazioni registrate nel Trade Ledger."""
-    query = select(Transaction).join(Stock).options(selectinload(Transaction.stock))
+    """Restituisce lo storico completo delle transazioni registrate nel Trade Ledger dell'utente."""
+    query = (
+        select(Transaction)
+        .join(Stock)
+        .where(Transaction.user_id == current_user.id)
+        .options(selectinload(Transaction.stock))
+    )
     if type:
         query = query.where(Transaction.type == type.upper())
     if ticker:
@@ -533,9 +600,13 @@ async def list_transactions(
 
 
 @router.post("/transactions")
-async def create_transaction(tx_in: TransactionCreate, db: AsyncSession = Depends(get_db)):
+async def create_transaction(
+    tx_in: TransactionCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
-    Registra una nuova transazione (BUY, SELL o DIVIDEND) e aggiorna atomicamente il portafoglio.
+    Registra una nuova transazione (BUY, SELL o DIVIDEND) per l'utente e aggiorna atomicamente il portafoglio.
     - BUY: incrementa o crea la posizione calcolando il nuovo prezzo medio di carico ponderato.
     - SELL: calcola il P&L realizzato, decrementa la posizione (o la rimuove se 0).
     - DIVIDEND: registra l'incasso cedolare.
@@ -566,8 +637,11 @@ async def create_transaction(tx_in: TransactionCreate, db: AsyncSession = Depend
     tx_date = tx_in.transaction_date or datetime.now(timezone.utc)
     realized_pnl = None
 
-    # Recupera posizione esistente
-    h_res = await db.execute(select(Holding).where(Holding.stock_id == stock.id))
+    # Recupera posizione esistente per questo utente
+    h_res = await db.execute(
+        select(Holding)
+        .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
+    )
     holding = h_res.scalars().first()
 
     if t_type == "BUY":
@@ -583,6 +657,7 @@ async def create_transaction(tx_in: TransactionCreate, db: AsyncSession = Depend
                 holding.notes = tx_in.notes
         else:
             holding = Holding(
+                user_id=current_user.id,
                 stock_id=stock.id,
                 quantity=tx_in.quantity,
                 avg_purchase_price=tx_in.price,
@@ -614,8 +689,9 @@ async def create_transaction(tx_in: TransactionCreate, db: AsyncSession = Depend
         total_div = (tx_in.price * tx_in.quantity) if tx_in.quantity > 0 else tx_in.price
         realized_pnl = round(total_div - tx_in.fee, 2)
 
-    # Crea record transazione
+    # Crea record transazione per questo utente
     tx = Transaction(
+        user_id=current_user.id,
         stock_id=stock.id,
         type=t_type,
         quantity=tx_in.quantity,
@@ -647,10 +723,14 @@ async def create_transaction(tx_in: TransactionCreate, db: AsyncSession = Depend
 
 
 @router.delete("/transactions/{tx_id}")
-async def delete_transaction(tx_id: int, db: AsyncSession = Depends(get_db)):
-    """Elimina una riga dallo storico transazioni."""
+async def delete_transaction(
+    tx_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Elimina una riga dallo storico transazioni dell'utente."""
     tx = await db.get(Transaction, tx_id)
-    if not tx:
+    if not tx or (tx.user_id is not None and tx.user_id != current_user.id):
         raise HTTPException(status_code=404, detail="Transazione non trovata.")
     await db.delete(tx)
     await db.commit()
@@ -658,9 +738,17 @@ async def delete_transaction(tx_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/realized-pnl")
-async def get_realized_pnl(db: AsyncSession = Depends(get_db)):
-    """Riepilogo globale di P&L Realizzato, dividendi incassati e commissioni pagate."""
-    res = await db.execute(select(Transaction).join(Stock).options(selectinload(Transaction.stock)))
+async def get_realized_pnl(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Riepilogo globale di P&L Realizzato, dividendi incassati e commissioni pagate per l'utente."""
+    res = await db.execute(
+        select(Transaction)
+        .join(Stock)
+        .where(Transaction.user_id == current_user.id)
+        .options(selectinload(Transaction.stock))
+    )
     txs = res.scalars().all()
     usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
 
@@ -703,13 +791,16 @@ async def get_realized_pnl(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/dividends")
-async def get_dividends_calendar(db: AsyncSession = Depends(get_db)):
+async def get_dividends_calendar(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     """
     Calendario dividendi del portafoglio:
-    Calcola il rendimento da dividendi, Yield on Cost (YoC) e flussi stimati per ogni holding.
+    Calcola il rendimento da dividendi, Yield on Cost (YoC) e flussi stimati per ogni holding dell'utente.
     """
-    rows = await build_portfolio_rows(db)
-    summary = await build_portfolio_summary(db)
+    rows = await build_portfolio_rows(db, user_id=current_user.id)
+    summary = await build_portfolio_summary(db, user_id=current_user.id)
     usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
 
     dividends_list = []

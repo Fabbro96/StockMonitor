@@ -101,6 +101,29 @@
                     </div>
                 </div>
 
+                <!-- Budget & Allocazione Card -->
+                <div class="card mb-4" id="budgetAllocationCard" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, var(--surface-color) 100%); border-left: 3px solid var(--primary-color);">
+                    <div class="flex justify-between items-center flex-wrap gap-3">
+                        <div class="flex items-center gap-3">
+                            <span style="font-size: 1.5rem;">💶</span>
+                            <div>
+                                <div class="text-xs text-muted font-bold uppercase tracking-wider">Capitale da Investire (Budget Totale)</div>
+                                <div class="text-xl font-bold font-mono text-primary mt-0.5" id="userBudgetDisplay">-- €</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-4 flex-wrap text-sm">
+                            <div class="flex items-center gap-2">
+                                <span class="badge" id="budgetDeployedBadge" style="background: rgba(59, 130, 246, 0.15); color: var(--primary-color); font-weight: 700;">Allocato: --%</span>
+                            </div>
+                            <div class="text-xs text-secondary">
+                                <span>Liquidità Libera Residua: </span>
+                                <strong class="font-mono text-profit font-bold" id="userRemainingCash">-- €</strong>
+                            </div>
+                            <a href="/static/settings.html" class="btn btn-ghost btn-xs text-primary" style="font-size: 0.75rem; text-decoration: none;">⚙️ Modifica Budget</a>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="portfolio-main-grid mb-4">
                     <!-- Holdings Table -->
                     <div class="card">

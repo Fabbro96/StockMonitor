@@ -298,11 +298,30 @@ export const loadPortfolio = async () => {
     renderSkeletons();
     summaryData = await api.getPortfolioSummary().catch(() => ({}));
     portfolioData = await api.getPortfolio().catch(() => []);
+    const userSettings = await api.getSettings().catch(() => ({}));
 
     document.getElementById('totalValue').textContent = formatCurrency(summaryData.total_value || 0);
     document.getElementById('totalInvested').textContent = formatCurrency(summaryData.total_invested || 0);
     document.getElementById('totalCount').textContent = summaryData.holdings_count || portfolioData.length;
     
+    // Budget & Liquidity display
+    const userBudget = userSettings.total_budget || userSettings.budget || 10000;
+    const budgetDisplayEl = document.getElementById('userBudgetDisplay');
+    if (budgetDisplayEl) {
+      budgetDisplayEl.textContent = formatCurrency(userBudget);
+    }
+    const deployedPct = userBudget > 0 ? ((summaryData.total_value || 0) / userBudget) * 100 : 0;
+    const deployedBadgeEl = document.getElementById('budgetDeployedBadge');
+    if (deployedBadgeEl) {
+      deployedBadgeEl.textContent = `Allocato: ${deployedPct.toFixed(1)}%`;
+      deployedBadgeEl.style.color = deployedPct > 100 ? 'var(--danger-color)' : 'var(--primary-color)';
+    }
+    const remainingCash = Math.max(0, userBudget - (summaryData.total_value || 0));
+    const remainingCashEl = document.getElementById('userRemainingCash');
+    if (remainingCashEl) {
+      remainingCashEl.textContent = formatCurrency(remainingCash);
+    }
+
     const pnlEl = document.getElementById('totalPnL');
     const totPnL = summaryData.total_pnl || 0;
     const totPct = summaryData.total_pnl_percent || 0;

@@ -10,6 +10,8 @@ from backend.database import get_db
 from backend.models.watchlist import WatchlistItem
 from backend.models.stock import Stock
 from backend.models.portfolio import Holding
+from backend.models.user import User
+from backend.services.auth import get_current_user
 from backend.services.market_data import MarketDataService
 
 router = APIRouter(prefix="/api/watchlist", tags=["watchlist"])
@@ -25,8 +27,12 @@ class WatchlistAlertUpdateRequest(BaseModel):
     alert_below: Optional[float] = None
 
 @router.get("/")
-async def get_watchlist(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(WatchlistItem).join(Stock))
+async def get_watchlist(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(WatchlistItem)
+        .join(Stock)
+        .where(WatchlistItem.user_id == current_user.id)
+    )
     items = result.scalars().all()
 
     if not items:
@@ -36,7 +42,10 @@ async def get_watchlist(db: AsyncSession = Depends(get_db)):
     stocks_result = await db.execute(select(Stock).where(Stock.id.in_(stock_ids)))
     stocks_map = {s.id: s for s in stocks_result.scalars().all()}
 
-    holdings_result = await db.execute(select(Holding.stock_id).where(Holding.stock_id.in_(stock_ids)))
+    holdings_result = await db.execute(
+        select(Holding.stock_id)
+        .where(Holding.stock_id.in_(stock_ids), Holding.user_id == current_user.id)
+    )
     in_portfolio_ids = {row[0] for row in holdings_result.all()}
 
     deep_tasks = [
@@ -94,7 +103,11 @@ async def get_watchlist(db: AsyncSession = Depends(get_db)):
     return watchlist
 
 @router.post("/")
-async def add_to_watchlist(data: WatchlistAddRequest, db: AsyncSession = Depends(get_db)):
+async def add_to_watchlist(
+    data: WatchlistAddRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     ticker = data.ticker.strip().upper()
     if not ticker:
         raise HTTPException(status_code=400, detail="Ticker non valido.")
@@ -111,7 +124,10 @@ async def add_to_watchlist(data: WatchlistAddRequest, db: AsyncSession = Depends
         await db.commit()
         await db.refresh(stock)
 
-    w_res = await db.execute(select(WatchlistItem).where(WatchlistItem.stock_id == stock.id))
+    w_res = await db.execute(
+        select(WatchlistItem)
+        .where(WatchlistItem.stock_id == stock.id, WatchlistItem.user_id == current_user.id)
+    )
     existing = w_res.scalars().first()
     if existing:
         if data.notes:
@@ -124,6 +140,7 @@ async def add_to_watchlist(data: WatchlistAddRequest, db: AsyncSession = Depends
         return {"status": "exists", "message": f"{ticker} è già nella Watchlist (aggiornato)", "id": existing.id}
 
     item = WatchlistItem(
+        user_id=current_user.id,
         stock_id=stock.id,
         notes=data.notes,
         alert_above=data.alert_above,
@@ -135,9 +152,14 @@ async def add_to_watchlist(data: WatchlistAddRequest, db: AsyncSession = Depends
     return {"status": "success", "message": f"{ticker} aggiunto alla Watchlist", "id": item.id}
 
 @router.put("/{item_id}/alert")
-async def update_watchlist_alert(item_id: int, data: WatchlistAlertUpdateRequest, db: AsyncSession = Depends(get_db)):
+async def update_watchlist_alert(
+    item_id: int,
+    data: WatchlistAlertUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     item = await db.get(WatchlistItem, item_id)
-    if not item:
+    if not item or (item.user_id is not None and item.user_id != current_user.id):
         raise HTTPException(status_code=404, detail="Elemento Watchlist non trovato.")
     
     item.alert_above = data.alert_above
@@ -146,9 +168,13 @@ async def update_watchlist_alert(item_id: int, data: WatchlistAlertUpdateRequest
     return {"status": "success", "message": "Alert aggiornato con successo"}
 
 @router.delete("/{item_id}")
-async def remove_from_watchlist(item_id: int, db: AsyncSession = Depends(get_db)):
+async def remove_from_watchlist(
+    item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     item = await db.get(WatchlistItem, item_id)
-    if not item:
+    if not item or (item.user_id is not None and item.user_id != current_user.id):
         raise HTTPException(status_code=404, detail="Elemento Watchlist non trovato.")
 
     await db.delete(item)
@@ -156,14 +182,21 @@ async def remove_from_watchlist(item_id: int, db: AsyncSession = Depends(get_db)
     return {"status": "success", "message": "Rimosso dalla Watchlist"}
 
 @router.delete("/ticker/{ticker}")
-async def remove_by_ticker(ticker: str, db: AsyncSession = Depends(get_db)):
+async def remove_by_ticker(
+    ticker: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     ticker_up = ticker.strip().upper()
     result = await db.execute(select(Stock).where(Stock.ticker == ticker_up))
     stock = result.scalars().first()
     if not stock:
         raise HTTPException(status_code=404, detail="Titolo non trovato.")
 
-    w_res = await db.execute(select(WatchlistItem).where(WatchlistItem.stock_id == stock.id))
+    w_res = await db.execute(
+        select(WatchlistItem)
+        .where(WatchlistItem.stock_id == stock.id, WatchlistItem.user_id == current_user.id)
+    )
     item = w_res.scalars().first()
     if item:
         await db.delete(item)

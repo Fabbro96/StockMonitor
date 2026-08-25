@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from backend.database import get_db
 from backend.models.settings import UserSettings, AlertRule
 from backend.models.stock import Stock
+from backend.models.user import User
+from backend.services.auth import get_current_user
 from backend.services.market_data import MarketDataService
 from backend.services.telegram_bot import TelegramService
 
@@ -66,12 +68,16 @@ def is_valid_api_key(val: str | None) -> bool:
     return True
 
 @router.get("/")
-async def get_settings(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(UserSettings).limit(1))
+async def get_settings(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(UserSettings).where(UserSettings.user_id == current_user.id).limit(1))
     user_settings = result.scalars().first()
     
     if not user_settings:
-        user_settings = UserSettings()
+        # Fallback a impostazioni globali o crea impostazioni utente dedicate
+        user_settings = UserSettings(user_id=current_user.id)
         db.add(user_settings)
         await db.commit()
         await db.refresh(user_settings)
@@ -81,6 +87,7 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
         "strategy": user_settings.strategy,
         "markets": user_settings.markets.split(",") if user_settings.markets else ["IT", "US", "EU"],
         "budget": user_settings.total_budget,
+        "total_budget": user_settings.total_budget,
         "reportFreq": user_settings.advice_frequency,
         "reportTimes": user_settings.advice_times.split(",") if user_settings.advice_times else ["09:00", "18:00"],
         "apiStatus": {
@@ -92,10 +99,13 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     }
 
 
-
 @router.put("/")
-async def update_settings(update_data: UserSettingsUpdate, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(UserSettings).limit(1))
+async def update_settings(
+    update_data: UserSettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(UserSettings).where(UserSettings.user_id == current_user.id).limit(1))
     settings = result.scalars().first()
 
     normalized = update_data.normalized()
@@ -103,7 +113,7 @@ async def update_settings(update_data: UserSettingsUpdate, db: AsyncSession = De
         raise HTTPException(status_code=400, detail="Nessun campo valido da aggiornare.")
 
     if not settings:
-        settings = UserSettings(**normalized)
+        settings = UserSettings(user_id=current_user.id, **normalized)
         db.add(settings)
     else:
         for key, value in normalized.items():
@@ -116,13 +126,22 @@ async def update_settings(update_data: UserSettingsUpdate, db: AsyncSession = De
         "strategy": settings.strategy,
         "markets": settings.markets.split(",") if settings.markets else [],
         "budget": settings.total_budget,
+        "total_budget": settings.total_budget,
         "reportFreq": settings.advice_frequency,
         "reportTimes": settings.advice_times.split(",") if settings.advice_times else []
     }
 
 @router.get("/alerts")
-async def list_alerts(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(AlertRule).join(Stock).options(selectinload(AlertRule.stock)))
+async def list_alerts(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(AlertRule)
+        .join(Stock)
+        .where(AlertRule.user_id == current_user.id)
+        .options(selectinload(AlertRule.stock))
+    )
     alerts = result.scalars().all()
     output = []
     for rule in alerts:
@@ -140,7 +159,11 @@ async def list_alerts(db: AsyncSession = Depends(get_db)):
     return output
 
 @router.post("/alerts")
-async def create_alert(rule: AlertRuleCreate, db: AsyncSession = Depends(get_db)):
+async def create_alert(
+    rule: AlertRuleCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     threshold = rule.threshold_percent if rule.threshold_percent is not None else rule.threshold
     if threshold is None:
         raise HTTPException(status_code=400, detail="Specifica threshold_percent o threshold.")
@@ -172,6 +195,7 @@ async def create_alert(rule: AlertRuleCreate, db: AsyncSession = Depends(get_db)
         stock_id = stock.id
 
     new_rule = AlertRule(
+        user_id=current_user.id,
         stock_id=stock_id,
         threshold_percent=threshold,
         direction=direction,
@@ -192,9 +216,13 @@ async def create_alert(rule: AlertRuleCreate, db: AsyncSession = Depends(get_db)
     }
 
 @router.delete("/alerts/{rule_id}")
-async def delete_alert(rule_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_alert(
+    rule_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     rule = await db.get(AlertRule, rule_id)
-    if not rule:
+    if not rule or (rule.user_id is not None and rule.user_id != current_user.id):
         raise HTTPException(status_code=404, detail="Alert rule not found")
         
     await db.delete(rule)

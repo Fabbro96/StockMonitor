@@ -12,7 +12,7 @@
 
 services:
   stock-monitor:
-    image: ghcr.io/fabbro96/stock_monitor:latest
+    image: ghcr.io/fabbro96/stockmonitor:latest
     container_name: stock-monitor
     restart: unless-stopped
 
@@ -53,7 +53,7 @@ services:
       - "wud.tag.include=^latest$$"
       - "wud.display.name=Stock Monitor"
       - "wud.display.icon=chart-line"
-      - "wud.link.template=https://github.com/Fabbro96/stock_monitor/commits/main"
+      - "wud.link.template=https://github.com/Fabbro96/StockMonitor/commits/main"
       # --- Watchtower Scope Labels ---
       - "com.centurylinklabs.watchtower.enable=true"
       - "com.centurylinklabs.watchtower.scope=stock-monitor-scope"

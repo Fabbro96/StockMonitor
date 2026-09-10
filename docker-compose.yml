@@ -1,6 +1,6 @@
 services:
   stock-monitor:
-    image: ghcr.io/fabbro96/stock_monitor:latest
+    image: ghcr.io/fabbro96/stockmonitor:latest
     build:
       context: .
     container_name: stock-monitor
@@ -18,7 +18,7 @@ services:
       - "wud.tag.include=^latest$$"
       - "wud.display.name=Stock Monitor"
       - "wud.display.icon=chart-line"
-      - "wud.link.template=https://github.com/Fabbro96/stock_monitor/commits/main"
+      - "wud.link.template=https://github.com/Fabbro96/StockMonitor/commits/main"
       - "com.centurylinklabs.watchtower.enable=true"
     logging:
       driver: "json-file"

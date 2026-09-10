@@ -40,7 +40,7 @@ Crea sul tuo NAS una cartella (es. `/home/fabrizio/docker/stock_monitor`) con al
 ```yaml
 services:
   stock-monitor:
-    image: ghcr.io/<TUO-USERNAME-GITHUB>/stock_monitor:latest
+    image: ghcr.io/fabbro96/stockmonitor:latest
     container_name: stock-monitor
     restart: unless-stopped
     ports:
@@ -91,7 +91,7 @@ git add .
 git commit -m "Initial commit Stock Monitor"
 
 # 2. Collega il tuo repository remoto su GitHub
-git remote add origin https://github.com/<TUO-USERNAME>/stock_monitor.git
+git remote add origin https://github.com/Fabbro96/StockMonitor.git
 git branch -M main
 
 # 3. Pusha il codice

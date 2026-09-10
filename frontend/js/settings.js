@@ -1,5 +1,5 @@
-import { api } from './api.js';
-import { showLoading, hideLoading, showToast, formatDate } from './app.js';
+import { api } from './api.js?v=3.0.0';
+import { showLoading, hideLoading, showToast, formatDate } from './app.js?v=3.0.0';
 
 let alertRules = [];
 let currentUser = null;
@@ -71,7 +71,7 @@ const renderTimeInputs = (count, values = []) => {
   let html = '';
   for (let i = 0; i < count; i++) {
     const val = values[i] || (i === 0 ? '09:00' : '18:00');
-    html += `<input type="time" name="reportTime" value="${val}" style="width: 120px;" required>`;
+    html += `<input type="time" name="reportTime" value="${val}" class="input-time" required>`;
   }
   container.innerHTML = html;
 };

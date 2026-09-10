@@ -4,33 +4,50 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Watchlist - Stock Monitor</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.0.1">
-    <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('app_theme');
+                if (t !== 'light' && t !== 'dark') {
+                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                }
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
+    <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="app-title">📈 Stock Monitor</div>
+                <div class="app-title">
+                    <span class="app-logo">📈</span>
+                    <span class="app-title-text">Stock Monitor</span>
+                </div>
+                <button class="icon-btn sidebar-collapse-btn" id="btnSidebarCollapse" title="Comprimi menu" aria-label="Comprimi menu">«</button>
             </div>
             <nav class="nav-links">
-                <a href="/static/index.html" class="nav-link">🏠 Dashboard</a>
-                <a href="/static/watchlist.html" class="nav-link active">⭐ Watchlist</a>
-                <a href="/static/portfolio.html" class="nav-link">💼 Portafoglio</a>
-                <a href="/static/advice.html" class="nav-link">🧠 Consigli</a>
-                <a href="/static/settings.html" class="nav-link">⚙️ Impostazioni</a>
+                <a href="/static/index.html" class="nav-link"><span class="nav-icon">🏠</span><span class="nav-label">Dashboard</span></a>
+                <a href="/static/watchlist.html" class="nav-link active"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
+                <a href="/static/portfolio.html" class="nav-link"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
+                <a href="/static/advice.html" class="nav-link"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
+                <a href="/static/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
         </aside>
 
         <!-- Main Content -->
         <main class="main-content">
             <header class="topbar">
-                <div class="flex items-center gap-4">
-                    <button class="mobile-toggle">☰</button>
-                    <h1 class="page-title">⭐ Watchlist & Radar Mercati</h1>
+                <div class="topbar-left">
+                    <button class="mobile-toggle" aria-label="Apri menu">☰</button>
+                    <h1 class="page-title">⭐ Watchlist &amp; Radar Mercati</h1>
                 </div>
-                <div class="flex gap-2 items-center">
+                <div class="topbar-actions">
                     <button class="btn btn-primary" id="btnOpenAddWatchlist">➕ Aggiungi Titolo al Radar</button>
                     <button class="theme-toggle-btn" id="btnThemeToggle" onclick="window.toggleTheme()" title="Cambia tema" aria-label="Cambia tema">
                         <span>🌙</span>
@@ -66,28 +83,26 @@
                 <!-- Watchlist Table Card -->
                 <div class="card">
                     <div class="flex justify-between items-center mb-4 flex-wrap gap-3">
-                        <div class="flex items-center gap-2">
-                            <h2 class="card-title" style="margin:0;">🎯 Azioni Monitorate</h2>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h2 class="card-title">🎯 Azioni Monitorate</h2>
                             <span class="text-xs text-secondary">(Clicca su qualsiasi titolo per aprire la scheda tecnica completa)</span>
                         </div>
-                        <div class="flex gap-2 items-center">
-                            <input type="text" id="watchlistSearch" placeholder="Filtra ticker..." style="width: 180px; padding: 6px 12px; font-size: 0.85rem;">
-                        </div>
+                        <input type="text" id="watchlistSearch" placeholder="Filtra ticker..." class="input-compact">
                     </div>
 
                     <div class="table-container">
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Ticker & Titolo</th>
+                                    <th>Ticker &amp; Titolo</th>
                                     <th class="text-right">Prezzo Live</th>
                                     <th class="text-right">Variazione Oggi</th>
-                                    <th style="min-width: 150px;">Range 52 Settimane</th>
+                                    <th>Range 52 Settimane</th>
                                     <th class="text-center">RSI (14)</th>
                                     <th class="text-center">Alert Target</th>
                                     <th class="text-right">P/E</th>
                                     <th class="text-right">Div. Yield</th>
-                                    <th class="text-center" style="width: 190px;">Azioni Rapide</th>
+                                    <th class="text-center w-170">Azioni Rapide</th>
                                 </tr>
                             </thead>
                             <tbody id="watchlistTableBody">
@@ -111,12 +126,12 @@
                 <div class="form-group relative">
                     <label for="wlTickerInput">Ticker o Simbolo Titolo</label>
                     <input type="text" id="wlTickerInput" required placeholder="Es. NVDA, TSLA, RACE.MI, ENEL.MI, AAPL..." autocomplete="off">
-                    <div id="wlAutocompleteResults" style="position:absolute;top:100%;left:0;right:0;background:var(--surface-color);border:1px solid var(--border-color);border-radius:6px;max-height:200px;overflow-y:auto;z-index:100;display:none;box-shadow:var(--shadow-md);"></div>
+                    <div id="wlAutocompleteResults" class="autocomplete-dropdown" style="display:none;"></div>
                 </div>
-                <div class="grid gap-3" style="display:grid; grid-template-columns: 1fr 1fr;">
+                <div class="split-grid gap-3">
                     <div class="form-group">
                         <label for="wlAlertAboveInput">🔔 Alert Se Sale Sopra (€/$)</label>
-                        <div class="modern-stepper" style="width: 100%; max-width: 100%;">
+                        <div class="modern-stepper stepper-full">
                             <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci">−</button>
                             <input type="number" step="any" id="wlAlertAboveInput" placeholder="Es. 150.00">
                             <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta">+</button>
@@ -124,7 +139,7 @@
                     </div>
                     <div class="form-group">
                         <label for="wlAlertBelowInput">🔔 Alert Se Scende Sotto (€/$)</label>
-                        <div class="modern-stepper" style="width: 100%; max-width: 100%;">
+                        <div class="modern-stepper stepper-full">
                             <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci">−</button>
                             <input type="number" step="any" id="wlAlertBelowInput" placeholder="Es. 120.00">
                             <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta">+</button>
@@ -145,7 +160,7 @@
 
     <!-- Modal Imposta Alert Prezzo Target -->
     <div class="modal-overlay" id="editAlertModal">
-        <div class="modal-content" style="max-width: 440px;">
+        <div class="modal-content modal-sm">
             <div class="modal-header">
                 <h2 class="modal-title">🔔 Imposta Alert di Prezzo</h2>
                 <button class="modal-close" id="closeEditAlertModal">×</button>
@@ -155,7 +170,7 @@
                 <div class="text-sm font-bold text-primary mb-3" id="editAlertTickerLabel">--</div>
                 <div class="form-group">
                     <label for="editAlertAbove">Avvisami se il prezzo sale sopra (€/$):</label>
-                    <div class="modern-stepper" style="width: 100%; max-width: 100%;">
+                    <div class="modern-stepper stepper-full">
                         <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci">−</button>
                         <input type="number" step="any" id="editAlertAbove" placeholder="Nessun limite superiore">
                         <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta">+</button>
@@ -163,7 +178,7 @@
                 </div>
                 <div class="form-group">
                     <label for="editAlertBelow">Avvisami se il prezzo scende sotto (€/$):</label>
-                    <div class="modern-stepper" style="width: 100%; max-width: 100%;">
+                    <div class="modern-stepper stepper-full">
                         <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci">−</button>
                         <input type="number" step="any" id="editAlertBelow" placeholder="Nessun limite inferiore">
                         <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta">+</button>
@@ -177,7 +192,7 @@
         </div>
     </div>
 
-    <script type="module" src="/static/js/app.js?v=2.0.1"></script>
-    <script type="module" src="/static/js/watchlist.js?v=2.0.1"></script>
+    <script type="module" src="/static/js/app.js?v=3.0.0"></script>
+    <script type="module" src="/static/js/watchlist.js?v=3.0.0"></script>
 </body>
 </html>

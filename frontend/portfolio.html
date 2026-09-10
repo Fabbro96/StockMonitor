@@ -4,33 +4,50 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Portafoglio - Stock Monitor</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.0.1">
-    <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('app_theme');
+                if (t !== 'light' && t !== 'dark') {
+                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                }
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
+    <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="app-title">📈 Stock Monitor</div>
+                <div class="app-title">
+                    <span class="app-logo">📈</span>
+                    <span class="app-title-text">Stock Monitor</span>
+                </div>
+                <button class="icon-btn sidebar-collapse-btn" id="btnSidebarCollapse" title="Comprimi menu" aria-label="Comprimi menu">«</button>
             </div>
             <nav class="nav-links">
-                <a href="/static/index.html" class="nav-link">🏠 Dashboard</a>
-                <a href="/static/watchlist.html" class="nav-link">⭐ Watchlist</a>
-                <a href="/static/portfolio.html" class="nav-link active">💼 Portafoglio</a>
-                <a href="/static/advice.html" class="nav-link">🧠 Consigli</a>
-                <a href="/static/settings.html" class="nav-link">⚙️ Impostazioni</a>
+                <a href="/static/index.html" class="nav-link"><span class="nav-icon">🏠</span><span class="nav-label">Dashboard</span></a>
+                <a href="/static/watchlist.html" class="nav-link"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
+                <a href="/static/portfolio.html" class="nav-link active"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
+                <a href="/static/advice.html" class="nav-link"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
+                <a href="/static/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
         </aside>
 
         <!-- Main Content -->
         <main class="main-content">
             <header class="topbar">
-                <div class="flex items-center gap-4">
-                    <button class="mobile-toggle">☰</button>
+                <div class="topbar-left">
+                    <button class="mobile-toggle" aria-label="Apri menu">☰</button>
                     <h1 class="page-title">💼 Gestione Portafoglio</h1>
                 </div>
-                <div class="flex gap-2 items-center flex-wrap">
+                <div class="topbar-actions">
                     <button class="btn btn-ghost" id="btnExport" title="Esporta portafoglio in CSV">📥 Esporta CSV</button>
                     <button class="btn btn-ghost" id="btnImport" title="Importa file CSV">📤 Importa CSV</button>
                     <button class="btn btn-primary" id="btnAddHolding">➕ Aggiungi Holding</button>
@@ -44,15 +61,15 @@
                 <!-- Banner Modifiche in sospeso -->
                 <div class="save-bar" id="saveBar">
                     <div class="flex items-center gap-3">
-                        <span style="font-size: 1.3rem;">⚠️</span>
+                        <span class="text-lg">⚠️</span>
                         <div>
-                            <div style="font-weight: 600; color: var(--text-primary);">Modifiche al volo non salvate</div>
+                            <div class="font-semibold">Modifiche al volo non salvate</div>
                             <div class="text-sm text-secondary" id="pendingChangesCount">Hai 0 posizioni modificate</div>
                         </div>
                     </div>
                     <div class="flex gap-2">
                         <button class="btn btn-ghost" id="btnCancelChanges">↩️ Annulla</button>
-                        <button class="btn btn-primary" id="btnSaveChanges" style="background-color: var(--warning-color); color: #000; font-weight: 700;">💾 Salva Modifiche</button>
+                        <button class="btn btn-warning" id="btnSaveChanges">💾 Salva Modifiche</button>
                     </div>
                 </div>
 
@@ -74,14 +91,14 @@
                     </div>
                     <div>
                         <div class="text-muted text-xs uppercase font-bold tracking-wider flex items-center gap-1">
-                            <span>P&L Totale</span>
+                            <span>P&amp;L Totale</span>
                             <span class="has-tooltip"><i class="info-badge" tabindex="0">i</i><span class="tooltip-box">Guadagno o perdita non realizzato rispetto al prezzo medio di carico.</span></span>
                         </div>
                         <div class="text-2xl font-bold font-mono mt-1" id="totalPnL">--</div>
                     </div>
                     <div>
                         <div class="text-muted text-xs uppercase font-bold tracking-wider flex items-center gap-1">
-                            <span>P&L Realizzato</span>
+                            <span>P&amp;L Realizzato</span>
                             <span class="has-tooltip"><i class="info-badge" tabindex="0">i</i><span class="tooltip-box">Profitto o perdita netto incassato da vendite concluse e dividendi (al netto delle commissioni).</span></span>
                         </div>
                         <div class="text-2xl font-bold font-mono mt-1" id="totalRealizedPnL">-- €</div>
@@ -102,24 +119,22 @@
                 </div>
 
                 <!-- Budget & Allocazione Card -->
-                <div class="card mb-4" id="budgetAllocationCard" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, var(--surface-color) 100%); border-left: 3px solid var(--primary-color);">
+                <div class="card card-accent mb-4" id="budgetAllocationCard">
                     <div class="flex justify-between items-center flex-wrap gap-3">
                         <div class="flex items-center gap-3">
-                            <span style="font-size: 1.5rem;">💶</span>
+                            <span class="text-xl">💶</span>
                             <div>
                                 <div class="text-xs text-muted font-bold uppercase tracking-wider">Capitale da Investire (Budget Totale)</div>
                                 <div class="text-xl font-bold font-mono text-primary mt-0.5" id="userBudgetDisplay">-- €</div>
                             </div>
                         </div>
                         <div class="flex items-center gap-4 flex-wrap text-sm">
-                            <div class="flex items-center gap-2">
-                                <span class="badge" id="budgetDeployedBadge" style="background: rgba(59, 130, 246, 0.15); color: var(--primary-color); font-weight: 700;">Allocato: --%</span>
-                            </div>
+                            <span class="badge badge-budget" id="budgetDeployedBadge">Allocato: --%</span>
                             <div class="text-xs text-secondary">
                                 <span>Liquidità Libera Residua: </span>
                                 <strong class="font-mono text-profit font-bold" id="userRemainingCash">-- €</strong>
                             </div>
-                            <a href="/static/settings.html" class="btn btn-ghost btn-xs text-primary" style="font-size: 0.75rem; text-decoration: none;">⚙️ Modifica Budget</a>
+                            <a href="/static/settings.html" class="btn btn-ghost btn-xs text-primary">⚙️ Modifica Budget</a>
                         </div>
                     </div>
                 </div>
@@ -138,13 +153,13 @@
                                     <tr>
                                         <th>Ticker</th>
                                         <th>Nome Titolo</th>
-                                        <th class="text-right" style="width: 110px;">Quantità</th>
-                                        <th class="text-right" style="width: 130px;">Prezzo Carico</th>
+                                        <th class="text-right w-110">Quantità</th>
+                                        <th class="text-right w-120">Prezzo Carico</th>
                                         <th class="text-right">Prezzo Live</th>
                                         <th class="text-right">Controvalore</th>
-                                        <th class="text-right">P&L Netto (€)</th>
-                                        <th class="text-right">P&L %</th>
-                                        <th class="text-center" style="width: 70px;">Azioni</th>
+                                        <th class="text-right">P&amp;L Netto (€)</th>
+                                        <th class="text-right">P&amp;L %</th>
+                                        <th class="text-center w-80">Azioni</th>
                                     </tr>
                                 </thead>
                                 <tbody id="portfolioTableBody">
@@ -155,9 +170,9 @@
                     </div>
 
                     <!-- Allocation Card -->
-                    <div class="card" style="height: fit-content;">
+                    <div class="card card-fit">
                         <div class="flex justify-between items-center mb-3">
-                            <h3 class="card-title" style="margin:0; font-size: 1rem;">Allocazione</h3>
+                            <h3 class="card-title">Allocazione</h3>
                             <div class="timeframe-group" id="allocTypeGroup">
                                 <button class="timeframe-btn active" data-type="stock">Titoli</button>
                                 <button class="timeframe-btn" data-type="market">Mercati</button>
@@ -178,7 +193,7 @@
                             <p class="text-xs text-muted mt-1">Definisci le allocazioni target (es. 40% US Tech, 30% IT Dividend, 30% Liquidità) e ottieni gli ordini di ribilanciamento suggeriti.</p>
                         </div>
                         <div class="flex gap-2 items-center flex-wrap">
-                            <div class="modern-stepper" style="min-width: 170px;">
+                            <div class="modern-stepper rebalance-cash">
                                 <button type="button" class="stepper-btn dec" data-step="500" title="Diminuisci (−500€)">−</button>
                                 <input type="number" id="rebalanceCashInput" min="0" step="100" placeholder="Liquidità (€)">
                                 <button type="button" class="stepper-btn inc" data-step="500" title="Aumenta (+500€)">+</button>
@@ -187,33 +202,33 @@
                         </div>
                     </div>
 
-                    <div class="rebalance-grid gap-4">
+                    <div class="rebalance-grid">
                         <!-- Target Allocations CRUD -->
                         <div>
                             <h4 class="text-sm font-bold mb-3 text-primary">🎯 Allocazioni Target</h4>
                             <div class="flex gap-2 mb-3 flex-wrap">
-                                <input type="text" id="targetName" placeholder="Nome (es. US Tech)" style="flex:1; min-width: 130px;">
-                                <div class="modern-stepper" style="min-width: 90px; max-width: 110px;">
+                                <input type="text" id="targetName" placeholder="Nome (es. US Tech)" class="rebalance-name">
+                                <div class="modern-stepper rebalance-stepper">
                                     <button type="button" class="stepper-btn dec" data-step="5" title="Diminuisci (−5%)">−</button>
                                     <input type="number" id="targetPct" placeholder="%" min="0" max="100" step="0.5">
                                     <button type="button" class="stepper-btn inc" data-step="5" title="Aumenta (+5%)">+</button>
                                 </div>
-                                <select id="targetScopeType" style="width: 130px;">
+                                <select id="targetScopeType" class="rebalance-scope">
                                     <option value="MARKET">Mercato</option>
                                     <option value="TICKERS">Ticker</option>
                                     <option value="CASH">Liquidità</option>
                                 </select>
-                                <input type="text" id="targetScopeValue" placeholder="US / AAPL,MSFT" style="width: 130px;">
+                                <input type="text" id="targetScopeValue" placeholder="US / AAPL,MSFT" class="rebalance-value">
                                 <button class="btn btn-ghost btn-sm" id="btnAddTarget" title="Aggiungi">➕</button>
                             </div>
-                            <div class="table-container">
+                            <div class="table-container table-bordered">
                                 <table>
                                     <thead>
                                         <tr>
                                             <th>Bucket</th>
                                             <th class="text-center">Scope</th>
                                             <th class="text-right">Target %</th>
-                                            <th class="text-center" style="width: 46px;"></th>
+                                            <th class="text-center w-80"></th>
                                         </tr>
                                     </thead>
                                     <tbody id="targetsTableBody">
@@ -233,12 +248,12 @@
                     </div>
                 </div>
 
-                <!-- 📖 Trade Ledger (Registro Transazioni & Storico Compravendite) -->
+                <!-- 📖 Trade Ledger -->
                 <div class="card mt-4 fade-in-up" id="tradeLedgerCard">
                     <div class="card-header flex justify-between items-center flex-wrap gap-2 mb-3">
                         <div>
-                            <h2 class="card-title">📖 Trade Ledger & Storico Transazioni</h2>
-                            <p class="text-xs text-muted mt-1">Traccia ogni acquisto, vendita e accredito dividendi calcolando automaticamente il P&L Realizzato e le commissioni.</p>
+                            <h2 class="card-title">📖 Trade Ledger &amp; Storico Transazioni</h2>
+                            <p class="text-xs text-muted mt-1">Traccia ogni acquisto, vendita e accredito dividendi calcolando automaticamente il P&amp;L Realizzato e le commissioni.</p>
                         </div>
                         <div class="flex gap-2 items-center flex-wrap">
                             <button class="btn btn-primary btn-sm" id="btnOpenTxModal">➕ Registra Transazione</button>
@@ -265,9 +280,9 @@
                                     <th class="text-right">Quantità</th>
                                     <th class="text-right">Prezzo Eseguito</th>
                                     <th class="text-right">Commissione</th>
-                                    <th class="text-right">P&L Realizzato</th>
+                                    <th class="text-right">P&amp;L Realizzato</th>
                                     <th>Note</th>
-                                    <th class="text-center" style="width: 50px;"></th>
+                                    <th class="text-center w-80"></th>
                                 </tr>
                             </thead>
                             <tbody id="transactionsTableBody">
@@ -282,7 +297,7 @@
 
     <!-- Modal Registra Transazione (Trade Ledger) -->
     <div class="modal-overlay" id="txModal" role="dialog" aria-modal="true" aria-labelledby="txModalTitle">
-        <div class="modal-content" style="max-width: 480px;">
+        <div class="modal-content modal-md">
             <div class="modal-header">
                 <h2 class="modal-title" id="txModalTitle">Registra Transazione (Trade Ledger)</h2>
                 <button class="modal-close" id="closeTxModal" aria-label="Chiudi finestra">×</button>
@@ -304,7 +319,7 @@
                 <div class="modal-form-grid mb-3">
                     <div class="form-group mb-0">
                         <label for="txQtyInput" id="txQtyLabel">Quantità Quote</label>
-                        <div class="modern-stepper" style="max-width: 100%; width: 100%;">
+                        <div class="modern-stepper stepper-full">
                             <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci" aria-label="Diminuisci">−</button>
                             <input type="number" id="txQtyInput" required step="any" min="0" placeholder="Es. 50" aria-label="Quantità">
                             <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta" aria-label="Aumenta">+</button>
@@ -312,7 +327,7 @@
                     </div>
                     <div class="form-group mb-0">
                         <label for="txPriceInput" id="txPriceLabel">Prezzo Unitario</label>
-                        <div class="modern-stepper" style="max-width: 100%; width: 100%;">
+                        <div class="modern-stepper stepper-full">
                             <button type="button" class="stepper-btn dec" data-step="0.5" title="Diminuisci" aria-label="Diminuisci">−</button>
                             <input type="number" id="txPriceInput" required step="any" min="0" placeholder="Es. 18.50" aria-label="Prezzo">
                             <button type="button" class="stepper-btn inc" data-step="0.5" title="Aumenta" aria-label="Aumenta">+</button>
@@ -358,7 +373,7 @@
                 <div class="modal-form-grid mb-3">
                     <div class="form-group mb-0">
                         <label for="qtyInput">Quantità di Azioni</label>
-                        <div class="modern-stepper" style="max-width: 100%; width: 100%;">
+                        <div class="modern-stepper stepper-full">
                             <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci" aria-label="Diminuisci quantità">−</button>
                             <input type="number" id="qtyInput" required step="any" min="0.0001" placeholder="Es. 100" aria-label="Quantità di azioni">
                             <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta" aria-label="Aumenta quantità">+</button>
@@ -366,7 +381,7 @@
                     </div>
                     <div class="form-group mb-0">
                         <label for="priceInput">Prezzo Acquisto Unitario (€ o $)</label>
-                        <div class="modern-stepper" style="max-width: 100%; width: 100%;">
+                        <div class="modern-stepper stepper-full">
                             <button type="button" class="stepper-btn dec" data-step="0.5" title="Diminuisci" aria-label="Diminuisci prezzo di acquisto">−</button>
                             <input type="number" id="priceInput" required step="any" min="0.0001" placeholder="Es. 24.50" aria-label="Prezzo di acquisto">
                             <button type="button" class="stepper-btn inc" data-step="0.5" title="Aumenta" aria-label="Aumenta prezzo di acquisto">+</button>
@@ -392,20 +407,20 @@
 
     <!-- Modal Conferma Salvataggio Modifiche al Volo -->
     <div class="modal-overlay" id="confirmSaveModal">
-        <div class="modal-content" style="max-width: 520px;">
+        <div class="modal-content modal-md">
             <div class="modal-header">
                 <h2 class="modal-title">⚠️ Conferma Salvataggio Modifiche</h2>
                 <button class="modal-close" id="closeConfirmModal">×</button>
             </div>
             <p class="text-sm text-secondary mb-3">Stai per aggiornare le seguenti posizioni nel database. Confermi l'operazione?</p>
-            
+
             <div class="changes-list" id="confirmChangesList">
                 <!-- Changes injected here -->
             </div>
 
             <div class="flex justify-end gap-2">
                 <button type="button" class="btn btn-ghost" id="cancelConfirmModal">Annulla</button>
-                <button type="button" class="btn btn-primary" id="btnExecuteSave" style="background-color: var(--success-color); color: #000; font-weight: 700;">✅ Sì, Conferma e Salva</button>
+                <button type="button" class="btn btn-success" id="btnExecuteSave">✅ Sì, Conferma e Salva</button>
             </div>
         </div>
     </div>
@@ -423,7 +438,7 @@
                     <code>ticker</code>, <code>quantity</code>, <code>avg_purchase_price</code>, <code>notes</code>.
                 </p>
                 <label for="csvFileInput">Seleziona file CSV</label>
-                <input type="file" id="csvFileInput" accept=".csv" style="padding: 8px;">
+                <input type="file" id="csvFileInput" accept=".csv">
             </div>
             <div class="flex justify-end gap-2 mt-4">
                 <button type="button" class="btn btn-ghost" id="cancelImportModal">Annulla</button>
@@ -432,7 +447,7 @@
         </div>
     </div>
 
-    <script type="module" src="/static/js/app.js?v=2.0.1"></script>
-    <script type="module" src="/static/js/portfolio.js?v=2.0.1"></script>
+    <script type="module" src="/static/js/app.js?v=3.0.0"></script>
+    <script type="module" src="/static/js/portfolio.js?v=3.0.0"></script>
 </body>
 </html>

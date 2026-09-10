@@ -1,5 +1,5 @@
-import { api } from './api.js';
-import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getChartThemeColors } from './app.js';
+import { api } from './api.js?v=3.0.0';
+import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getChartThemeColors, CHART_FONT_FAMILY } from './app.js?v=3.0.0';
 
 let chart = null;
 let lineSeries = null;
@@ -55,7 +55,7 @@ const initChart = () => {
     layout: {
       background: { type: 'solid', color: 'transparent' },
       textColor: themeColors.textColor,
-      fontFamily: 'Inter, system-ui, sans-serif',
+      fontFamily: CHART_FONT_FAMILY,
       fontSize: 12
     },
     grid: {
@@ -98,13 +98,13 @@ const initChart = () => {
   volumeSeries = chart.addHistogramSeries({
     color: themeColors.volumeColor,
     priceFormat: { type: 'volume' },
-    priceScaleId: '',
-    scaleMargins: { top: 0.82, bottom: 0 }
+    priceScaleId: ''
   });
+  volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 
   // Benchmark series
   benchSeriesMap['^GSPC'] = chart.addLineSeries({
-    color: '#10b981',
+    color: themeColors.benchmarkSp,
     lineWidth: 2,
     priceLineVisible: false,
     lastValueVisible: true,
@@ -113,7 +113,7 @@ const initChart = () => {
   });
 
   benchSeriesMap['FTSEMIB.MI'] = chart.addLineSeries({
-    color: '#f59e0b',
+    color: themeColors.benchmarkMib,
     lineWidth: 2,
     priceLineVisible: false,
     lastValueVisible: true,
@@ -167,6 +167,9 @@ const updateChartTheme = () => {
     wickDownColor: themeColors.downColor
   });
   volumeSeries?.applyOptions({ color: themeColors.volumeColor });
+  benchSeriesMap['^GSPC']?.applyOptions({ color: themeColors.benchmarkSp });
+  benchSeriesMap['FTSEMIB.MI']?.applyOptions({ color: themeColors.benchmarkMib });
+  if (performanceRawData.length > 0) applyChartData();
 };
 
 const applyChartData = () => {
@@ -188,10 +191,11 @@ const applyChartData = () => {
     lineSeries.setData(performanceRawData.map(d => ({ time: d.date, value: d.value })));
   }
 
+  const volumeColors = getChartThemeColors();
   volumeSeries.setData(performanceRawData.map((d, i) => ({
     time: d.date,
     value: d.volume || (d.value * 50),
-    color: i > 0 && d.value >= performanceRawData[i-1].value ? 'rgba(158, 206, 106, 0.35)' : 'rgba(247, 118, 142, 0.35)'
+    color: i > 0 && d.value >= performanceRawData[i-1].value ? volumeColors.volumeUp : volumeColors.volumeDown
   })));
 
   chart.timeScale().fitContent();
@@ -220,7 +224,7 @@ const renderHeatmap = (items) => {
 
   if (!items || items.length === 0) {
     container.innerHTML = `
-      <div class="text-muted text-xs py-6 text-center" style="grid-column: 1 / -1;">
+      <div class="text-muted text-xs py-6 text-center span-full">
         Nessun titolo attivo per la heatmap. 
         <button class="btn btn-primary btn-sm mt-2" id="btnHeatmapSeedDemo">🚀 Inizializza Dati Demo</button>
       </div>
@@ -249,7 +253,7 @@ const renderHeatmap = (items) => {
           <span class="font-bold text-primary font-mono text-sm">${item.ticker}</span>
           <span class="text-xs">${flag}</span>
         </div>
-        <div class="text-xs text-secondary mb-1" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.name || item.ticker}</div>
+        <div class="text-xs text-secondary mb-1 tile-name">${item.name || item.ticker}</div>
         <div class="flex justify-between items-end">
           <span class="text-xs font-mono font-bold">${formatCurrency(item.current_price, item.currency)}</span>
           <span class="text-xs font-mono font-bold ${isUp ? 'text-profit' : 'text-loss'}">${sign}${chg.toFixed(2)}%</span>
@@ -292,30 +296,30 @@ const loadRiskMetrics = async () => {
   try {
     const metrics = await api.getRiskMetrics(180).catch(() => ({}));
     if (!metrics || Object.keys(metrics).length === 0) {
-      container.innerHTML = '<div class="text-muted text-xs py-2 text-center" style="grid-column: 1 / -1;">Metriche calcolate dopo l\'inserimento di posizioni storiche.</div>';
+      container.innerHTML = '<div class="text-muted text-xs py-2 text-center span-full">Metriche calcolate dopo l\'inserimento di posizioni storiche.</div>';
       return;
     }
 
     container.innerHTML = `
-      <div class="stat-card p-3" style="background: var(--surface-hover);">
+      <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Max Drawdown</div>
         <div class="text-lg font-bold font-mono text-loss mt-1">${formatPercent(metrics.max_drawdown || 0)}</div>
-        <div class="text-[11px] text-muted mt-0.5">Picco-minimo</div>
+        <div class="text-2xs text-muted mt-0.5">Picco-minimo</div>
       </div>
-      <div class="stat-card p-3" style="background: var(--surface-hover);">
+      <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Volatilità Annua</div>
         <div class="text-lg font-bold font-mono text-primary mt-1">${(metrics.annualized_volatility || 0).toFixed(1)}%</div>
-        <div class="text-[11px] text-muted mt-0.5">Deviazione std</div>
+        <div class="text-2xs text-muted mt-0.5">Deviazione std</div>
       </div>
-      <div class="stat-card p-3" style="background: var(--surface-hover);">
+      <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Sharpe Ratio</div>
         <div class="text-lg font-bold font-mono ${(metrics.sharpe_ratio || 0) >= 1 ? 'text-profit' : 'text-primary'} mt-1">${(metrics.sharpe_ratio || 0).toFixed(2)}</div>
-        <div class="text-[11px] text-muted mt-0.5">Rendimento / Rischio</div>
+        <div class="text-2xs text-muted mt-0.5">Rendimento / Rischio</div>
       </div>
-      <div class="stat-card p-3" style="background: var(--surface-hover);">
+      <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Beta Pesato</div>
         <div class="text-lg font-bold font-mono text-primary mt-1">${(metrics.weighted_beta || 1.0).toFixed(2)}</div>
-        <div class="text-[11px] text-muted mt-0.5">Sensibilità mercato</div>
+        <div class="text-2xs text-muted mt-0.5">Sensibilità mercato</div>
       </div>
     `;
   } catch (e) {
@@ -341,7 +345,7 @@ const clearSkeletons = () => {
 
   const riskRow = document.getElementById('riskMetricsRow');
   if (riskRow && riskRow.querySelector('.skeleton')) {
-    riskRow.innerHTML = '<div class="text-muted text-xs py-2 text-center" style="grid-column: 1 / -1;">Metriche calcolate dopo l\'inserimento di posizioni nel portafoglio.</div>';
+    riskRow.innerHTML = '<div class="text-muted text-xs py-2 text-center span-full">Metriche calcolate dopo l\'inserimento di posizioni nel portafoglio.</div>';
   }
 
   const recentAdv = document.getElementById('recentAdviceList');
@@ -509,7 +513,7 @@ const loadDashboardData = async (isSilentRefresh = false) => {
           else if (action.includes('PROFITTO') || action.includes('SELL')) badgeClass = 'badge-sell';
 
           return `
-            <div class="card p-3 border border-border-color" style="background-color: var(--surface-hover);">
+            <div class="card card-subtle p-3">
               <div class="flex justify-between items-center mb-1.5">
                 <span class="font-bold text-primary flex items-center gap-1.5 text-sm">
                   <span>${flag}</span>
@@ -517,7 +521,7 @@ const loadDashboardData = async (isSilentRefresh = false) => {
                 </span>
                 <span class="badge ${badgeClass}">${action}</span>
               </div>
-              <p class="text-xs text-secondary leading-relaxed" style="display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+              <p class="text-xs text-secondary leading-relaxed clamp-2">
                 ${adv.overview || adv.strategy || 'Nessuna descrizione disponibile.'}
               </p>
             </div>

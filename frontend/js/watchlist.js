@@ -1,5 +1,5 @@
-import { api } from './api.js';
-import { formatCurrency, formatPercent, showToast, showLoading, hideLoading } from './app.js';
+import { api } from './api.js?v=3.0.0';
+import { formatCurrency, formatPercent, showToast, showLoading, hideLoading } from './app.js?v=3.0.0';
 
 let watchlistData = [];
 
@@ -59,7 +59,7 @@ const renderWatchlist = () => {
             <div>
               <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${item.ticker}">${item.ticker}</a>
               <div class="text-xs text-secondary">${item.name || item.ticker}</div>
-              ${item.notes ? `<div class="text-[11px] text-muted mt-0.5" title="${item.notes}">📝 ${item.notes.substring(0, 26)}</div>` : ''}
+              ${item.notes ? `<div class="text-2xs text-muted mt-0.5" title="${item.notes}">📝 ${item.notes.substring(0, 26)}</div>` : ''}
             </div>
           </div>
         </td>
@@ -83,7 +83,7 @@ const renderWatchlist = () => {
           <span class="badge ${item.rsi_badge || 'badge-hold'}" title="RSI a 14 periodi">${item.rsi || '--'} (${item.rsi_status || 'Neutro'})</span>
         </td>
         <td class="text-center">
-          <button class="btn btn-ghost btn-sm" style="padding: 2px 6px;" onclick="window.openEditAlertModal(${item.id}, '${item.ticker}', ${item.alert_above || 'null'}, ${item.alert_below || 'null'})" title="Modifica Alert">
+          <button class="btn btn-ghost btn-sm btn-alert" onclick="window.openEditAlertModal(${item.id}, '${item.ticker}', ${item.alert_above || 'null'}, ${item.alert_below || 'null'})" title="Modifica Alert">
             ${alertHtml}
           </button>
         </td>
@@ -262,9 +262,7 @@ const initWatchlist = () => {
           const results = await api.searchStocks(q);
           if (results && results.length > 0) {
             resultsDiv.innerHTML = results.map(r => `
-              <div style="padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border-color); transition: var(--transition);" 
-                   onmouseover="this.style.backgroundColor='var(--surface-hover)'" 
-                   onmouseout="this.style.backgroundColor='transparent'"
+              <div class="autocomplete-item"
                    onclick="document.getElementById('wlTickerInput').value='${r.ticker}';document.getElementById('wlAutocompleteResults').style.display='none';">
                 <strong class="text-primary font-mono">${r.ticker}</strong> — <span class="text-secondary">${r.name}</span>
               </div>

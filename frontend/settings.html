@@ -4,30 +4,47 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Impostazioni - Stock Monitor</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.0.1">
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('app_theme');
+                if (t !== 'light' && t !== 'dark') {
+                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                }
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
 </head>
 <body>
     <div class="app-container">
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="app-title">📈 Stock Monitor</div>
+                <div class="app-title">
+                    <span class="app-logo">📈</span>
+                    <span class="app-title-text">Stock Monitor</span>
+                </div>
+                <button class="icon-btn sidebar-collapse-btn" id="btnSidebarCollapse" title="Comprimi menu" aria-label="Comprimi menu">«</button>
             </div>
             <nav class="nav-links">
-                <a href="/static/index.html" class="nav-link">🏠 Dashboard</a>
-                <a href="/static/watchlist.html" class="nav-link">⭐ Watchlist</a>
-                <a href="/static/portfolio.html" class="nav-link">💼 Portafoglio</a>
-                <a href="/static/advice.html" class="nav-link">🧠 Consigli</a>
-                <a href="/static/settings.html" class="nav-link active">⚙️ Impostazioni</a>
+                <a href="/static/index.html" class="nav-link"><span class="nav-icon">🏠</span><span class="nav-label">Dashboard</span></a>
+                <a href="/static/watchlist.html" class="nav-link"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
+                <a href="/static/portfolio.html" class="nav-link"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
+                <a href="/static/advice.html" class="nav-link"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
+                <a href="/static/settings.html" class="nav-link active"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
         </aside>
 
         <main class="main-content">
             <header class="topbar">
-                <div class="flex items-center gap-4">
-                    <button class="mobile-toggle">☰</button>
+                <div class="topbar-left">
+                    <button class="mobile-toggle" aria-label="Apri menu">☰</button>
                     <h1 class="page-title">Impostazioni</h1>
                 </div>
-                <div class="flex items-center">
+                <div class="topbar-actions">
                     <button class="theme-toggle-btn" id="btnThemeToggle" onclick="window.toggleTheme()" title="Cambia tema" aria-label="Cambia tema">
                         <span>🌙</span>
                     </button>
@@ -36,36 +53,33 @@
 
             <div class="content-wrapper" id="settingsContent">
                 <form id="settingsForm">
-                    <!-- Strategia -->
                     <!-- Capitale & Budget di Investimento -->
-                    <div class="card mb-4" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, var(--surface-color) 100%); border-left: 4px solid var(--primary-color);">
+                    <div class="card card-accent mb-4">
                         <div class="card-header mb-3">
                             <div>
-                                <h2 class="card-title text-lg flex items-center gap-2">
-                                    <span>💶 Quanti soldi vuoi investire? (Capitale / Budget Totale)</span>
-                                </h2>
+                                <h2 class="card-title">💶 Quanti soldi vuoi investire? (Capitale / Budget Totale)</h2>
                                 <p class="text-xs text-secondary mt-1 leading-relaxed">
                                     Indica la somma complessiva (in Euro) che intendi investire o allocare. Questo valore permette al <strong>Rebalancer Intelligente</strong> di calcolare le percentuali target e la liquidità residua, e all'<strong>IA di Gemini</strong> di modulare le quote suggerite.
                                 </p>
                             </div>
                         </div>
                         <div class="flex items-center gap-4 flex-wrap">
-                            <div class="form-group mb-0" style="min-width: 240px; max-width: 280px; width: 100%;">
-                                <label for="targetBudget" class="text-xs text-muted font-bold uppercase tracking-wider block mb-1">Capitale da Investire (€)</label>
-                                <div class="modern-stepper" style="width: 100%;">
+                            <div class="form-group mb-0">
+                                <label for="targetBudget" class="text-xs text-muted font-bold uppercase tracking-wider">Capitale da Investire (€)</label>
+                                <div class="modern-stepper stepper-full">
                                     <button type="button" class="stepper-btn dec" data-step="1000" title="Diminuisci (−1.000€)" aria-label="Diminuisci budget">−</button>
-                                    <input type="number" id="targetBudget" min="100" step="500" placeholder="Es. 10000" aria-label="Quanti soldi vuoi investire" style="font-weight: 700; font-size: 1.15rem; color: var(--primary-color);">
+                                    <input type="number" id="targetBudget" class="input-lg" min="100" step="500" placeholder="Es. 10000" aria-label="Quanti soldi vuoi investire">
                                     <button type="button" class="stepper-btn inc" data-step="1000" title="Aumenta (+1.000€)" aria-label="Aumenta budget">+</button>
                                 </div>
                             </div>
                             <div class="flex flex-col gap-1">
                                 <span class="text-xs text-muted">Scorciatoie veloci:</span>
                                 <div class="flex gap-2 flex-wrap">
-                                    <button type="button" class="btn btn-ghost btn-xs py-1 px-2.5 text-primary text-xs" onclick="document.getElementById('targetBudget').value=2500">2.500 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs py-1 px-2.5 text-primary text-xs" onclick="document.getElementById('targetBudget').value=5000">5.000 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs py-1 px-2.5 text-primary text-xs" onclick="document.getElementById('targetBudget').value=10000">10.000 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs py-1 px-2.5 text-primary text-xs" onclick="document.getElementById('targetBudget').value=25000">25.000 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs py-1 px-2.5 text-primary text-xs" onclick="document.getElementById('targetBudget').value=50000">50.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=2500">2.500 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=5000">5.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=10000">10.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=25000">25.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=50000">50.000 €</button>
                                 </div>
                             </div>
                         </div>
@@ -75,7 +89,7 @@
                     <div class="card mb-4">
                         <div class="card-header mb-2">
                             <div>
-                                <h2 class="card-title">🎯 Strategia di Investimento & Rischio</h2>
+                                <h2 class="card-title">🎯 Strategia di Investimento &amp; Rischio</h2>
                                 <p class="text-xs text-muted mt-1">Personalizza il comportamento dell'IA nell'elaborazione dei consigli</p>
                             </div>
                         </div>
@@ -95,7 +109,7 @@
                                 <label>Mercati di Interesse</label>
                                 <div class="flex gap-4 flex-wrap mt-2">
                                     <label class="flex items-center gap-2"><input type="checkbox" id="marketIt"> Italia (MIB)</label>
-                                    <label class="flex items-center gap-2"><input type="checkbox" id="marketUs"> USA (S&P500/Nasdaq)</label>
+                                    <label class="flex items-center gap-2"><input type="checkbox" id="marketUs"> USA (S&amp;P500/Nasdaq)</label>
                                     <label class="flex items-center gap-2"><input type="checkbox" id="marketEu"> Europa</label>
                                 </div>
                             </div>
@@ -106,13 +120,13 @@
                     <div class="card mb-4">
                         <div class="card-header mb-2">
                             <div>
-                                <h2 class="card-title">🔔 Notifiche & Invio Report</h2>
+                                <h2 class="card-title">🔔 Notifiche &amp; Invio Report</h2>
                                 <p class="text-xs text-muted mt-1">Configura gli orari di ricezione dei riassunti giornalieri su Telegram</p>
                             </div>
                         </div>
                         <div class="form-group">
                             <label for="reportFreq">Frequenza Giornaliera Report</label>
-                            <select id="reportFreq" style="max-width: 200px;">
+                            <select id="reportFreq" class="input-compact">
                                 <option value="1">1 volta al giorno</option>
                                 <option value="2">2 volte al giorno</option>
                                 <option value="3">3 volte al giorno</option>
@@ -121,11 +135,9 @@
                         </div>
                         <div class="form-group">
                             <label>Orari di Invio (HH:MM)</label>
-                            <div id="timesContainer" class="flex gap-2 flex-wrap">
-                                <!-- Dynamic time inputs -->
-                            </div>
+                            <div id="timesContainer" class="flex gap-2 flex-wrap"></div>
                         </div>
-                        <div class="mt-4 pt-4 border-t border-border-color">
+                        <div class="mt-4 pt-4 border-t">
                             <button type="button" class="btn btn-ghost" id="btnTestTelegram">Invia Messaggio Test Telegram</button>
                         </div>
                     </div>
@@ -140,20 +152,20 @@
                         </div>
 
                         <div class="flex gap-2 mb-4 flex-wrap items-center">
-                            <input type="text" id="alertTicker" placeholder="Ticker" style="width:100px;" aria-label="Ticker per alert">
-                            <div class="modern-stepper" style="width: 140px;">
+                            <input type="text" id="alertTicker" placeholder="Ticker" class="w-110" aria-label="Ticker per alert">
+                            <div class="modern-stepper w-170">
                                 <button type="button" class="stepper-btn dec" data-step="0.5" title="Diminuisci (−0.5%)" aria-label="Diminuisci soglia">−</button>
                                 <input type="number" id="alertThreshold" placeholder="Var. %" step="0.1" aria-label="Soglia percentuale variazione">
                                 <button type="button" class="stepper-btn inc" data-step="0.5" title="Aumenta (+0.5%)" aria-label="Aumenta soglia">+</button>
                             </div>
-                            <select id="alertDir" style="width:150px;" aria-label="Direzione variazione">
+                            <select id="alertDir" class="w-170" aria-label="Direzione variazione">
                                 <option value="UP">Al Rialzo (UP)</option>
                                 <option value="DOWN">Al Ribasso (DOWN)</option>
                             </select>
                             <button type="button" class="btn btn-primary" id="btnAddAlert">Aggiungi</button>
                         </div>
 
-                        <div class="table-container border border-border-color rounded">
+                        <div class="table-container table-bordered">
                             <table>
                                 <thead>
                                     <tr>
@@ -161,19 +173,17 @@
                                         <th>Direzione</th>
                                         <th>Soglia %</th>
                                         <th>Stato</th>
-                                        <th class="text-center" style="width: 100px;">Azioni</th>
+                                        <th class="text-center w-110">Azioni</th>
                                     </tr>
                                 </thead>
-                                <tbody id="alertRulesBody">
-                                    <!-- Alerts injected here -->
-                                </tbody>
+                                <tbody id="alertRulesBody"></tbody>
                             </table>
                         </div>
                     </div>
 
                     <!-- Sicurezza & Password -->
                     <div class="card mb-4">
-                        <h2 class="card-title mb-4">🔒 Sicurezza & Password</h2>
+                        <h2 class="card-title mb-4">🔒 Sicurezza &amp; Password</h2>
                         <div id="passwordAlert" class="alert-error mb-4" style="display:none;"></div>
                         <div class="password-change-grid">
                             <div class="form-group mb-0">
@@ -184,7 +194,7 @@
                                 <label for="newPassword">Nuova Password (min. 8 car.)</label>
                                 <input type="password" id="newPassword" placeholder="••••••••">
                             </div>
-                            <button type="button" class="btn btn-primary" id="btnChangePassword" style="height: 42px;">Aggiorna</button>
+                            <button type="button" class="btn btn-primary" id="btnChangePassword">Aggiorna</button>
                         </div>
                     </div>
 
@@ -193,9 +203,9 @@
                         <div class="flex justify-between items-center mb-4">
                             <h2 class="card-title">👥 Gestione Utenti (Solo Amministratore)</h2>
                         </div>
-                        
+
                         <!-- Add User Form -->
-                        <div class="p-4 border border-border-color rounded mb-4" style="background-color: var(--surface-hover);">
+                        <div class="card-subtle p-4 rounded mb-4">
                             <div class="text-sm font-bold mb-3 text-primary">➕ Crea Nuovo Utente</div>
                             <div class="admin-user-grid">
                                 <div class="form-group mb-0">
@@ -206,18 +216,18 @@
                                     <label for="newUserPassword">Password (min. 8 car.)</label>
                                     <input type="password" id="newUserPassword" placeholder="••••••••">
                                 </div>
-                                <div class="form-group mb-0 flex items-center gap-2" style="height: 42px;">
+                                <div class="checkbox-field">
                                     <label class="flex items-center gap-2 cursor-pointer mb-0">
                                         <input type="checkbox" id="newUserIsAdmin">
                                         <span class="text-sm">Admin</span>
                                     </label>
                                 </div>
-                                <button type="button" class="btn btn-primary" id="btnCreateUser" style="height: 42px;">Crea Utente</button>
+                                <button type="button" class="btn btn-primary" id="btnCreateUser">Crea Utente</button>
                             </div>
                         </div>
 
                         <!-- Users Table -->
-                        <div class="table-container border border-border-color rounded">
+                        <div class="table-container table-bordered">
                             <table>
                                 <thead>
                                     <tr>
@@ -225,7 +235,7 @@
                                         <th>Ruolo</th>
                                         <th>Data Creazione</th>
                                         <th>Ultimo Accesso</th>
-                                        <th class="text-center" style="width: 100px;">Azioni</th>
+                                        <th class="text-center w-110">Azioni</th>
                                     </tr>
                                 </thead>
                                 <tbody id="usersTableBody">
@@ -237,26 +247,26 @@
 
                     <!-- API Keys Status -->
                     <div class="card mb-4">
-                        <h2 class="card-title mb-3">📡 Stato Integrazioni & Motore AI</h2>
-                        <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));">
-                            <div class="p-3 border border-border-color rounded flex justify-between items-center" style="background-color: var(--surface-hover);">
+                        <h2 class="card-title mb-3">📡 Stato Integrazioni &amp; Motore AI</h2>
+                        <div class="integration-grid">
+                            <div class="integration-card">
                                 <div>
                                     <div class="font-bold">Google Gemini AI</div>
                                     <div class="text-xs text-muted" id="modelGemini">gemini-3.7-flash</div>
                                 </div>
                                 <span class="badge" id="statusGemini">Verifica...</span>
                             </div>
-                            <div class="p-3 border border-border-color rounded flex justify-between items-center" style="background-color: var(--surface-hover);">
+                            <div class="integration-card">
                                 <div>
-                                    <div class="font-bold">Notizie & Sentiment</div>
+                                    <div class="font-bold">Notizie &amp; Sentiment</div>
                                     <div class="text-xs text-muted">Yahoo, Google News, Reddit</div>
                                 </div>
                                 <span class="badge badge-buy" id="statusNewsEngine">✅ Multi-Fonte Attivo</span>
                             </div>
-                            <div class="p-3 border border-border-color rounded flex justify-between items-center" style="background-color: var(--surface-hover);">
+                            <div class="integration-card">
                                 <div>
                                     <div class="font-bold">Bot Telegram</div>
-                                    <div class="text-xs text-muted">Notifiche push & alert</div>
+                                    <div class="text-xs text-muted">Notifiche push &amp; alert</div>
                                 </div>
                                 <span class="badge" id="statusTelegram">Verifica...</span>
                             </div>
@@ -267,14 +277,14 @@
                     </div>
 
                     <div class="settings-save-bar">
-                        <button type="submit" class="btn btn-primary px-8 py-2 text-lg">Salva Impostazioni</button>
+                        <button type="submit" class="btn btn-primary px-8 py-2 text-base">Salva Impostazioni</button>
                     </div>
                 </form>
             </div>
         </main>
     </div>
 
-    <script type="module" src="/static/js/app.js?v=2.0.1"></script>
-    <script type="module" src="/static/js/settings.js?v=2.0.1"></script>
+    <script type="module" src="/static/js/app.js?v=3.0.0"></script>
+    <script type="module" src="/static/js/settings.js?v=3.0.0"></script>
 </body>
 </html>

@@ -1,12 +1,14 @@
-import { api } from './api.js';
-import { formatCurrency, formatPercent, showLoading, hideLoading, showToast } from './app.js';
+import { api } from './api.js?v=3.0.0';
+import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getTheme } from './app.js?v=3.0.0';
 
 let portfolioData = [];
 let summaryData = {};
 let modifiedHoldings = new Map();
 let currentAllocView = localStorage.getItem('portfolio_alloc_view') || 'stock'; // 'stock' or 'market'
 
-const colors = ['#3b82f6', '#10b981', '#f43f5e', '#f59e0b', '#8b5cf6', '#06b6d4', '#ec4899', '#6366f1', '#14b8a6'];
+const getPieColors = () => getTheme() === 'light'
+  ? ['#2563eb', '#0f8a4d', '#d1242f', '#b45309', '#6d28d9', '#0e7490', '#be185d', '#4f46e5', '#0f766e']
+  : ['#5b9dff', '#4cc38a', '#f26a76', '#e3a008', '#a78bfa', '#22d3ee', '#f472b6', '#818cf8', '#2dd4bf'];
 
 const renderSkeletons = () => {
   const tbody = document.getElementById('portfolioTableBody');
@@ -44,8 +46,10 @@ const drawPieChart = (data) => {
   const outerRadius = Math.min(centerX, centerY) - 8;
   const innerRadius = outerRadius * 0.58;
 
+  const colors = getPieColors();
+
   if (!data || data.length === 0) {
-    ctx.fillStyle = 'rgba(122, 162, 247, 0.15)';
+    ctx.fillStyle = getTheme() === 'light' ? 'rgba(37, 99, 235, 0.10)' : 'rgba(91, 157, 255, 0.14)';
     ctx.beginPath();
     ctx.arc(centerX, centerY, outerRadius, 0, 2 * Math.PI);
     ctx.fill();
@@ -176,7 +180,7 @@ const renderTable = () => {
             <span>${flag}</span>
             <div>
               <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${item.ticker}">${item.ticker}</a>
-              ${item.notes ? `<div class="text-[11px] text-muted" title="${item.notes}">📝 ${item.notes.substring(0, 20)}</div>` : ''}
+              ${item.notes ? `<div class="text-2xs text-muted" title="${item.notes}">📝 ${item.notes.substring(0, 20)}</div>` : ''}
             </div>
           </div>
         </td>
@@ -637,9 +641,7 @@ const initPortfolio = () => {
           const results = await api.searchStocks(q);
           if (results && results.length > 0) {
             resultsDiv.innerHTML = results.map(r => `
-              <div style="padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border-color); transition: var(--transition);" 
-                   onmouseover="this.style.backgroundColor='var(--surface-hover)'" 
-                   onmouseout="this.style.backgroundColor='transparent'"
+              <div class="autocomplete-item"
                    onclick="document.getElementById('tickerInput').value='${r.ticker}';document.getElementById('autocompleteResults').style.display='none';">
                 <strong class="text-primary font-mono">${r.ticker}</strong> — <span class="text-secondary">${r.name}</span>
               </div>
@@ -742,9 +744,7 @@ const initPortfolio = () => {
           const results = await api.searchStocks(q);
           if (results && results.length > 0) {
             txResultsDiv.innerHTML = results.map(r => `
-              <div style="padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border-color); transition: var(--transition);" 
-                   onmouseover="this.style.backgroundColor='var(--surface-hover)'" 
-                   onmouseout="this.style.backgroundColor='transparent'"
+              <div class="autocomplete-item"
                    onclick="document.getElementById('txTickerInput').value='${r.ticker}';document.getElementById('txAutocompleteResults').style.display='none';">
                 <strong class="text-primary font-mono">${r.ticker}</strong> — <span class="text-secondary">${r.name}</span>
               </div>

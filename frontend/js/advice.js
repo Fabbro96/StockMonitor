@@ -1,5 +1,5 @@
-import { api } from './api.js';
-import { formatCurrency, formatDateTime, showLoading, hideLoading, showToast } from './app.js';
+import { api } from './api.js?v=3.0.0';
+import { formatCurrency, formatDateTime, showLoading, hideLoading, showToast } from './app.js?v=3.0.0';
 
 let currentPage = 1;
 let currentFilters = { market: '', action: '', date: '', q: '' };
@@ -8,8 +8,6 @@ const renderAdviceCard = (advice) => {
   const isFollowed = Boolean(advice.followed);
   const isIT = advice.market === 'IT';
   const flag = isIT ? '🇮🇹' : '🇺🇸';
-  const marketBadgeColor = isIT ? 'rgba(16, 185, 129, 0.10)' : 'rgba(59, 130, 246, 0.10)';
-  const marketBorderColor = isIT ? 'rgba(16, 185, 129, 0.5)' : 'rgba(59, 130, 246, 0.5)';
 
   let actionBadge = 'badge-hold';
   let actionText = '🟡 MANTENIMENTO';
@@ -32,23 +30,23 @@ const renderAdviceCard = (advice) => {
     stocksHtml = `
       <div class="mt-4 pt-4 border-t border-border-color">
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-          <h4 class="text-sm font-bold text-primary flex items-center gap-2" style="margin: 0;">
+          <h4 class="text-sm font-bold text-primary flex items-center gap-2">
             <span>📋 Consigli Strategici Prioritizzati (${stocks.length}) ${flag}</span>
           </h4>
           <span class="text-xs text-muted">Ordinati per rilevanza & priorità operativa</span>
         </div>
-        <div class="table-container border border-border-color rounded">
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 170px;">Ticker & Titolo</th>
-                <th class="text-center" style="width: 110px;">Azione</th>
-                <th class="text-center" style="width: 110px;">Priorità</th>
-                <th class="text-right" style="width: 120px;">Target</th>
-                <th>Motivo Sintetico & Catalizzatore</th>
-                <th class="text-center" style="width: 80px;">Dettagli</th>
-              </tr>
-            </thead>
+          <div class="table-container table-bordered">
+            <table>
+              <thead>
+                <tr>
+                  <th class="w-170">Ticker & Titolo</th>
+                  <th class="text-center w-110">Azione</th>
+                  <th class="text-center w-110">Priorità</th>
+                  <th class="text-right w-120">Target</th>
+                  <th>Motivo Sintetico & Catalizzatore</th>
+                  <th class="text-center w-80">Dettagli</th>
+                </tr>
+              </thead>
             <tbody>
               ${stocks.map(s => {
                 const sAct = (s.action || 'HOLD').toUpperCase();
@@ -73,7 +71,7 @@ const renderAdviceCard = (advice) => {
                   <tr>
                     <td>
                       <a href="#" class="stock-ticker-link font-bold font-mono text-sm" data-stock="${s.ticker}">${s.ticker}</a>
-                      <div class="text-xs text-muted truncate" style="max-width: 150px;">${s.name || ''}</div>
+                      <div class="text-xs text-muted truncate max-w-150">${s.name || ''}</div>
                     </td>
                     <td class="text-center">
                       <span class="badge ${sBadge} text-xs font-semibold">${sLabel}</span>
@@ -101,21 +99,21 @@ const renderAdviceCard = (advice) => {
   }
 
   const followBtnHtml = isFollowed
-    ? `<button class="btn btn-sm btn-success flex items-center gap-1 text-xs py-1.5 px-3" onclick="window.toggleFollow(${advice.id})">
+    ? `<button class="btn btn-sm btn-success" onclick="window.toggleFollow(${advice.id})">
          <span>✅ Letto</span>
-         <span class="text-[10px] opacity-80">(Segna come Non Letto)</span>
+         <span class="text-2xs opacity-80">(Segna come Non Letto)</span>
        </button>`
-    : `<button class="btn btn-sm btn-ghost flex items-center gap-1 text-xs py-1.5 px-3 border border-border-color hover:bg-[rgba(255,255,255,0.08)]" onclick="window.toggleFollow(${advice.id})">
+    : `<button class="btn btn-sm btn-ghost" onclick="window.toggleFollow(${advice.id})">
          <span>👁️ Segna come Letto</span>
        </button>`;
 
   return `
-    <div class="card mb-4" id="advice-${advice.id}" style="border-top: 3px solid ${marketBorderColor}; background: linear-gradient(180deg, ${marketBadgeColor} 0%, var(--surface-color) 45px);">
+    <div class="card advice-card ${isIT ? 'advice-it' : 'advice-us'} mb-4" id="advice-${advice.id}">
       <!-- Top header -->
       <div class="flex justify-between items-start mb-4 flex-wrap gap-2">
         <div>
           <div class="flex items-center gap-3 mb-1 flex-wrap">
-            <span style="font-size: 1.6rem;">${flag}</span>
+            <span class="text-xl">${flag}</span>
             <h3 class="text-xl font-bold">${advice.title || (isIT ? 'Borsa Italiana (Piazza Affari)' : 'Wall Street')}</h3>
             <span class="badge ${actionBadge}">${actionText}</span>
           </div>
@@ -130,14 +128,14 @@ const renderAdviceCard = (advice) => {
       ${advice.overview ? `
       <div class="mb-4">
         <h4 class="text-xs font-bold text-muted uppercase tracking-wider mb-1">🌐 Quadro & Scenario Generale</h4>
-        <p class="text-primary leading-relaxed" style="font-size: 0.95rem;">${advice.overview}</p>
+        <p class="text-primary leading-relaxed text-base">${advice.overview}</p>
       </div>` : ''}
 
       <!-- Strategy Section -->
       ${advice.strategy ? `
-      <div class="mb-4 p-4 rounded border border-border-color" style="background: rgba(0,0,0,0.2);">
+      <div class="callout mb-4">
         <h4 class="text-xs font-bold text-muted uppercase tracking-wider mb-1">🎯 Strategia Operativa & Piano d'Azione</h4>
-        <p class="text-primary leading-relaxed" style="font-size: 0.95rem;">${advice.strategy}</p>
+        <p class="text-primary leading-relaxed text-base">${advice.strategy}</p>
       </div>` : ''}
 
       <!-- Stocks Breakdown -->
@@ -145,7 +143,7 @@ const renderAdviceCard = (advice) => {
 
       <!-- Risks Section -->
       ${advice.risks ? `
-      <div class="mt-4 p-3 rounded" style="background: rgba(244, 63, 94, 0.08); border-left: 3px solid var(--danger-color);">
+      <div class="callout-danger mt-4">
         <h4 class="text-xs font-bold mb-1 text-danger flex items-center gap-1">
           <span>⚠️ Punti di Attenzione & Rischi Chiave</span>
         </h4>
@@ -153,8 +151,8 @@ const renderAdviceCard = (advice) => {
       </div>` : ''}
 
       <!-- Footer Info -->
-      <div class="flex gap-4 text-xs text-muted mt-4 pt-3 border-t border-border-color flex-wrap items-center justify-between">
-        <div class="flex gap-4">
+      <div class="flex gap-4 text-xs text-muted mt-4 pt-3 border-t flex-wrap items-center justify-between">
+        <div class="flex gap-4 flex-wrap">
           ${advice.confidence ? `<div>Confidenza IA: <strong class="text-primary">${advice.confidence}</strong></div>` : ''}
           ${advice.timeframe ? `<div>Orizzonte: <strong class="text-primary">${advice.timeframe}</strong></div>` : ''}
         </div>
@@ -223,11 +221,11 @@ window.toggleFollow = async (id) => {
     if (container) {
       const isFollowed = Boolean(res.followed);
       container.innerHTML = isFollowed
-        ? `<button class="btn btn-sm btn-success flex items-center gap-1 text-xs py-1.5 px-3" onclick="window.toggleFollow(${id})">
+        ? `<button class="btn btn-sm btn-success" onclick="window.toggleFollow(${id})">
              <span>✅ Letto</span>
-             <span class="text-[10px] opacity-80">(Segna come Non Letto)</span>
+             <span class="text-2xs opacity-80">(Segna come Non Letto)</span>
            </button>`
-        : `<button class="btn btn-sm btn-ghost flex items-center gap-1 text-xs py-1.5 px-3 border border-border-color hover:bg-[rgba(255,255,255,0.08)]" onclick="window.toggleFollow(${id})">
+        : `<button class="btn btn-sm btn-ghost" onclick="window.toggleFollow(${id})">
              <span>👁️ Segna come Letto</span>
            </button>`;
     }
@@ -248,20 +246,20 @@ const checkMarketStatus = async () => {
 
     if (badgeIT) {
       if (itStatus) {
-        badgeIT.className = 'badge badge-buy text-[10px]';
+        badgeIT.className = 'badge badge-buy text-2xs';
         badgeIT.textContent = '🟢 Aperta (09:00-17:30)';
       } else {
-        badgeIT.className = 'badge badge-sell text-[10px]';
+        badgeIT.className = 'badge badge-sell text-2xs';
         badgeIT.textContent = '🔴 Chiusa (09:00-17:30)';
       }
     }
 
     if (badgeUS) {
       if (usStatus) {
-        badgeUS.className = 'badge badge-buy text-[10px]';
+        badgeUS.className = 'badge badge-buy text-2xs';
         badgeUS.textContent = '🟢 Aperta (15:30-22:00)';
       } else {
-        badgeUS.className = 'badge badge-sell text-[10px]';
+        badgeUS.className = 'badge badge-sell text-2xs';
         badgeUS.textContent = '🔴 Chiusa (15:30-22:00)';
       }
     }
@@ -291,9 +289,9 @@ const runSingleStockAnalysis = async () => {
     const actionBadgeClass = result.action === 'ACCUMULO' || result.action === 'BUY' ? 'badge-buy' : (result.action === 'PRESA_PROFITTO' || result.action === 'SELL' ? 'badge-sell' : 'badge-hold');
 
     resContainer.innerHTML = `
-      <div class="card p-4 border border-border-color" style="background: rgba(0,0,0,0.3); border-left: 4px solid var(--primary-color);">
+      <div class="card callout-accent p-4">
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <span class="text-xl font-bold font-mono text-primary">${result.ticker}</span>
             <span class="text-sm text-secondary">${result.name}</span>
             <span class="badge ${actionBadgeClass}">${result.action_label || result.action}</span>
@@ -303,12 +301,12 @@ const runSingleStockAnalysis = async () => {
           </div>
         </div>
 
-        <div class="grid gap-3 mb-3" style="display: grid; grid-template-columns: 1fr 1fr;">
-          <div class="p-2 rounded border border-border-color" style="background: rgba(0,0,0,0.2);">
+        <div class="split-grid mb-3">
+          <div class="callout p-2">
             <div class="text-xs text-muted">🎯 Target Price Stimato</div>
             <div class="text-lg font-bold text-primary font-mono">${formatCurrency(result.target_price)} <span class="text-xs text-profit">(+${result.upside_potential_pct || 0}%)</span></div>
           </div>
-          <div class="p-2 rounded border border-border-color" style="background: rgba(0,0,0,0.2);">
+          <div class="callout p-2">
             <div class="text-xs text-muted">🛡️ Stop Loss Prudenziale</div>
             <div class="text-lg font-bold text-danger font-mono">${result.stop_loss ? formatCurrency(result.stop_loss) : '--'}</div>
           </div>
@@ -316,18 +314,18 @@ const runSingleStockAnalysis = async () => {
 
         <p class="text-sm text-primary leading-relaxed mb-3">${result.summary || ''}</p>
 
-        <div class="grid gap-2 text-xs mb-3" style="display: grid; grid-template-columns: 1fr 1fr;">
-          <div class="p-2.5 rounded" style="background: rgba(16, 185, 129, 0.08); border-left: 2px solid var(--success-color);">
+        <div class="split-grid mb-3 text-xs">
+          <div class="callout-success p-2.5">
             <strong class="text-profit block mb-1">🟢 Bull Case & Catalizzatori</strong>
             <span class="text-secondary leading-normal">${result.bull_case || '--'}</span>
           </div>
-          <div class="p-2.5 rounded" style="background: rgba(244, 63, 94, 0.08); border-left: 2px solid var(--danger-color);">
+          <div class="callout-danger p-2.5">
             <strong class="text-loss block mb-1">🔴 Bear Case & Rischi</strong>
             <span class="text-secondary leading-normal">${result.bear_case || '--'}</span>
           </div>
         </div>
 
-        <div class="flex justify-between items-center flex-wrap gap-2 pt-2 border-t border-border-color">
+        <div class="flex justify-between items-center flex-wrap gap-2 pt-2 border-t">
           <div class="text-xs text-secondary">💡 <strong>Strategia:</strong> ${result.operational_strategy || '--'}</div>
           <button class="btn btn-ghost btn-sm" onclick="window.openStockModal('${result.ticker}')">Apri Scheda Completa ➔</button>
         </div>

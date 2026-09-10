@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { api } from './api.js?v=3.0.0';
 
 export const formatCurrency = (val, currency = 'EUR') => {
   if (val === null || val === undefined || isNaN(val)) return '-';
@@ -58,7 +58,7 @@ export const showToast = (message, type = 'info', actionText = null, onAction = 
   
   let actionHtml = '';
   if (actionText && typeof onAction === 'function') {
-    actionHtml = `<button class="btn btn-ghost btn-sm" style="margin-left: 12px; padding: 2px 8px; font-size: 0.76rem;" id="toastActionBtn">${actionText}</button>`;
+    actionHtml = `<button class="btn btn-ghost btn-sm toast-action" id="toastActionBtn">${actionText}</button>`;
   }
 
   toast.innerHTML = `<span>${message}</span>${actionHtml}`;
@@ -109,21 +109,31 @@ export const hideLoading = (elementId = null) => {
 };
 
 // ==========================================
-// Theme Management (Tokyo Night & Catppuccin)
+// Theme Management (minimal light & dark)
 // ==========================================
-export const getTheme = () => localStorage.getItem('app_theme') || 'dark';
+export const getTheme = () => {
+  const saved = localStorage.getItem('app_theme');
+  if (saved === 'light' || saved === 'dark') return saved;
+  return window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+};
+
+export const CHART_FONT_FAMILY = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
 export const getChartThemeColors = () => {
   const isLight = getTheme() === 'light';
   return {
-    textColor: isLight ? '#6c6f85' : '#9aa5ce',
-    gridColor: isLight ? 'rgba(220, 224, 232, 0.7)' : 'rgba(41, 46, 66, 0.6)',
-    lineColor: isLight ? '#1e66f5' : '#7aa2f7',
-    topColor: isLight ? 'rgba(30, 102, 245, 0.25)' : 'rgba(122, 162, 247, 0.35)',
-    bottomColor: isLight ? 'rgba(30, 102, 245, 0.01)' : 'rgba(122, 162, 247, 0.01)',
-    upColor: isLight ? '#40a02b' : '#9ece6a',
-    downColor: isLight ? '#d20f39' : '#f7768e',
-    volumeColor: isLight ? 'rgba(30, 102, 245, 0.3)' : 'rgba(122, 162, 247, 0.3)'
+    textColor: isLight ? '#5a6472' : '#a2a9b6',
+    gridColor: isLight ? 'rgba(21, 24, 30, 0.07)' : 'rgba(232, 234, 238, 0.07)',
+    lineColor: isLight ? '#2563eb' : '#5b9dff',
+    topColor: isLight ? 'rgba(37, 99, 235, 0.16)' : 'rgba(91, 157, 255, 0.22)',
+    bottomColor: isLight ? 'rgba(37, 99, 235, 0.01)' : 'rgba(91, 157, 255, 0.01)',
+    upColor: isLight ? '#0f8a4d' : '#4cc38a',
+    downColor: isLight ? '#d1242f' : '#f26a76',
+    volumeColor: isLight ? 'rgba(90, 100, 114, 0.25)' : 'rgba(162, 169, 182, 0.22)',
+    volumeUp: isLight ? 'rgba(15, 138, 77, 0.32)' : 'rgba(76, 195, 138, 0.32)',
+    volumeDown: isLight ? 'rgba(209, 36, 47, 0.28)' : 'rgba(242, 106, 118, 0.3)',
+    benchmarkSp: isLight ? '#0f8a4d' : '#4cc38a',
+    benchmarkMib: isLight ? '#b45309' : '#e3a008'
   };
 };
 
@@ -165,7 +175,7 @@ export const initTopBarControls = () => {
   
   if (!actionGroup) {
     actionGroup = document.createElement('div');
-    actionGroup.className = 'flex items-center gap-2 topbar-actions';
+    actionGroup.className = 'topbar-actions';
     topbar.appendChild(actionGroup);
   }
 
@@ -177,7 +187,7 @@ export const initTopBarControls = () => {
     searchBtn.onclick = () => window.openCommandPalette && window.openCommandPalette();
     searchBtn.title = 'Cerca titoli o naviga (Ctrl+K)';
     searchBtn.innerHTML = `
-      <span style="font-size: 0.95rem;">🔍</span>
+      <span>🔍</span>
       <span class="search-text">Cerca...</span>
       <kbd class="kbd-badge">Ctrl K</kbd>
     `;
@@ -200,7 +210,7 @@ export const initTopBarControls = () => {
     helpBtn.innerHTML = `<span>?</span>`;
     const themeBtn = document.getElementById('btnThemeToggle');
     if (themeBtn && themeBtn.parentNode) {
-      themeBtn.parentNode.insertBefore(helpBtn, themeBtn.nextSibling);
+      themeBtn.parentNode.insertBefore(helpBtn, themeBtn);
     } else {
       actionGroup.appendChild(helpBtn);
     }
@@ -384,10 +394,10 @@ const injectStockModalHTML = () => {
     <div class="modal-content stock-modal-large">
       <div class="modal-header">
         <div class="flex items-center gap-3">
-          <span style="font-size: 1.5rem;" id="smFlag">📈</span>
+          <span class="text-2xl" id="smFlag">📈</span>
           <div>
-            <div class="flex items-center gap-2">
-              <h2 class="modal-title" id="smTicker" style="margin:0;">--</h2>
+            <div class="flex items-center gap-2 flex-wrap">
+              <h2 class="modal-title" id="smTicker">--</h2>
               <span class="badge" id="smMarketBadge">--</span>
               <span id="smHeldBadge" class="badge badge-buy" style="display: none;">💼 In Portafoglio</span>
             </div>
@@ -414,7 +424,7 @@ const injectStockModalHTML = () => {
       <!-- Tab Content: Chart -->
       <div id="tab-chart" class="modal-tab-panel">
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
             <div class="timeframe-group" id="modalTimeframeGroup">
               <button class="timeframe-btn" data-tf="1d">1G</button>
               <button class="timeframe-btn" data-tf="1w">1S</button>
@@ -423,18 +433,18 @@ const injectStockModalHTML = () => {
               <button class="timeframe-btn" data-tf="1y">1A</button>
               <button class="timeframe-btn" data-tf="5y">5A</button>
             </div>
-            <div class="chart-type-group" id="modalChartTypeGroup">
+            <div class="flex gap-2" id="modalChartTypeGroup">
               <button class="chart-type-btn active" data-type="area">📈 Area</button>
               <button class="chart-type-btn" data-type="candle">📊 Candele</button>
             </div>
           </div>
-          <div class="flex gap-2">
+          <div class="flex gap-2 flex-wrap">
             <button class="btn btn-ghost btn-sm" id="btnModalAddWatchlist">⭐ Salva in Watchlist</button>
             <button class="btn btn-primary btn-sm" id="btnModalAddHolding">➕ Aggiungi al Portafoglio</button>
           </div>
         </div>
-        <div id="stockModalChart" style="width: 100%; height: 320px; border-radius: 8px; overflow: hidden; background: var(--surface-hover);"></div>
-        <div class="flex justify-between items-center text-xs text-muted mt-2">
+        <div id="stockModalChart" class="modal-chart"></div>
+        <div class="flex justify-between items-center text-xs text-muted mt-2 flex-wrap gap-2">
           <span id="smBreakevenLegend" style="display: none;">🟠 Linea Tratteggiata: Prezzo Medio Carico Portafoglio</span>
           <span>Volumi visualizzati in basso</span>
         </div>
@@ -442,32 +452,32 @@ const injectStockModalHTML = () => {
 
       <!-- Tab Content: Technicals -->
       <div id="tab-technicals" class="modal-tab-panel" style="display: none;">
-        <div class="grid gap-3 mb-4" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-          <div class="card p-3" style="background: var(--surface-hover);">
+        <div class="metric-grid mb-4">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted mb-1">RSI (14 Periodi)</div>
             <div class="text-2xl font-bold font-mono" id="smRsiVal">--</div>
             <span class="badge mt-2" id="smRsiBadge">Neutro</span>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted mb-1">Media Mobile 20 (SMA 20)</div>
             <div class="text-xl font-bold font-mono" id="smSma20">--</div>
             <div class="text-xs text-secondary mt-1">Trend breve termine</div>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted mb-1">Media Mobile 50 (SMA 50)</div>
             <div class="text-xl font-bold font-mono" id="smSma50">--</div>
             <div class="text-xs text-secondary mt-1">Trend medio termine</div>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted mb-1">Configurazione Trend</div>
             <div class="text-lg font-bold text-primary mt-1" id="smTrend">--</div>
           </div>
         </div>
 
-        <div class="card p-4" style="background: var(--surface-hover);">
+        <div class="card card-subtle p-4">
           <div class="text-xs font-bold text-muted uppercase mb-2">Range 52 Settimane</div>
           <div class="range-bar-container">
-            <div class="range-bar-track" style="height: 8px;">
+            <div class="range-bar-track">
               <div class="range-bar-fill"></div>
               <div class="range-bar-pin" id="sm52Pin" style="left: 50%;"></div>
             </div>
@@ -482,46 +492,46 @@ const injectStockModalHTML = () => {
 
       <!-- Tab Content: Fundamentals -->
       <div id="tab-fundamentals" class="modal-tab-panel" style="display: none;">
-        <div class="grid gap-3 mb-4" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
-          <div class="card p-3" style="background: var(--surface-hover);">
+        <div class="metric-grid mb-4">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted">Capitalizzazione</div>
             <div class="text-lg font-bold font-mono mt-1" id="smMarketCap">--</div>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted">P/E Ratio (Trailing)</div>
             <div class="text-lg font-bold font-mono mt-1" id="smPe">--</div>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted">EPS (Utile per Azione)</div>
             <div class="text-lg font-bold font-mono mt-1" id="smEps">--</div>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted">Beta (Volatilità)</div>
             <div class="text-lg font-bold font-mono mt-1" id="smBeta">--</div>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted">Dividend Yield</div>
             <div class="text-lg font-bold font-mono text-profit mt-1" id="smDivYield">--%</div>
           </div>
-          <div class="card p-3" style="background: var(--surface-hover);">
+          <div class="card card-subtle p-3">
             <div class="text-xs text-muted">Volume Medio</div>
             <div class="text-lg font-bold font-mono mt-1" id="smVolume">--</div>
           </div>
         </div>
-        <div class="card p-3 text-xs text-secondary leading-relaxed" id="smSummary" style="background: var(--surface-hover); max-height: 120px; overflow-y: auto;">
+        <div class="card card-subtle p-3 text-xs text-secondary leading-relaxed scrollbox-sm" id="smSummary">
           Nessuna descrizione disponibile per questa società.
         </div>
       </div>
 
       <!-- Tab Content: AI Analysis -->
       <div id="tab-ai" class="modal-tab-panel" style="display: none;">
-        <div class="flex justify-between items-center mb-3">
+        <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
           <div class="text-sm font-bold text-primary flex items-center gap-1.5">
             <span>🧠 Analisi Istantanea Gemini 3.7 Flash</span>
           </div>
           <button class="btn btn-primary btn-sm" id="btnRunStockAi">⚡ Elabora Analisi Ora</button>
         </div>
-        <div id="stockAiResultContainer" class="card p-4" style="background: var(--surface-hover); border-left: 3px solid var(--primary-color);">
+        <div id="stockAiResultContainer" class="card card-subtle p-4 card-note">
           <div class="text-center text-muted py-6 text-sm">
             Clicca <strong>"Elabora Analisi Ora"</strong> per interrogare l'IA su fondamentali, indicatori tecnici, catalizzatori e posizione in portafoglio.
           </div>
@@ -608,7 +618,7 @@ const initModalChart = () => {
     layout: {
       background: { type: 'solid', color: 'transparent' },
       textColor: themeColors.textColor,
-      fontFamily: 'Inter, system-ui, sans-serif',
+      fontFamily: CHART_FONT_FAMILY,
       fontSize: 11
     },
     grid: {
@@ -642,9 +652,9 @@ const initModalChart = () => {
   modalVolumeSeries = modalChart.addHistogramSeries({
     color: themeColors.volumeColor,
     priceFormat: { type: 'volume' },
-    priceScaleId: '',
-    scaleMargins: { top: 0.8, bottom: 0 }
+    priceScaleId: ''
   });
+  modalVolumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 };
 
 const applyModalChartData = () => {
@@ -667,10 +677,11 @@ const applyModalChartData = () => {
   }
 
   // Volume
+  const colors = getChartThemeColors();
   modalVolumeSeries.setData(rawCandlesData.map(c => ({
     time: c.time,
     value: c.volume || 0,
-    color: c.close >= c.open ? 'rgba(158, 206, 106, 0.4)' : 'rgba(247, 118, 142, 0.4)'
+    color: c.close >= c.open ? colors.volumeUp : colors.volumeDown
   })));
 
   modalChart.timeScale().fitContent();
@@ -703,9 +714,9 @@ const runModalStockAi = async () => {
     if (result.holding_context) {
       const hc = result.holding_context;
       holdingBox = `
-        <div class="p-2.5 mb-3 rounded border border-border-color" style="background: linear-gradient(90deg, rgba(59,130,246,0.12), transparent);">
+        <div class="callout-accent p-2.5 mb-3">
           <div class="text-xs text-primary font-bold mb-1">💼 Posizione nel tuo Portafoglio</div>
-          <div class="flex justify-between items-center text-xs font-mono">
+          <div class="flex justify-between items-center text-xs font-mono flex-wrap gap-2">
             <span>Possiedi: <strong>${hc.quantity}</strong> azioni a carico <strong>${formatCurrency(hc.avg_purchase_price)}</strong></span>
             <span class="${hc.current_pnl_pct >= 0 ? 'text-profit' : 'text-loss'} font-bold">P&L: ${formatCurrency(hc.current_pnl_abs)} (${formatPercent(hc.current_pnl_pct)})</span>
           </div>
@@ -715,19 +726,19 @@ const runModalStockAi = async () => {
 
     container.innerHTML = `
       <div>
-        <div class="flex justify-between items-center mb-3">
-          <span class="badge ${actionBadgeClass}" style="font-size: 0.85rem; padding: 4px 10px;">${result.action_label || result.action}</span>
+        <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+          <span class="badge ${actionBadgeClass}">${result.action_label || result.action}</span>
           <div class="text-xs text-muted">Confidenza: <strong class="text-primary">${result.confidence || 'MEDIA'}</strong> • Orizzonte: <strong class="text-primary">${result.timeframe || 'Medio Termine'}</strong></div>
         </div>
 
         ${holdingBox}
 
-        <div class="grid gap-3 mb-3" style="display: grid; grid-template-columns: 1fr 1fr;">
-          <div class="p-2.5 rounded border border-border-color" style="background: var(--surface-card);">
+        <div class="split-grid mb-3">
+          <div class="callout p-2.5">
             <div class="text-xs text-muted">🎯 Target Price Stimato</div>
             <div class="text-lg font-bold text-primary font-mono">${formatCurrency(result.target_price)} <span class="text-xs text-profit">(+${result.upside_potential_pct || 0}%)</span></div>
           </div>
-          <div class="p-2.5 rounded border border-border-color" style="background: var(--surface-card);">
+          <div class="callout p-2.5">
             <div class="text-xs text-muted">🛡️ Stop Loss Consigliato</div>
             <div class="text-lg font-bold text-danger font-mono">${result.stop_loss ? formatCurrency(result.stop_loss) : '--'}</div>
           </div>
@@ -735,18 +746,18 @@ const runModalStockAi = async () => {
 
         <p class="text-sm text-primary leading-relaxed mb-3">${result.summary || ''}</p>
 
-        <div class="grid gap-2 text-xs mb-3" style="display: grid; grid-template-columns: 1fr 1fr;">
-          <div class="p-2.5 rounded" style="background: var(--success-bg); border-left: 2px solid var(--success-color);">
+        <div class="split-grid mb-3 text-xs">
+          <div class="callout-success p-2.5">
             <strong class="text-profit block mb-1">🟢 Bull Case & Punti di Forza</strong>
             <span class="text-secondary leading-normal">${result.bull_case || '--'}</span>
           </div>
-          <div class="p-2.5 rounded" style="background: var(--danger-bg); border-left: 2px solid var(--danger-color);">
+          <div class="callout-danger p-2.5">
             <strong class="text-loss block mb-1">🔴 Bear Case & Rischi Chiave</strong>
             <span class="text-secondary leading-normal">${result.bear_case || '--'}</span>
           </div>
         </div>
 
-        <div class="p-2.5 rounded border border-border-color" style="background: var(--surface-card);">
+        <div class="callout p-2.5">
           <strong class="text-xs text-primary block mb-1">💡 Strategia Operativa Suggerita</strong>
           <span class="text-xs text-secondary leading-normal">${result.operational_strategy || '--'}</span>
         </div>
@@ -910,11 +921,25 @@ const initSidebar = () => {
         }
         document.querySelectorAll('.modal-overlay.active').forEach(modal => {
           modal.classList.remove('active');
-        });
-        document.querySelectorAll('.autocomplete-dropdown, #autocompleteResults, #wlAutocompleteResults').forEach(drop => {
+        });        document.querySelectorAll('.autocomplete-dropdown, #autocompleteResults, #wlAutocompleteResults').forEach(drop => {
           drop.style.display = 'none';
         });
       }
+    });
+  }
+
+  // Sidebar collapse toggle (desktop)
+  const collapseBtn = document.getElementById('btnSidebarCollapse');
+  if (collapseBtn && sidebar) {
+    if (localStorage.getItem('sidebar_collapsed') === '1') {
+      sidebar.classList.add('collapsed');
+      collapseBtn.textContent = '»';
+    }
+    collapseBtn.addEventListener('click', () => {
+      const collapsed = sidebar.classList.toggle('collapsed');
+      collapseBtn.textContent = collapsed ? '»' : '«';
+      collapseBtn.title = collapsed ? 'Espandi menu' : 'Comprimi menu';
+      localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0');
     });
   }
 
@@ -923,15 +948,12 @@ const initSidebar = () => {
     const username = localStorage.getItem('auth_username') || 'Utente';
     const footer = document.createElement('div');
     footer.className = 'sidebar-footer';
-    footer.style.cssText = 'padding: 16px 20px; border-top: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; font-size: 0.85rem;';
     footer.innerHTML = `
-      <div style="display: flex; align-items: center; gap: 8px; overflow: hidden;">
-        <span style="font-size: 1.1rem;">👤</span>
-        <span style="font-weight: 600; color: var(--text-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">${username}</span>
+      <div class="sidebar-user">
+        <span>👤</span>
+        <span class="sidebar-username">${username}</span>
       </div>
-      <button id="btnLogout" title="Disconnetti" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 1.1rem; padding: 4px 6px; border-radius: 4px; transition: var(--transition);" onmouseover="this.style.color='var(--danger-color)'" onmouseout="this.style.color='var(--text-muted)'">
-        🚪
-      </button>
+      <button id="btnLogout" class="icon-btn" title="Disconnetti" aria-label="Disconnetti">🚪</button>
     `;
     sidebar.appendChild(footer);
 
@@ -957,13 +979,6 @@ const checkAuth = async () => {
   } catch (e) {
     // Redirect handled by api.js
   }
-};
-
-const loadGoogleFont = () => {
-  const link = document.createElement('link');
-  link.href = 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;600;700&display=swap';
-  link.rel = 'stylesheet';
-  document.head.appendChild(link);
 };
 
 // ==========================================
@@ -1017,7 +1032,7 @@ const injectCommandPaletteHTML = () => {
         <div class="cmd-palette-header">
           <span class="cmd-palette-search-icon">🔍</span>
           <input type="text" class="cmd-palette-input" id="cmdPaletteInput" placeholder="Cerca titolo, ticker o naviga (es. AAPL, RACE, Portafoglio)..." autocomplete="off" spellcheck="false" />
-          <kbd class="kbd-badge" style="cursor: pointer;" onclick="window.closeCommandPalette()">esc</kbd>
+          <kbd class="kbd-badge cursor-pointer" onclick="window.closeCommandPalette()">esc</kbd>
         </div>
         <div class="cmd-palette-body" id="cmdPaletteResults">
           <!-- Popolato dinamicamente -->
@@ -1033,30 +1048,28 @@ const injectCommandPaletteHTML = () => {
       </div>
     </div>
 
-    <div class="modal-backdrop" id="shortcutsHelpModal" onclick="if(event.target===this) window.closeShortcutsHelp()" style="z-index: 10000;">
-      <div class="modal-card" style="max-width: 540px;" onclick="event.stopPropagation()">
+    <div class="modal-overlay" id="shortcutsHelpModal" onclick="if(event.target===this) window.closeShortcutsHelp()">
+      <div class="modal-content" onclick="event.stopPropagation()">
         <div class="modal-header">
           <h3 class="modal-title">⌨️ Scorciatoie da Tastiera</h3>
-          <button class="btn-close" onclick="window.closeShortcutsHelp()">&times;</button>
+          <button class="modal-close" onclick="window.closeShortcutsHelp()" aria-label="Chiudi">&times;</button>
         </div>
-        <div class="modal-body">
-          <p class="text-xs text-secondary mb-3">Naviga e gestisci il tuo portafoglio ad alta velocità con questi comandi globali:</p>
-          <div class="shortcuts-grid">
-            <div class="shortcut-row">
-              <span class="shortcut-action">Apri Command Palette / Cerca</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">Ctrl</kbd> + <kbd class="kbd-badge">K</kbd> / <kbd class="kbd-badge">/</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Apri questa Guida</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">?</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Chiudi Finestre e Modal</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">Esc</kbd></div>
-            </div>
+        <p class="text-xs text-secondary mb-3">Naviga e gestisci il tuo portafoglio ad alta velocità con questi comandi globali:</p>
+        <div class="shortcuts-grid">
+          <div class="shortcut-row">
+            <span class="shortcut-action">Apri Command Palette / Cerca</span>
+            <div class="shortcut-keys"><kbd class="kbd-badge">Ctrl</kbd> + <kbd class="kbd-badge">K</kbd> / <kbd class="kbd-badge">/</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-action">Apri questa Guida</span>
+            <div class="shortcut-keys"><kbd class="kbd-badge">?</kbd></div>
+          </div>
+          <div class="shortcut-row">
+            <span class="shortcut-action">Chiudi Finestre e Modal</span>
+            <div class="shortcut-keys"><kbd class="kbd-badge">Esc</kbd></div>
           </div>
         </div>
-        <div class="modal-footer">
+        <div class="flex justify-end mt-3">
           <button class="btn btn-primary" onclick="window.closeShortcutsHelp()">Ho capito</button>
         </div>
       </div>
@@ -1288,7 +1301,7 @@ const initGlobalKeyboardShortcuts = () => {
     if (e.key === 'Escape') {
       closeCommandPalette();
       closeShortcutsHelp();
-      document.querySelectorAll('.modal-overlay.active, .modal-backdrop.active').forEach(m => m.classList.remove('active'));
+      document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
       return;
     }
 
@@ -1302,7 +1315,6 @@ const initGlobalKeyboardShortcuts = () => {
 };
 
 const initApp = () => {
-  loadGoogleFont();
   initTheme();
   initSidebar();
   checkAuth();
@@ -1337,6 +1349,7 @@ const initApp = () => {
         wickDownColor: colors.downColor
       });
       modalVolumeSeries?.applyOptions({ color: colors.volumeColor });
+      if (rawCandlesData.length > 0) applyModalChartData();
     }
   });
 

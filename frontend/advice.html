@@ -4,39 +4,57 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Consigli IA - Stock Monitor</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.0.1">
-    <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('app_theme');
+                if (t !== 'light' && t !== 'dark') {
+                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                }
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
+    <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <div class="app-container">
+        <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="app-title">📈 Stock Monitor</div>
+                <div class="app-title">
+                    <span class="app-logo">📈</span>
+                    <span class="app-title-text">Stock Monitor</span>
+                </div>
+                <button class="icon-btn sidebar-collapse-btn" id="btnSidebarCollapse" title="Comprimi menu" aria-label="Comprimi menu">«</button>
             </div>
             <nav class="nav-links">
-                <a href="/static/index.html" class="nav-link">🏠 Dashboard</a>
-                <a href="/static/watchlist.html" class="nav-link">⭐ Watchlist</a>
-                <a href="/static/portfolio.html" class="nav-link">💼 Portafoglio</a>
-                <a href="/static/advice.html" class="nav-link active">🧠 Consigli</a>
-                <a href="/static/settings.html" class="nav-link">⚙️ Impostazioni</a>
+                <a href="/static/index.html" class="nav-link"><span class="nav-icon">🏠</span><span class="nav-label">Dashboard</span></a>
+                <a href="/static/watchlist.html" class="nav-link"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
+                <a href="/static/portfolio.html" class="nav-link"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
+                <a href="/static/advice.html" class="nav-link active"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
+                <a href="/static/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
         </aside>
 
         <main class="main-content">
             <header class="topbar">
-                <div class="flex items-center gap-4">
-                    <button class="mobile-toggle">☰</button>
-                    <h1 class="page-title">🧠 Analisi & Consigli IA</h1>
+                <div class="topbar-left">
+                    <button class="mobile-toggle" aria-label="Apri menu">☰</button>
+                    <h1 class="page-title">🧠 Analisi &amp; Consigli IA</h1>
                 </div>
-                <div class="flex items-center gap-3 flex-wrap">
-                    <div class="flex items-center gap-2 text-xs font-semibold">
+                <div class="topbar-actions">
+                    <div class="market-status">
                         <div class="market-pill" title="Borsa Italiana: Lun-Ven 09:00 - 17:30">
                             <span>🇮🇹 Milano:</span>
-                            <span id="marketStatusIT" class="badge badge-hold text-xs">Controllo...</span>
+                            <span id="marketStatusIT" class="badge badge-hold">Controllo...</span>
                         </div>
                         <div class="market-pill" title="Wall Street: Lun-Ven 15:30 - 22:00 (Ora Italiana)">
                             <span>🇺🇸 Wall St:</span>
-                            <span id="marketStatusUS" class="badge badge-hold text-xs">Controllo...</span>
+                            <span id="marketStatusUS" class="badge badge-hold">Controllo...</span>
                         </div>
                     </div>
                     <button class="btn btn-primary" id="btnGenerate">Genera Analisi Macro Ora</button>
@@ -48,23 +66,23 @@
 
             <div class="content-wrapper" id="adviceContent">
                 <!-- Single Stock AI Analyst Card -->
-                <div class="card mb-4" style="background: linear-gradient(135deg, rgba(59, 130, 246, 0.12) 0%, rgba(18, 20, 36, 0.95) 100%); border-color: rgba(59, 130, 246, 0.3);">
-                    <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
+                <div class="card card-accent mb-4">
+                    <div class="card-header">
                         <div>
-                            <h3 class="card-title" style="margin:0;">⚡ Analisi Istantanea su Singolo Titolo (Gemini 3.7 Flash)</h3>
+                            <h3 class="card-title">⚡ Analisi Istantanea su Singolo Titolo (Gemini 3.7 Flash)</h3>
                             <p class="text-xs text-secondary mt-1">Interroga l'IA per un report approfondito con Target Price, RSI, SMA e catalizzatori</p>
                         </div>
                     </div>
-                    <div class="flex gap-2 items-center mt-3 flex-wrap">
-                        <input type="text" id="aiSingleTicker" placeholder="Inserisci ticker (es. NVDA, AAPL, ENEL.MI, RACE.MI)..." style="max-width: 320px; font-weight: 600; text-transform: uppercase;">
+                    <div class="flex gap-2 items-center flex-wrap">
+                        <input type="text" id="aiSingleTicker" class="input-upper" placeholder="Inserisci ticker (es. NVDA, AAPL, ENEL.MI, RACE.MI)...">
                         <button class="btn btn-primary" id="btnAnalyzeSingle">Analizza Titolo con IA ➔</button>
                     </div>
                     <div id="singleStockAiResult" class="mt-4" style="display: none;"></div>
                 </div>
 
                 <!-- Market Summary Card -->
-                <div class="card mb-4" style="background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), var(--surface-color));">
-                    <div class="flex justify-between items-center mb-2">
+                <div class="card mb-4">
+                    <div class="card-header">
                         <h3 class="card-title">🌐 Riassunto Globale del Mercato</h3>
                         <span class="text-xs text-muted">Ultimi 7 Giorni • Gemini 3.7 Flash</span>
                     </div>
@@ -72,12 +90,12 @@
                 </div>
 
                 <!-- Legenda Termini Finanziari -->
-                <div class="card mb-4" style="background: rgba(18, 20, 32, 0.7); border-left: 3px solid var(--primary-color);">
+                <div class="card card-note mb-4">
                     <div class="flex items-center gap-2 mb-2">
-                        <span style="font-size: 1.1rem;">💡</span>
-                        <h4 class="font-bold text-sm" style="margin: 0; color: var(--text-primary);">Come interpretare le analisi macro</h4>
+                        <span class="text-base">💡</span>
+                        <h4 class="font-bold text-sm">Come interpretare le analisi macro</h4>
                     </div>
-                    <div class="grid gap-3 text-xs text-secondary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+                    <div class="metric-grid text-xs text-secondary">
                         <div>
                             <strong class="text-primary block mb-1">🎯 Target Price</strong>
                             Prezzo obiettivo stimato per il titolo in base all'analisi fondamentale e tecnica recente.
@@ -95,16 +113,14 @@
 
                 <!-- Filters -->
                 <div class="card mb-4">
-                    <div class="flex justify-between items-center mb-3">
-                        <h4 class="text-sm font-bold text-primary flex items-center gap-1.5">
-                            <span>🔍 Filtra Analisi di Mercato</span>
-                        </h4>
-                        <button class="btn btn-ghost btn-sm text-xs py-1" id="btnResetFilters">↺ Mostra Tutta la Settimana</button>
+                    <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+                        <h4 class="text-sm font-bold text-primary">🔍 Filtra Analisi di Mercato</h4>
+                        <button class="btn btn-ghost btn-sm" id="btnResetFilters">↺ Mostra Tutta la Settimana</button>
                     </div>
                     <div class="flex gap-4 items-end flex-wrap">
                         <div class="form-group mb-0">
                             <label class="block text-xs font-semibold text-secondary mb-1">📅 Filtra per Giorno</label>
-                            <div class="flex items-center gap-1 bg-[rgba(255,255,255,0.04)] p-1 rounded border border-border-color">
+                            <div class="timeframe-group">
                                 <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterToday" data-day="today">Oggi</button>
                                 <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterYesterday" data-day="yesterday">Ieri</button>
                                 <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterPickDay" data-day="custom">Scegli giorno 📅</button>
@@ -112,24 +128,24 @@
                             <input type="hidden" id="filterDate" value="">
                         </div>
                         <div class="form-group mb-0">
-                            <label>🏛️ Mercato</label>
-                            <select id="filterMarket" style="width: 170px;">
+                            <label for="filterMarket">🏛️ Mercato</label>
+                            <select id="filterMarket" class="input-compact">
                                 <option value="">Tutti i Mercati</option>
                                 <option value="IT">🇮🇹 Borsa Italiana</option>
                                 <option value="US">🇺🇸 Borsa Americana</option>
                             </select>
                         </div>
                         <div class="form-group mb-0">
-                            <label>🎯 Azione Generale</label>
-                            <select id="filterAction" style="width: 170px;">
+                            <label for="filterAction">🎯 Azione Generale</label>
+                            <select id="filterAction" class="input-compact">
                                 <option value="">Tutte le Azioni</option>
                                 <option value="ACCUMULO">Accumulo / Buy</option>
                                 <option value="MANTENIMENTO">Mantenimento / Hold</option>
                                 <option value="PRESA_PROFITTO">Presa Profitto / Sell</option>
                             </select>
                         </div>
-                        <div class="form-group mb-0 flex-1" style="min-width: 200px;">
-                            <label>🔎 Cerca Ticker nei Blocchi</label>
+                        <div class="form-group mb-0 flex-1">
+                            <label for="filterSearch">🔎 Cerca Ticker nei Blocchi</label>
                             <input type="text" id="filterSearch" placeholder="Es. ENEL, AAPL, NVDA, LDO...">
                         </div>
                     </div>
@@ -137,7 +153,7 @@
 
                 <!-- Advice List -->
                 <div id="adviceList" class="flex flex-col gap-4"></div>
-                
+
                 <div class="mt-6 flex justify-center">
                     <button class="btn btn-ghost" id="btnLoadMore" style="display:none;">Carica Altri</button>
                 </div>
@@ -146,15 +162,15 @@
     </div>
 
     <!-- Date Picker Modal for "Scegli giorno" -->
-    <div class="modal" id="datePickerModal" role="dialog" aria-modal="true" aria-labelledby="datePickerTitle">
-        <div class="modal-content" style="max-width: 380px;">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="modal-title text-base font-bold" id="datePickerTitle">📅 Scegli Giorno</h3>
-                <button type="button" class="close-btn" id="closeDatePickerModal" aria-label="Chiudi modale">&times;</button>
+    <div class="modal-overlay" id="datePickerModal" role="dialog" aria-modal="true" aria-labelledby="datePickerTitle">
+        <div class="modal-content modal-sm">
+            <div class="modal-header">
+                <h3 class="modal-title" id="datePickerTitle">📅 Scegli Giorno</h3>
+                <button type="button" class="modal-close" id="closeDatePickerModal" aria-label="Chiudi modale">&times;</button>
             </div>
             <div class="form-group mb-4">
-                <label for="customDatePickerInput" class="text-xs font-semibold text-secondary mb-1 block">Seleziona la data da consultare:</label>
-                <input type="date" id="customDatePickerInput" class="w-full" style="padding: 10px; font-size: 1rem;">
+                <label for="customDatePickerInput">Seleziona la data da consultare:</label>
+                <input type="date" id="customDatePickerInput" class="w-full">
             </div>
             <div class="flex justify-end gap-2">
                 <button type="button" class="btn btn-ghost" id="cancelDatePickerModal">Annulla</button>
@@ -163,7 +179,7 @@
         </div>
     </div>
 
-    <script type="module" src="/static/js/app.js?v=2.0.2"></script>
-    <script type="module" src="/static/js/advice.js?v=2.0.2"></script>
+    <script type="module" src="/static/js/app.js?v=3.0.0"></script>
+    <script type="module" src="/static/js/advice.js?v=3.0.0"></script>
 </body>
 </html>

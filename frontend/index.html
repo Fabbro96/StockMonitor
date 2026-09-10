@@ -4,41 +4,58 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Stock Monitor</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2.0.1">
-    <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('app_theme');
+                if (t !== 'light' && t !== 'dark') {
+                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+                }
+                document.documentElement.setAttribute('data-theme', t);
+            } catch (e) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
+    <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <div class="app-container">
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <div class="app-title">📈 Stock Monitor</div>
+                <div class="app-title">
+                    <span class="app-logo">📈</span>
+                    <span class="app-title-text">Stock Monitor</span>
+                </div>
+                <button class="icon-btn sidebar-collapse-btn" id="btnSidebarCollapse" title="Comprimi menu" aria-label="Comprimi menu">«</button>
             </div>
             <nav class="nav-links">
-                <a href="/static/index.html" class="nav-link active">🏠 Dashboard</a>
-                <a href="/static/watchlist.html" class="nav-link">⭐ Watchlist</a>
-                <a href="/static/portfolio.html" class="nav-link">💼 Portafoglio</a>
-                <a href="/static/advice.html" class="nav-link">🧠 Consigli</a>
-                <a href="/static/settings.html" class="nav-link">⚙️ Impostazioni</a>
+                <a href="/static/index.html" class="nav-link active"><span class="nav-icon">🏠</span><span class="nav-label">Dashboard</span></a>
+                <a href="/static/watchlist.html" class="nav-link"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
+                <a href="/static/portfolio.html" class="nav-link"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
+                <a href="/static/advice.html" class="nav-link"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
+                <a href="/static/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
         </aside>
 
         <!-- Main Content -->
         <main class="main-content">
             <header class="topbar">
-                <div class="flex items-center gap-4">
-                    <button class="mobile-toggle">☰</button>
+                <div class="topbar-left">
+                    <button class="mobile-toggle" aria-label="Apri menu">☰</button>
                     <h1 class="page-title">Dashboard</h1>
                 </div>
-                <div class="flex items-center gap-4">
-                    <div class="market-status flex gap-4" id="marketStatus">
+                <div class="topbar-actions">
+                    <div class="market-status" id="marketStatus">
                         <div class="status-indicator">
                             <span class="status-dot" id="statusMib"></span>
-                            <span class="text-secondary" style="font-size: 0.85rem;">Borsa Italiana</span>
+                            <span class="status-label text-secondary">Borsa Italiana</span>
                         </div>
                         <div class="status-indicator">
                             <span class="status-dot" id="statusUs"></span>
-                            <span class="text-secondary" style="font-size: 0.85rem;">Wall Street</span>
+                            <span class="status-label text-secondary">Wall Street</span>
                         </div>
                     </div>
                     <button class="theme-toggle-btn" id="btnThemeToggle" onclick="window.toggleTheme()" title="Cambia tema" aria-label="Cambia tema">
@@ -50,7 +67,6 @@
             <div class="content-wrapper" id="dashboardContent">
                 <!-- Stat Cards -->
                 <div class="stat-grid">
-                    <!-- Valore Totale -->
                     <div class="card stat-card">
                         <div class="stat-label">
                             <span>💰 Valore Portafoglio</span>
@@ -63,10 +79,9 @@
                         <span class="stat-desc">Capitale totale attualmente investito</span>
                     </div>
 
-                    <!-- P&L Giornaliero -->
                     <div class="card stat-card">
                         <div class="stat-label">
-                            <span>📅 P&L Giornaliero</span>
+                            <span>📅 P&amp;L Giornaliero</span>
                             <span class="has-tooltip">
                                 <i class="info-badge">i</i>
                                 <span class="tooltip-box">Variazione monetaria e percentuale registrata oggi rispetto alla chiusura precedente.</span>
@@ -76,10 +91,9 @@
                         <span class="stat-desc">Rendimento nella seduta odierna</span>
                     </div>
 
-                    <!-- P&L Totale -->
                     <div class="card stat-card">
                         <div class="stat-label">
-                            <span>📊 P&L Totale</span>
+                            <span>📊 P&amp;L Totale</span>
                             <span class="has-tooltip">
                                 <i class="info-badge">i</i>
                                 <span class="tooltip-box">Rendimento complessivo calcolato tra il prezzo medio di carico e il prezzo attuale.</span>
@@ -89,7 +103,6 @@
                         <span class="stat-desc">Guadagno o perdita complessiva</span>
                     </div>
 
-                    <!-- Dividendi Annuali Stimati -->
                     <div class="card stat-card">
                         <div class="stat-label">
                             <span>💵 Dividendi Stimati</span>
@@ -102,7 +115,6 @@
                         <span class="stat-desc" id="statDividendYield">Yield Stimato: --%</span>
                     </div>
 
-                    <!-- Top Performer -->
                     <div class="card stat-card">
                         <div class="stat-label">
                             <span>🏆 Top Performer</span>
@@ -111,21 +123,20 @@
                                 <span class="tooltip-box">Il titolo con il maggior guadagno percentuale complessivo nel tuo portafoglio.</span>
                             </span>
                         </div>
-                        <div class="stat-value text-profit font-mono" id="statTopGainer" style="font-size: 1.45rem;">--</div>
+                        <div class="stat-value stat-value-sm text-profit font-mono" id="statTopGainer">--</div>
                         <span class="stat-desc" id="statTopGainerDesc">Miglior posizione</span>
                     </div>
                 </div>
 
                 <!-- Risk & Performance Metrics -->
                 <div class="card mb-4 fade-in-up" id="riskMetricsCard">
-                    <div class="card-header" style="margin-bottom: 12px;">
+                    <div class="card-header mb-3">
                         <div>
-                            <h2 class="card-title">🛡️ Metriche di Rischio & Performance</h2>
+                            <h2 class="card-title">🛡️ Metriche di Rischio &amp; Performance</h2>
                             <p class="text-xs text-muted mt-1">Analisi quantitativa del portafoglio (orizzonte 180 giorni)</p>
                         </div>
                     </div>
                     <div class="risk-grid" id="riskMetricsRow">
-                        <div class="skeleton skeleton-stat"></div>
                         <div class="skeleton skeleton-stat"></div>
                         <div class="skeleton skeleton-stat"></div>
                         <div class="skeleton skeleton-stat"></div>
@@ -149,20 +160,19 @@
                                 <button class="timeframe-btn" data-days="365">1A</button>
                             </div>
                         </div>
-                        <!-- Chart Type Toggle: Area vs Candlestick -->
-                        <div class="chart-toolbar mb-3" id="chartTypeGroup" style="gap: 8px; align-items: center;">
-                            <span class="text-xs text-muted" style="margin-right: 4px;">Chart:</span>
+                        <div class="chart-toolbar mb-3" id="chartTypeGroup">
+                            <span class="text-xs text-muted">Chart:</span>
                             <button class="chart-type-btn active" data-type="area">Area</button>
                             <button class="chart-type-btn" data-type="candles">Candlestick</button>
                         </div>
                         <div class="chart-toolbar mb-3" id="benchmarkChips">
-                            <span class="text-xs text-muted" style="margin-right: 2px;">Benchmark:</span>
-                            <button class="bench-chip active" data-bench="none"><span class="swatch" style="background:#3b82f6;"></span>Solo Portafoglio</button>
-                            <button class="bench-chip" data-bench="^GSPC"><span class="swatch" style="background:#10b981;"></span>🇺🇸 S&P 500</button>
-                            <button class="bench-chip" data-bench="FTSEMIB.MI"><span class="swatch" style="background:#f59e0b;"></span>🇮🇹 FTSE MIB</button>
-                            <button class="bench-chip" data-bench="both"><span class="swatch" style="background:linear-gradient(90deg,#10b981,#f59e0b);"></span>Entrambi</button>
+                            <span class="text-xs text-muted">Benchmark:</span>
+                            <button class="bench-chip active" data-bench="none"><span class="swatch swatch-portfolio"></span>Solo Portafoglio</button>
+                            <button class="bench-chip" data-bench="^GSPC"><span class="swatch swatch-sp"></span>🇺🇸 S&amp;P 500</button>
+                            <button class="bench-chip" data-bench="FTSEMIB.MI"><span class="swatch swatch-mib"></span>🇮🇹 FTSE MIB</button>
+                            <button class="bench-chip" data-bench="both"><span class="swatch swatch-both"></span>Entrambi</button>
                         </div>
-                        <div id="portfolioChart" style="width: 100%; height: 340px;"></div>
+                        <div class="chart-canvas" id="portfolioChart"></div>
                     </div>
 
                     <!-- Recent Advice -->
@@ -172,7 +182,7 @@
                                 <h2 class="card-title">🧠 Analisi Macro IA</h2>
                                 <p class="text-xs text-muted mt-1">Sintesi strategica Gemini 3.7 Flash</p>
                             </div>
-                            <a href="/static/advice.html" class="text-xs text-primary font-bold" style="text-decoration: none;">Tutti ➔</a>
+                            <a href="/static/advice.html" class="text-xs font-bold stock-ticker-link">Tutti ➔</a>
                         </div>
                         <div id="recentAdviceList" class="flex flex-col gap-3">
                             <div class="text-center text-muted py-4 text-xs">Caricamento analisi...</div>
@@ -184,13 +194,13 @@
                 <div class="card mb-4">
                     <div class="card-header">
                         <div>
-                            <h2 class="card-title">🌐 Heatmap di Mercato & Titoli Monitorati</h2>
+                            <h2 class="card-title">🌐 Heatmap di Mercato &amp; Titoli Monitorati</h2>
                             <p class="text-xs text-muted mt-1">Panoramica visiva istantanea dei movimenti di prezzo odierni</p>
                         </div>
                         <a href="/static/watchlist.html" class="btn btn-ghost btn-sm">Apri Radar Completo ➔</a>
                     </div>
                     <div class="heatmap-grid" id="marketHeatmap">
-                        <div class="text-muted text-xs py-4 text-center">Caricamento Heatmap...</div>
+                        <div class="text-muted text-xs py-4 text-center span-full">Caricamento Heatmap...</div>
                     </div>
                 </div>
 
@@ -207,13 +217,13 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Ticker & Titolo</th>
+                                    <th>Ticker &amp; Titolo</th>
                                     <th class="text-right">Quantità</th>
                                     <th class="text-right">Prezzo Attuale</th>
                                     <th class="text-right">Controvalore</th>
-                                    <th class="text-right">P&L Netto (€)</th>
-                                    <th class="text-right">P&L %</th>
-                                    <th class="text-center" style="width: 80px;">Dettagli</th>
+                                    <th class="text-right">P&amp;L Netto (€)</th>
+                                    <th class="text-right">P&amp;L %</th>
+                                    <th class="text-center w-80">Dettagli</th>
                                 </tr>
                             </thead>
                             <tbody id="holdingsTableBody">
@@ -226,7 +236,7 @@
         </main>
     </div>
 
-    <script type="module" src="/static/js/app.js?v=2.0.1"></script>
-    <script type="module" src="/static/js/dashboard.js?v=2.0.1"></script>
+    <script type="module" src="/static/js/app.js?v=3.0.0"></script>
+    <script type="module" src="/static/js/dashboard.js?v=3.0.0"></script>
 </body>
 </html>

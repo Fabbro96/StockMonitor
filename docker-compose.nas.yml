@@ -16,6 +16,10 @@ services:
     container_name: stock-monitor
     restart: unless-stopped
 
+    # --- Limiti risorse per NAS ARM64 2 GB RAM ---
+    mem_limit: 768m
+    cpus: 1.5
+
     ports:
       - "8000:8000"
     volumes:
@@ -46,6 +50,8 @@ services:
       - DB_PATH=data/stock_monitor.db
       - ALERT_CHECK_INTERVAL_MINUTES=15
       - LOG_LEVEL=INFO
+      - TZ=Europe/Rome
+      - PYTHONUNBUFFERED=1
 
     labels:
       # --- What's Up Docker? (WUD) Auto-Detection & Update Labels ---
@@ -66,7 +72,7 @@ services:
 
   # ============================================================================
   # 🔄 AUTO-UPDATE: Watchtower
-  # Controlla automaticamente GitHub Container Registry ogni 5 minuti (300 sec).
+  # Controlla automaticamente GitHub Container Registry ogni ora (3600 sec).
   # Appena fai 'git push' su GitHub, Watchtower scarica la nuova versione,
   # riavvia il container ed elimina la vecchia immagine. Zero comandi manuali!
   # ============================================================================
@@ -74,11 +80,13 @@ services:
     image: containrrr/watchtower:latest
     container_name: stock-monitor-autoupdate
     restart: unless-stopped
+    mem_limit: 128m
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_POLL_INTERVAL=3600
       - WATCHTOWER_CLEANUP=true
       - WATCHTOWER_SCOPE=stock-monitor-scope
+      - TZ=Europe/Rome
     labels:
       - "com.centurylinklabs.watchtower.scope=stock-monitor-scope"

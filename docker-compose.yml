@@ -12,7 +12,12 @@ services:
       - ./frontend:/app/frontend
     env_file:
       - .env
+    environment:
+      - TZ=Europe/Rome
+      - PYTHONUNBUFFERED=1
     restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.5
     labels:
       - "wud.watch=true"
       - "wud.tag.include=^latest$$"

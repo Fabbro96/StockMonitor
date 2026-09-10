@@ -7,6 +7,7 @@ class Advice(Base):
     __tablename__ = "advices"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     market = Column(String, default="ALL") # 'IT' (Borsa Italiana), 'US' (Borsa Americana), 'EU'
     title = Column(String, nullable=True) # Es. "Report Strategico Borsa Italiana"

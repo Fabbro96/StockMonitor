@@ -3,14 +3,19 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
+from backend.models.advice import Advice
+from backend.models.portfolio import Holding, Transaction
+from backend.models.settings import AlertRule, UserSettings
 from backend.models.user import User
+from backend.models.watchlist import WatchlistItem
 from backend.services.auth import (
-    verify_password,
-    hash_password,
+    verify_password_async,
+    hash_password_async,
     create_access_token,
     get_current_user,
     require_admin
@@ -88,7 +93,7 @@ async def login(
             user.locked_until = None
             user.failed_attempts = 0
 
-    if not verify_password(login_data.password, user.hashed_password):
+    if not await verify_password_async(login_data.password, user.hashed_password):
         user.failed_attempts = (user.failed_attempts or 0) + 1
         max_attempts = 5
         
@@ -147,7 +152,7 @@ async def change_password(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    if not verify_password(data.current_password, current_user.hashed_password):
+    if not await verify_password_async(data.current_password, current_user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="La password attuale non è corretta."
@@ -159,7 +164,7 @@ async def change_password(
             detail="La nuova password deve contenere almeno 8 caratteri."
         )
 
-    current_user.hashed_password = hash_password(data.new_password)
+    current_user.hashed_password = await hash_password_async(data.new_password)
     await db.commit()
     return {"status": "success", "message": "Password modificata con successo"}
 
@@ -195,7 +200,7 @@ async def create_user(
 
     new_user = User(
         username=username,
-        hashed_password=hash_password(data.password),
+        hashed_password=await hash_password_async(data.password),
         is_admin=data.is_admin,
         is_active=True
     )
@@ -221,9 +226,18 @@ async def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="Utente non trovato")
 
+    # Le FK aggiunte via ALTER TABLE non hanno ON DELETE CASCADE sul DB esistente:
+    # eliminiamo esplicitamente i dati dell'utente prima di rimuovere l'account.
+    username = user.username
+    await db.execute(sa_delete(Holding).where(Holding.user_id == user_id))
+    await db.execute(sa_delete(Transaction).where(Transaction.user_id == user_id))
+    await db.execute(sa_delete(WatchlistItem).where(WatchlistItem.user_id == user_id))
+    await db.execute(sa_delete(UserSettings).where(UserSettings.user_id == user_id))
+    await db.execute(sa_delete(AlertRule).where(AlertRule.user_id == user_id))
+    await db.execute(sa_delete(Advice).where(Advice.user_id == user_id))
     await db.delete(user)
     await db.commit()
-    return {"status": "success", "message": f"Utente '{user.username}' eliminato"}
+    return {"status": "success", "message": f"Utente '{username}' eliminato"}
 
 @router.put("/users/{user_id}/reset-password")
 async def admin_reset_password(
@@ -237,7 +251,7 @@ async def admin_reset_password(
     if not user:
         raise HTTPException(status_code=404, detail="Utente non trovato")
 
-    user.hashed_password = hash_password(data.new_password)
+    user.hashed_password = await hash_password_async(data.new_password)
     user.failed_attempts = 0
     user.locked_until = None
     await db.commit()

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from backend.database import Base
@@ -38,7 +38,5 @@ class PriceHistory(Base):
 
     # Relationships
     stock = relationship("Stock", back_populates="history")
-    
-    __table_args__ = (
-        Index('idx_stock_id_timestamp', 'stock_id', 'timestamp'),
-    )
+    # Nota: l'indice composito (stock_id, timestamp) è definito in modo idempotente
+    # in backend/database.py (init_db), così da coprire anche i DB preesistenti.

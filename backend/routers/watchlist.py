@@ -1,10 +1,10 @@
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
+from typing import Optional
 
 from backend.database import get_db
 from backend.models.watchlist import WatchlistItem
@@ -121,8 +121,16 @@ async def add_to_watchlist(
         market = deep.get("market") or market
         stock = Stock(ticker=ticker, name=name, market=market, currency="USD" if market == "US" else "EUR")
         db.add(stock)
-        await db.commit()
-        await db.refresh(stock)
+        try:
+            await db.commit()
+            await db.refresh(stock)
+        except IntegrityError:
+            # Race su UNIQUE stocks.ticker: un'altra sessione l'ha creato nel frattempo.
+            await db.rollback()
+            result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+            stock = result.scalars().first()
+            if not stock:
+                raise HTTPException(status_code=409, detail=f"Conflitto concorrente sulla creazione di {ticker}.")
 
     w_res = await db.execute(
         select(WatchlistItem)

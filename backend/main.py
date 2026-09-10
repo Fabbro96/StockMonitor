@@ -1,11 +1,11 @@
 import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse
 from sqlalchemy.future import select
 import uvicorn
 
@@ -14,7 +14,7 @@ from backend.database import init_db, async_session_maker
 from backend.services.scheduler import init_scheduler, shutdown_scheduler
 from backend.models.settings import UserSettings
 from backend.models.user import User
-from backend.services.auth import get_current_user, hash_password
+from backend.services.auth import get_current_user, hash_password_async
 from backend.services.telegram_bot import InteractiveTelegramBot
 from backend.routers import (
     stocks_router,
@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
             admin_user = settings.ADMIN_USERNAME
             admin_pass = settings.ADMIN_PASSWORD
             logger.info(f"Creating default admin user: '{admin_user}'")
-            hashed = hash_password(admin_pass)
+            hashed = await hash_password_async(admin_pass)
             session.add(User(username=admin_user, hashed_password=hashed, is_admin=True))
             await session.commit()
             logger.info(f"Admin user '{admin_user}' created successfully.")
@@ -86,6 +86,13 @@ async def lifespan(app: FastAPI):
     await telegram_bot.stop()
     shutdown_scheduler()
 
+    # Chiusura best-effort del client HTTP condiviso (esposto dal layer sentiment)
+    try:
+        from backend.services.sentiment import close_shared_http_client
+        await close_shared_http_client()
+    except Exception as e:
+        logger.debug(f"Chiusura client HTTP condiviso non riuscita: {e}")
+
 app = FastAPI(title="Stock Monitor", version="2.0.0", lifespan=lifespan)
 
 # CORS middleware (secure origin regex for local, docker and lan access with credentials)
@@ -100,13 +107,24 @@ app.add_middleware(
 # GZip compression middleware (riduce i payload JSON pesanti fino al 75-80%)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# Asset statici versionati (?v=): cache aggressiva; gli altri asset (anche HTML)
+# vanno sempre rivalidati per evitare JS/CSS stantii dopo un deploy.
+_IMMUTABLE_EXTENSIONS = (".css", ".js", ".mjs", ".woff", ".woff2", ".ttf", ".otf", ".eot")
+
 @app.middleware("http")
-async def add_no_cache_header(request, call_next):
+async def add_cache_headers(request, call_next):
     response = await call_next(request)
-    if request.url.path.startswith("/static") or request.url.path.endswith(".html") or request.url.path.endswith(".js") or request.url.path.endswith(".css"):
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
+    path = request.url.path
+    if path.startswith("/static"):
+        if path.endswith(_IMMUTABLE_EXTENSIONS) and request.query_params.get("v"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            # HTML e asset non versionati: rivalidazione obbligatoria
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+    elif path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 @app.get("/health", tags=["system"])
@@ -151,24 +169,6 @@ else:
 @app.get("/")
 async def root():
     return RedirectResponse(url="/static/index.html")
-
-@app.get("/static/{full_path:path}")
-async def catch_all_static(full_path: str):
-    # Sanitize path to prevent directory traversal
-    safe_path = os.path.normpath(full_path).lstrip("/")
-    file_path = os.path.abspath(os.path.join(frontend_dir, safe_path))
-    
-    # Ensure resolved path is strictly within frontend_dir
-    if not file_path.startswith(os.path.abspath(frontend_dir)):
-        raise HTTPException(status_code=403, detail="Access denied")
-
-    if os.path.isfile(file_path):
-        return FileResponse(file_path)
-    # If not found, serve index.html (SPA fallback)
-    index_path = os.path.join(frontend_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return {"error": "Frontend not built"}
 
 if __name__ == "__main__":
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

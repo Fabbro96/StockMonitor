@@ -7,10 +7,12 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
+from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 
 from backend.database import get_db
 from backend.models.portfolio import Holding, Transaction
-from backend.models.stock import Stock, PriceHistory
+from backend.models.stock import Stock
 from backend.models.target_allocation import TargetAllocation
 from backend.models.user import User
 from backend.services.auth import get_current_user
@@ -24,6 +26,49 @@ from backend.services.analytics import (
 )
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
+
+
+async def _ensure_stocks(db: AsyncSession, specs: dict[str, dict]) -> dict[str, Stock]:
+    """
+    Ritorna {ticker: Stock} garantendo l'esistenza dei titoli in `specs`
+    (ticker -> {"name", "market", "currency"}). Gestisce la race su UNIQUE
+    stocks.ticker tra richieste concorrenti: su IntegrityError esegue rollback
+    e re-select, senza rompere i flussi bulk di import/seed.
+    """
+    tickers = set(specs.keys())
+    if not tickers:
+        return {}
+
+    async def _fetch() -> dict[str, Stock]:
+        res = await db.execute(select(Stock).where(Stock.ticker.in_(tickers)))
+        return {s.ticker: s for s in res.scalars().all()}
+
+    def _add_missing(mapping: dict) -> bool:
+        added = False
+        for ticker, spec in specs.items():
+            if ticker not in mapping:
+                db.add(Stock(
+                    ticker=ticker,
+                    name=spec.get("name") or ticker,
+                    market=spec.get("market"),
+                    currency=spec.get("currency"),
+                ))
+                added = True
+        return added
+
+    stocks_map = await _fetch()
+    if not _add_missing(stocks_map):
+        return stocks_map
+    try:
+        await db.flush()
+    except IntegrityError:
+        # Un'altra sessione ha inserito uno degli stessi ticker: annulla i pending
+        # e recupera le righe esistenti, ricreando solo quelle ancora mancanti.
+        await db.rollback()
+        stocks_map = await _fetch()
+        if _add_missing(stocks_map):
+            await db.flush()
+    return await _fetch()
 
 class HoldingCreate(BaseModel):
     ticker: Optional[str] = None
@@ -203,8 +248,16 @@ async def add_holding(
                 market = info["market"]
             stock = Stock(ticker=ticker, name=name, market=market, currency="USD" if market == "US" else "EUR")
             db.add(stock)
-            await db.commit()
-            await db.refresh(stock)
+            try:
+                await db.commit()
+                await db.refresh(stock)
+            except IntegrityError:
+                # Race su UNIQUE stocks.ticker: un'altra sessione l'ha creato nel frattempo.
+                await db.rollback()
+                result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+                stock = result.scalars().first()
+                if not stock:
+                    raise HTTPException(status_code=409, detail=f"Conflitto concorrente sulla creazione di {ticker}.")
         stock_id = stock.id
 
     if not stock_id:
@@ -273,10 +326,23 @@ async def batch_update_holdings(
     """
     Aggiorna più posizioni dell'utente contemporaneamente con una singola transazione sicura.
     """
+    if not batch_data.holdings:
+        return {"status": "success", "updated_count": 0}
+
+    holding_ids = [item.id for item in batch_data.holdings]
+    # Una sola query per caricare tutte le holdings coinvolte (niente db.get in loop)
+    result = await db.execute(
+        select(Holding).where(
+            Holding.id.in_(holding_ids),
+            or_(Holding.user_id == current_user.id, Holding.user_id.is_(None)),
+        )
+    )
+    holdings_by_id = {h.id: h for h in result.scalars().all()}
+
     updated_count = 0
     for item in batch_data.holdings:
-        holding = await db.get(Holding, item.id)
-        if holding and (holding.user_id is None or holding.user_id == current_user.id):
+        holding = holdings_by_id.get(item.id)
+        if holding:
             holding.quantity = item.quantity
             holding.avg_purchase_price = item.avg_purchase_price
             if item.notes is not None:
@@ -362,10 +428,11 @@ async def import_holdings(
     imported = 0
     updated = 0
     errors = []
+    parsed_rows = []
     
     for row_idx, row in enumerate(reader, start=1):
         # Normalize header keys to lowercase
-        norm_row = {k.strip().lower(): v.strip() for k, v in row.items() if k}
+        norm_row = {k.strip().lower(): (v or "").strip() for k, v in row.items() if k}
         
         # Ticker resolution
         ticker = norm_row.get("ticker") or norm_row.get("simbolo") or norm_row.get("azione") or norm_row.get("titolo")
@@ -408,43 +475,57 @@ async def import_holdings(
                 except ValueError:
                     pass
 
-        # Find or create Stock
-        result = await db.execute(select(Stock).where(Stock.ticker == ticker))
-        stock = result.scalars().first()
-        if not stock:
-            name = norm_row.get("name") or norm_row.get("nome") or ticker
-            market = "IT" if ticker.endswith(".MI") else "US"
-            stock = Stock(ticker=ticker, name=name, market=market, currency="USD" if market == "US" else "EUR")
-            db.add(stock)
-            await db.commit()
-            await db.refresh(stock)
-            
-        # Find if holding exists for this user
-        h_result = await db.execute(
-            select(Holding)
-            .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
+        parsed_rows.append({
+            "ticker": ticker,
+            "name": norm_row.get("name") or norm_row.get("nome") or ticker,
+            "quantity": quantity,
+            "avg_price": avg_price,
+            "notes": notes,
+            "purchase_date": purchase_date,
+        })
+
+    if parsed_rows:
+        # Prefetch: UNA query per gli stock esistenti e UNA per le holdings dell'utente
+        # (creazione con gestione della race su UNIQUE stocks.ticker)
+        specs = {
+            r["ticker"]: {
+                "name": r["name"],
+                "market": "IT" if r["ticker"].endswith(".MI") else "US",
+                "currency": "EUR" if r["ticker"].endswith(".MI") else "USD",
+            }
+            for r in parsed_rows
+        }
+        stocks_by_ticker = await _ensure_stocks(db, specs)
+
+        stock_ids = [s.id for s in stocks_by_ticker.values() if s.id is not None]
+        holdings_result = await db.execute(
+            select(Holding).where(Holding.stock_id.in_(stock_ids), Holding.user_id == current_user.id)
         )
-        holding = h_result.scalars().first()
-        
-        if holding:
-            holding.quantity = quantity
-            holding.avg_purchase_price = avg_price
-            if notes:
-                holding.notes = notes
-            if purchase_date:
-                holding.purchase_date = purchase_date
-            updated += 1
-        else:
-            h = Holding(
-                user_id=current_user.id,
-                stock_id=stock.id,
-                quantity=quantity,
-                avg_purchase_price=avg_price,
-                purchase_date=purchase_date or date.today(),
-                notes=notes
-            )
-            db.add(h)
-            imported += 1
+        holdings_by_stock_id = {h.stock_id: h for h in holdings_result.scalars().all()}
+
+        for r in parsed_rows:
+            stock = stocks_by_ticker[r["ticker"]]
+            holding = holdings_by_stock_id.get(stock.id)
+            if holding:
+                holding.quantity = r["quantity"]
+                holding.avg_purchase_price = r["avg_price"]
+                if r["notes"]:
+                    holding.notes = r["notes"]
+                if r["purchase_date"]:
+                    holding.purchase_date = r["purchase_date"]
+                updated += 1
+            else:
+                holding = Holding(
+                    user_id=current_user.id,
+                    stock_id=stock.id,
+                    quantity=r["quantity"],
+                    avg_purchase_price=r["avg_price"],
+                    purchase_date=r["purchase_date"] or date.today(),
+                    notes=r["notes"]
+                )
+                db.add(holding)
+                holdings_by_stock_id[stock.id] = holding
+                imported += 1
             
     await db.commit()
     return {
@@ -480,23 +561,25 @@ async def seed_demo_data(
         {"ticker": "GOOGL", "name": "Alphabet Inc.", "market": "US", "currency": "USD", "alert_above": 190.0, "alert_below": 165.0, "notes": "Search AI & Waymo"},
     ]
 
-    created_holdings = 0
-    for item in demo_holdings:
-        # Check stock
-        res = await db.execute(select(Stock).where(Stock.ticker == item["ticker"]))
-        stock = res.scalars().first()
-        if not stock:
-            stock = Stock(ticker=item["ticker"], name=item["name"], market=item["market"], currency=item["currency"])
-            db.add(stock)
-            await db.commit()
-            await db.refresh(stock)
+    # Prefetch: UNA query per gli stock coinvolti (holdings + watchlist),
+    # creazione con gestione della race su UNIQUE stocks.ticker.
+    specs = {
+        item["ticker"]: {"name": item["name"], "market": item["market"], "currency": item["currency"]}
+        for item in demo_holdings + demo_watchlist
+    }
+    stocks_by_ticker = await _ensure_stocks(db, specs)
 
-        # Check holding for this user
-        h_res = await db.execute(
-            select(Holding)
-            .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
-        )
-        if not h_res.scalars().first():
+    stock_ids = [s.id for s in stocks_by_ticker.values() if s.id is not None]
+
+    created_holdings = 0
+    held_res = await db.execute(
+        select(Holding.stock_id)
+        .where(Holding.stock_id.in_(stock_ids), Holding.user_id == current_user.id)
+    )
+    held_stock_ids = {row[0] for row in held_res.all()}
+    for item in demo_holdings:
+        stock = stocks_by_ticker[item["ticker"]]
+        if stock.id not in held_stock_ids:
             h = Holding(
                 user_id=current_user.id,
                 stock_id=stock.id,
@@ -506,23 +589,18 @@ async def seed_demo_data(
                 notes=item["notes"]
             )
             db.add(h)
+            held_stock_ids.add(stock.id)
             created_holdings += 1
 
     created_watchlist = 0
+    wl_res = await db.execute(
+        select(WatchlistItem.stock_id)
+        .where(WatchlistItem.stock_id.in_(stock_ids), WatchlistItem.user_id == current_user.id)
+    )
+    wl_stock_ids = {row[0] for row in wl_res.all()}
     for item in demo_watchlist:
-        res = await db.execute(select(Stock).where(Stock.ticker == item["ticker"]))
-        stock = res.scalars().first()
-        if not stock:
-            stock = Stock(ticker=item["ticker"], name=item["name"], market=item["market"], currency=item["currency"])
-            db.add(stock)
-            await db.commit()
-            await db.refresh(stock)
-
-        w_res = await db.execute(
-            select(WatchlistItem)
-            .where(WatchlistItem.stock_id == stock.id, WatchlistItem.user_id == current_user.id)
-        )
-        if not w_res.scalars().first():
+        stock = stocks_by_ticker[item["ticker"]]
+        if stock.id not in wl_stock_ids:
             w = WatchlistItem(
                 user_id=current_user.id,
                 stock_id=stock.id,
@@ -531,6 +609,7 @@ async def seed_demo_data(
                 alert_below=item.get("alert_below")
             )
             db.add(w)
+            wl_stock_ids.add(stock.id)
             created_watchlist += 1
 
     await db.commit()
@@ -631,8 +710,16 @@ async def create_transaction(
             currency=info.get("currency", "EUR" if ticker.endswith(".MI") else "USD")
         )
         db.add(stock)
-        await db.commit()
-        await db.refresh(stock)
+        try:
+            await db.commit()
+            await db.refresh(stock)
+        except IntegrityError:
+            # Race su UNIQUE stocks.ticker: un'altra sessione l'ha creato nel frattempo.
+            await db.rollback()
+            res = await db.execute(select(Stock).where(Stock.ticker == ticker))
+            stock = res.scalars().first()
+            if not stock:
+                raise HTTPException(status_code=409, detail=f"Conflitto concorrente sulla creazione di {ticker}.")
 
     tx_date = tx_in.transaction_date or datetime.now(timezone.utc)
     realized_pnl = None
@@ -800,8 +887,10 @@ async def get_dividends_calendar(
     Calcola il rendimento da dividendi, Yield on Cost (YoC) e flussi stimati per ogni holding dell'utente.
     """
     rows = await build_portfolio_rows(db, user_id=current_user.id)
-    summary = await build_portfolio_summary(db, user_id=current_user.id)
-    usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
+
+    # Totali portafoglio derivati dalle righe già calcolate (nessun secondo build)
+    total_value = round(sum(h.get("total_value_eur", h["total_value"]) for h in rows), 2)
+    total_invested = round(sum(h.get("total_invested_eur", h["total_invested"]) for h in rows), 2)
 
     dividends_list = []
     total_projected_annual_eur = 0.0
@@ -845,10 +934,10 @@ async def get_dividends_calendar(
         "holdings": dividends_list,
         "total_annual_dividend_eur": round(total_projected_annual_eur, 2),
         "total_monthly_dividend_eur": round(total_projected_annual_eur / 12.0, 2),
-        "portfolio_total_value": summary.get("total_value", 0.0),
+        "portfolio_total_value": total_value,
         "portfolio_yield_on_cost": round(
-            (total_projected_annual_eur / summary["total_invested"] * 100.0), 2
-        ) if summary.get("total_invested", 0) > 0 else 0.0
+            (total_projected_annual_eur / total_invested * 100.0), 2
+        ) if total_invested > 0 else 0.0
     }
 
 

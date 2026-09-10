@@ -1,14 +1,10 @@
-import asyncio
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from datetime import datetime, timedelta, timezone
 
 from backend.database import get_db
-from backend.models.portfolio import Holding
 from backend.models.stock import Stock
-from backend.models.watchlist import WatchlistItem
 from backend.models.settings import AlertRule
 from backend.models.advice import Advice
 
@@ -18,11 +14,9 @@ from backend.services.analytics import build_portfolio_daily_series
 
 from backend.models.user import User
 from backend.services.auth import get_current_user
+from backend.routers.advice import serialize_advice, user_advice_filter
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
-
-import json
-from backend.models.stock import Stock
 
 @router.get("/")
 async def get_dashboard(
@@ -32,39 +26,15 @@ async def get_dashboard(
     # 1. Portfolio summary for logged-in user
     portfolio_summary = await build_portfolio_summary(db, user_id=current_user.id)
     
-    # 2. Recent advices
+    # 2. Recent advices (solo dell'utente; gli admin vedono anche i legacy senza user_id)
     advices_result = await db.execute(
-        select(Advice).options(selectinload(Advice.stock)).order_by(Advice.timestamp.desc()).limit(4)
+        select(Advice)
+        .options(selectinload(Advice.stock))
+        .where(user_advice_filter(current_user))
+        .order_by(Advice.timestamp.desc())
+        .limit(4)
     )
-    recent_advices_rows = advices_result.scalars().all()
-    recent_advices = []
-    for a in recent_advices_rows:
-        try:
-            stocks_analysis = json.loads(a.stocks_json) if a.stocks_json else []
-        except Exception:
-            stocks_analysis = []
-        
-        stock_ticker = a.stock.ticker if a.stock else None
-        stock_name = a.stock.name if a.stock else None
-
-        recent_advices.append({
-            "id": a.id,
-            "market": a.market or "ALL",
-            "title": a.title or ("Borsa Italiana" if a.market == "IT" else "Wall Street"),
-            "action": a.action,
-            "overview": a.overview,
-            "strategy": a.reasoning,
-            "stocks_analysis": stocks_analysis,
-            "risks": a.risks,
-            "confidence": a.confidence,
-            "timeframe": a.timeframe,
-            "targetPrice": a.target_price,
-            "suggestedQuantity": a.suggested_quantity,
-            "ticker": stock_ticker,
-            "name": stock_name,
-            "followed": bool(a.followed),
-            "timestamp": str(a.timestamp) if a.timestamp else str(a.created_at)
-        })
+    recent_advices = [serialize_advice(a, include_stock=True, short_titles=True) for a in advices_result.scalars().all()]
     
     # 3. Active alerts count
     alerts_result = await db.execute(
@@ -160,7 +130,9 @@ async def get_performance(
     per giorno (PriceHistory + backfill Yahoo).
     """
     portfolio = await build_portfolio_rows(db, user_id=current_user.id)
-    series = await build_portfolio_daily_series(db, days=days, user_id=current_user.id)
+    series = await build_portfolio_daily_series(
+        db, days=days, user_id=current_user.id, portfolio_rows=portfolio
+    )
     if series:
         return {"data": series, "source": "real", "points": len(series)}
 

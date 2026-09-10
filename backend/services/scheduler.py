@@ -1,7 +1,18 @@
 import logging
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import delete, select
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
 from backend.database import async_session_maker
-from backend.services.market_data import MarketDataService
+from backend.models.advice import Advice
+from backend.models.stock import PriceHistory
+from backend.models.sentiment import Sentiment
+from backend.services.market_data import (
+    MarketDataService,
+    BATCH_FETCH_TIMEOUT_BACKGROUND,
+    shutdown_yf_executor,
+)
 from backend.services.sentiment import SentimentService
 from backend.services.advisor import AdvisorService
 from backend.services.alerting import AlertingService
@@ -12,15 +23,25 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 async def collect_prices_job():
+    # Mantiene la cadenza oraria ma evita fetch inutili a mercati chiusi (NAS 24/7)
+    if not MarketDataService.are_any_markets_open():
+        logger.info("Borse chiuse: aggiornamento prezzi periodico saltato.")
+        return
+
     logger.info("Avvio job periodico: aggiornamento prezzi di mercato")
     try:
         async with async_session_maker() as session:
-            saved = await MarketDataService.fetch_all_prices(session)
+            saved = await MarketDataService.fetch_all_prices(
+                session, batch_timeout=BATCH_FETCH_TIMEOUT_BACKGROUND
+            )
             logger.info(f"Aggiornati con successo i prezzi per {len(saved)} titoli.")
     except Exception as e:
         logger.error(f"Errore durante collect_prices_job: {e}")
 
 async def check_alerts_job():
+    if not MarketDataService.are_any_markets_open():
+        logger.debug("Borse chiuse: controllo alert saltato.")
+        return
     try:
         async with async_session_maker() as session:
             alert_service = AlertingService()
@@ -53,18 +74,53 @@ async def generate_advice_job():
         logger.error(f"Errore durante generate_advice_job: {e}")
 
 
+async def _delete_older_than_batch(session, model, cutoff, batch_size: int) -> int:
+    """
+    Cancella a batch (LIMIT + commit per batch) le righe di `model` più vecchie di `cutoff`.
+    Ritorna il numero totale di righe eliminate.
+    """
+    total = 0
+    while True:
+        ids_subq = select(model.id).where(model.timestamp < cutoff).limit(batch_size)
+        result = await session.execute(delete(model).where(model.id.in_(ids_subq)))
+        await session.commit()
+        deleted = result.rowcount if result.rowcount and result.rowcount > 0 else 0
+        total += deleted
+        if deleted < batch_size:
+            break
+    return total
+
+
 async def cleanup_old_data_job():
-    logger.info("Avvio job pulizia: eliminazione analisi più vecchie di 7 giorni")
+    logger.info("Avvio job pulizia dati storici (advice, price_history, sentiments)")
     try:
         async with async_session_maker() as session:
-            from backend.models.advice import Advice
-            from sqlalchemy import delete
-            from datetime import datetime, timezone, timedelta
-            
-            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-            await session.execute(delete(Advice).where(Advice.timestamp < cutoff))
+            now = datetime.now(timezone.utc)
+
+            advice_cutoff = now - timedelta(days=7)
+            advice_result = await session.execute(delete(Advice).where(Advice.timestamp < advice_cutoff))
             await session.commit()
-            logger.info("Pulizia analisi storiche (più vecchie di 7 giorni) completata.")
+            advices_deleted = advice_result.rowcount if advice_result.rowcount and advice_result.rowcount > 0 else 0
+
+            prices_deleted = await _delete_older_than_batch(
+                session,
+                PriceHistory,
+                now - timedelta(days=settings.PRICE_HISTORY_RETENTION_DAYS),
+                settings.CLEANUP_BATCH_SIZE
+            )
+
+            sentiments_deleted = await _delete_older_than_batch(
+                session,
+                Sentiment,
+                now - timedelta(days=settings.SENTIMENT_RETENTION_DAYS),
+                settings.CLEANUP_BATCH_SIZE
+            )
+
+            logger.info(
+                f"Pulizia completata: {advices_deleted} advice (>7gg), "
+                f"{prices_deleted} price_history (>{settings.PRICE_HISTORY_RETENTION_DAYS}gg), "
+                f"{sentiments_deleted} sentiments (>{settings.SENTIMENT_RETENTION_DAYS}gg) eliminati."
+            )
     except Exception as e:
         logger.error(f"Errore durante cleanup_old_data_job: {e}")
 
@@ -135,3 +191,5 @@ def shutdown_scheduler():
         # wait=False: non bloccare lo shutdown del lifespan se un job è in corso
         scheduler.shutdown(wait=False)
         logger.info("Scheduler terminato correttamente.")
+    # Cleanup best-effort del pool dedicato alle chiamate yfinance
+    shutdown_yf_executor()

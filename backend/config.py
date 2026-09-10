@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     ALERT_CHECK_INTERVAL_MINUTES: int = 15
     LOG_LEVEL: str = "INFO"
 
+    # Retention dati storici (evita crescita illimitata del DB sul NAS).
+    # 400gg copre le finestre analytics: 365gg performance, 180gg risk.
+    PRICE_HISTORY_RETENTION_DAYS: int = 400
+    SENTIMENT_RETENTION_DAYS: int = 30
+    CLEANUP_BATCH_SIZE: int = 500
+
     # Analytics & Risk Metrics
     RISK_FREE_RATE: float = 0.02  # Tasso risk-free annuo per Sharpe Ratio
 

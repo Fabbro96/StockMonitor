@@ -3,12 +3,10 @@ import asyncio
 import time
 import math
 import hashlib
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    import pytz
-    ZoneInfo = lambda tz_name: pytz.timezone(tz_name)
+from zoneinfo import ZoneInfo
 import requests
 import yfinance as yf
 import pandas as pd
@@ -20,20 +18,100 @@ from backend.models.stock import Stock, PriceHistory
 
 logger = logging.getLogger(__name__)
 
+# Timeout massimo applicato a OGNI richiesta HTTP verso Yahoo Finance.
+# yfinance passa timeout propri (default 30s): la session li limita a questo valore.
+YF_HTTP_TIMEOUT = 8.0
+
+class _TimeoutSession(requests.Session):
+    """requests.Session che impone un timeout massimo a ogni richiesta HTTP.
+
+    Necessaria perché yfinance non espone un parametro `timeout` su tutte le
+    chiamate (es. `.info`, `.news`) e usa default di 30s per singola richiesta.
+    """
+
+    def __init__(self, default_timeout: float = YF_HTTP_TIMEOUT):
+        super().__init__()
+        self.default_timeout = default_timeout
+
+    def request(self, method, url, *args, **kwargs):
+        timeout = kwargs.get("timeout")
+        if timeout is None:
+            kwargs["timeout"] = self.default_timeout
+        elif isinstance(timeout, (tuple, list)):
+            kwargs["timeout"] = tuple(min(float(t), self.default_timeout) for t in timeout)
+        else:
+            try:
+                kwargs["timeout"] = min(float(timeout), self.default_timeout)
+            except (TypeError, ValueError):
+                kwargs["timeout"] = self.default_timeout
+        return super().request(method, url, *args, **kwargs)
+
 # Custom Session with headers to prevent Yahoo rate-limiting/403
-_yf_session = requests.Session()
+_yf_session = _TimeoutSession()
 _yf_session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9,it;q=0.8',
 })
 
+def get_yf_session() -> requests.Session:
+    """Restituisce la session HTTP condivisa configurata per Yahoo Finance."""
+    return _yf_session
+
+# ---------------------------------------------------------------------------
+# Esecutore dedicato e bounded per TUTTE le chiamate yfinance bloccanti.
+# Un pool separato (4 worker) evita di saturare il default executor di asyncio
+# e di "piantare" l'app quando Yahoo è lento o risponde 429.
+# ---------------------------------------------------------------------------
+YF_EXECUTOR_MAX_WORKERS = 4
+_yf_executor: ThreadPoolExecutor | None = None
+
+def _get_yf_executor() -> ThreadPoolExecutor:
+    global _yf_executor
+    if _yf_executor is None:
+        _yf_executor = ThreadPoolExecutor(
+            max_workers=YF_EXECUTOR_MAX_WORKERS,
+            thread_name_prefix="yf-fetch"
+        )
+    return _yf_executor
+
+async def run_blocking_yf(func, timeout: float | None = None):
+    """Esegue una funzione yfinance bloccante nel pool dedicato, con timeout opzionale.
+
+    Su timeout il future asyncio viene cancellato ma il thread resta occupato fino
+    allo scadere del timeout HTTP della session (YF_HTTP_TIMEOUT), quindi il pool
+    non può restare saturato indefinitamente.
+    """
+    loop = asyncio.get_running_loop()
+    future = loop.run_in_executor(_get_yf_executor(), func)
+    if timeout is not None:
+        return await asyncio.wait_for(future, timeout=timeout)
+    return await future
+
+def shutdown_yf_executor() -> None:
+    """Shutdown best-effort dell'esecutore yfinance (chiamato nel lifecycle dell'app)."""
+    global _yf_executor
+    executor = _yf_executor
+    _yf_executor = None
+    if executor is not None:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:  # Python < 3.9
+            executor.shutdown(wait=False)
+
 # In-memory caches with TTL
-_PRICE_CACHE: dict[str, tuple[dict, float]] = {}
-_INDICES_CACHE: tuple[list[dict], float] = ([], 0.0)
-_DEEP_DIVE_CACHE: dict[str, tuple[dict, float]] = {}
+CACHE_MAX_ENTRIES = 256
+_PRICE_CACHE: OrderedDict[str, tuple[dict, float]] = OrderedDict()
+_INDICES_CACHE: tuple[list[dict], float] = ([], 0.0)  # single-slot cache (max 1 entry)
+_DEEP_DIVE_CACHE: OrderedDict[str, tuple[dict, float]] = OrderedDict()
 CACHE_TTL = 60.0 # 1 minute
 DEEP_CACHE_TTL = 180.0 # 3 minutes
+
+# Budget wall-clock del batch prezzi. Il default (~4.5s) resta per i path
+# user-facing (dashboard/watchlist/alerting); il job orario di background usa
+# un budget dedicato più ampio per tollerare batch lenti senza perdere persistenza.
+BATCH_FETCH_TIMEOUT = 4.5
+BATCH_FETCH_TIMEOUT_BACKGROUND = 15.0
 
 # Realistic Reference Data for Fallbacks/Offline
 KNOWN_STOCKS = {
@@ -58,12 +136,11 @@ KNOWN_STOCKS = {
     'TSLA': {'name': 'Tesla, Inc.', 'price': 312.0, 'pe': 78.0, 'div': None, 'market': 'US', 'currency': 'USD', 'sector': 'Automotive'}
 }
 
-def _evict_cache_if_needed(cache_dict: dict, max_entries: int = 300):
-    if len(cache_dict) > max_entries:
-        now = time.time()
-        expired = [k for k, (_, ts) in cache_dict.items() if now - ts > CACHE_TTL * 3]
-        for k in expired:
-            cache_dict.pop(k, None)
+def _cache_put(cache: OrderedDict, key: str, value: tuple, max_entries: int = CACHE_MAX_ENTRIES) -> None:
+    """Inserisce in cache applicando un limite FIFO reale (default 256 entry)."""
+    cache[key] = value
+    while len(cache) > max_entries:
+        cache.popitem(last=False)
 
 class MarketDataService:
     MARKET_SUFFIXES = {
@@ -151,7 +228,8 @@ class MarketDataService:
             "volume": (seed * 100) % 5000000 + 100000,
             "previous_close": prev,
             "change_abs": chg_abs,
-            "change_percent": chg_pct
+            "change_percent": chg_pct,
+            "stale": True
         }
 
     @staticmethod
@@ -254,7 +332,7 @@ class MarketDataService:
                 }
 
         try:
-            return await asyncio.wait_for(asyncio.to_thread(_sync_resolve), timeout=2.5)
+            return await run_blocking_yf(_sync_resolve, timeout=2.5)
         except Exception:
             mkt = "IT" if t_clean.endswith(".MI") else "US"
             return {
@@ -279,7 +357,6 @@ class MarketDataService:
 
     @staticmethod
     async def fetch_current_price(ticker: str) -> dict:
-        _evict_cache_if_needed(_PRICE_CACHE)
         now_ts = time.time()
         if ticker in _PRICE_CACHE:
             cached_data, cached_time = _PRICE_CACHE[ticker]
@@ -289,7 +366,7 @@ class MarketDataService:
         def _sync_fetch():
             try:
                 stock = yf.Ticker(ticker, session=_yf_session)
-                hist = stock.history(period="2d")
+                hist = stock.history(period="2d", timeout=6.0)
                 if hist.empty:
                     info = getattr(stock, 'fast_info', None)
                     if info and hasattr(info, 'last_price') and info.last_price is not None:
@@ -305,7 +382,8 @@ class MarketDataService:
                             "volume": int(getattr(info, 'last_volume', 0) or 0),
                             "previous_close": prev,
                             "change_abs": round(change_abs, 3),
-                            "change_percent": round(change_pct, 2)
+                            "change_percent": round(change_pct, 2),
+                            "stale": False
                         }
                     return MarketDataService._generate_fallback_price(ticker)
                 
@@ -323,28 +401,32 @@ class MarketDataService:
                     "volume": int(latest["Volume"]),
                     "previous_close": float(prev),
                     "change_abs": round(change_abs, 3),
-                    "change_percent": round(change_pct, 2)
+                    "change_percent": round(change_pct, 2),
+                    "stale": False
                 }
             except Exception as e:
                 logger.debug(f"Yahoo fetch error for {ticker}: {e}, using fallback.")
                 return MarketDataService._generate_fallback_price(ticker)
 
         try:
-            result = await asyncio.wait_for(asyncio.to_thread(_sync_fetch), timeout=3.0)
+            result = await run_blocking_yf(_sync_fetch, timeout=3.0)
         except Exception:
             result = MarketDataService._generate_fallback_price(ticker)
 
         if result:
-            _PRICE_CACHE[ticker] = (result, now_ts)
+            _cache_put(_PRICE_CACHE, ticker, (result, now_ts))
         return result
 
     @staticmethod
-    async def fetch_batch_prices(tickers: list[str]) -> dict[str, dict]:
+    async def fetch_batch_prices(tickers: list[str], timeout: float | None = None) -> dict[str, dict]:
         """
         Scarica i prezzi per una lista di ticker in un'unica richiesta batch veloce,
         popolando contemporaneamente la cache in memoria.
+
+        `timeout`: budget wall-clock per l'intero batch. Se None usa il default
+        user-facing (BATCH_FETCH_TIMEOUT); il job di background passa
+        BATCH_FETCH_TIMEOUT_BACKGROUND (~15s).
         """
-        _evict_cache_if_needed(_PRICE_CACHE)
         now_ts = time.time()
         results = {}
         missing_tickers = []
@@ -384,7 +466,14 @@ class MarketDataService:
                 price_data = None
                 if df is not None and not df.empty:
                     try:
-                        sub_df = df[tk] if (len(missing_tickers) > 1 and tk in df.columns.levels[0]) else df
+                        if isinstance(df.columns, pd.MultiIndex):
+                            # group_by='ticker' produce colonne MultiIndex ('TICKER','Close')
+                            # ANCHE con un solo ticker: senza questo check `'Close' in df`
+                            # è False e il prezzo reale finirebbe sempre in fallback stale.
+                            sub_df = df[tk] if tk in df.columns.get_level_values(0) else None
+                        else:
+                            # Download a ticker singolo senza MultiIndex: df è già il frame del ticker.
+                            sub_df = df
                         if sub_df is not None and not sub_df.empty and 'Close' in sub_df:
                             closes = sub_df['Close'].dropna()
                             if len(closes) > 0:
@@ -405,7 +494,8 @@ class MarketDataService:
                                     "volume": vol,
                                     "previous_close": prev,
                                     "change_abs": round(change_abs, 3),
-                                    "change_percent": round(change_pct, 2)
+                                    "change_percent": round(change_pct, 2),
+                                    "stale": False
                                 }
                     except Exception:
                         pass
@@ -417,13 +507,14 @@ class MarketDataService:
 
             return batch_res
 
+        effective_timeout = timeout if timeout is not None else BATCH_FETCH_TIMEOUT
         try:
-            downloaded = await asyncio.wait_for(asyncio.to_thread(_sync_batch), timeout=4.5)
+            downloaded = await run_blocking_yf(_sync_batch, timeout=effective_timeout)
         except Exception:
             downloaded = {tk: MarketDataService._generate_fallback_price(tk) for tk in missing_tickers}
 
         for tk, pdata in downloaded.items():
-            _PRICE_CACHE[tk] = (pdata, now_ts)
+            _cache_put(_PRICE_CACHE, tk, (pdata, now_ts))
             results[tk] = pdata
 
         return results
@@ -450,7 +541,8 @@ class MarketDataService:
                 "type": item["type"],
                 "price": round(pdata["close"], 4 if "EURUSD" in tk else 2),
                 "change_abs": round(pdata["change_abs"], 4 if "EURUSD" in tk else 2),
-                "change_percent": round(pdata["change_percent"], 2)
+                "change_percent": round(pdata["change_percent"], 2),
+                "stale": bool(pdata.get("stale", False))
             })
 
         if results:
@@ -458,8 +550,24 @@ class MarketDataService:
         return results
 
     @staticmethod
+    def _deep_dive_fallback(ticker: str) -> dict:
+        """Scheletro di fallback del deep dive, esplicitamente marcato come stale."""
+        ticker_up = ticker.strip().upper()
+        ref = KNOWN_STOCKS.get(ticker_up, {})
+        fb = MarketDataService._generate_fallback_price(ticker_up)
+        return {
+            "ticker": ticker_up,
+            "name": ref.get('name', ticker_up),
+            "current_price": fb['close'],
+            "change_abs": fb['change_abs'],
+            "change_percent": fb['change_percent'],
+            "currency": ref.get('currency', 'EUR' if ticker_up.endswith('.MI') else 'USD'),
+            "stale": True,
+            "technical": {"rsi_14": 52.0, "rsi_status": "Neutro", "rsi_badge": "badge-hold", "trend": "Neutro"}
+        }
+
+    @staticmethod
     async def fetch_stock_deep_dive(ticker: str) -> dict:
-        _evict_cache_if_needed(_DEEP_DIVE_CACHE)
         now_ts = time.time()
         ticker_up = ticker.strip().upper()
         if ticker_up in _DEEP_DIVE_CACHE:
@@ -469,6 +577,7 @@ class MarketDataService:
 
         def _sync_deep_dive():
             ref = KNOWN_STOCKS.get(ticker_up, {})
+            used_fallback = False
             try:
                 stock = yf.Ticker(ticker_up, session=_yf_session)
                 info = {}
@@ -479,9 +588,9 @@ class MarketDataService:
 
                 hist = pd.DataFrame()
                 try:
-                    hist = stock.history(period="6mo")
+                    hist = stock.history(period="6mo", timeout=6.0)
                     if hist.empty:
-                        hist = stock.history(period="1mo")
+                        hist = stock.history(period="1mo", timeout=6.0)
                 except Exception:
                     pass
 
@@ -551,6 +660,7 @@ class MarketDataService:
                                     sma50_val = round(s50, 2)
 
                 if current_price <= 0.0 or math.isnan(current_price):
+                    used_fallback = True
                     fb = MarketDataService._generate_fallback_price(ticker_up)
                     current_price = fb['close']
                     prev_close = fb['previous_close']
@@ -603,6 +713,7 @@ class MarketDataService:
 
                 return {
                     "ticker": ticker_up,
+                    "stale": used_fallback,
                     "name": info.get('shortName') or info.get('longName') or ref.get('name', ticker_up),
                     "market": ref.get('market', "IT" if ticker_up.endswith('.MI') else ("EU" if any(ticker_up.endswith(s) for s in ['.DE', '.AS', '.PA']) else "US")),
                     "currency": ref.get('currency', info.get('currency', 'EUR' if ticker_up.endswith('.MI') else 'USD')),
@@ -637,21 +748,46 @@ class MarketDataService:
                 }
             except Exception as e:
                 logger.debug(f"Errore deep dive per {ticker_up}: {e}")
-                fb = MarketDataService._generate_fallback_price(ticker_up)
-                return {
-                    "ticker": ticker_up,
-                    "name": ref.get('name', ticker_up),
-                    "current_price": fb['close'],
-                    "change_abs": fb['change_abs'],
-                    "change_percent": fb['change_percent'],
-                    "currency": ref.get('currency', 'EUR' if ticker_up.endswith('.MI') else 'USD'),
-                    "technical": {"rsi_14": 52.0, "rsi_status": "Neutro", "rsi_badge": "badge-hold", "trend": "Neutro"}
-                }
+                return MarketDataService._deep_dive_fallback(ticker_up)
 
-        data = await asyncio.to_thread(_sync_deep_dive)
-        if data and data.get('current_price', 0) > 0:
-            _DEEP_DIVE_CACHE[ticker_up] = (data, now_ts)
+        try:
+            data = await run_blocking_yf(_sync_deep_dive, timeout=12.0)
+        except Exception:
+            logger.debug(f"Timeout/errore deep dive per {ticker_up}, uso fallback stale.")
+            data = MarketDataService._deep_dive_fallback(ticker_up)
+        if data and data.get('current_price', 0) > 0 and not data.get('stale'):
+            _cache_put(_DEEP_DIVE_CACHE, ticker_up, (data, now_ts))
         return data
+
+    @staticmethod
+    def _generate_fallback_candles(ticker: str, timeframe: str = "1mo") -> list[dict]:
+        """Candele sintetiche deterministiche (fallback offline, non persistite)."""
+        ticker_up = ticker.strip().upper()
+        fb = MarketDataService._generate_fallback_price(ticker_up)
+        base_p = fb['close']
+        points_count = 30 if timeframe == '1m' else (7 if timeframe == '1w' else (90 if timeframe == '6m' else (250 if timeframe == '1y' else 50)))
+        results = []
+        now_dt = datetime.now()
+
+        for i in range(points_count):
+            dt = now_dt - timedelta(days=(points_count - i))
+            wave = math.sin(i / 5.0) * (base_p * 0.05) + ((i - points_count/2) * (base_p * 0.001))
+            c_close = round(base_p + wave, 2)
+            c_open = round(c_close * (1 + ((i % 3) - 1) * 0.004), 2)
+            c_high = round(max(c_open, c_close) * 1.008, 2)
+            c_low = round(min(c_open, c_close) * 0.992, 2)
+            vol = int(50000 + abs(math.sin(i)) * 200000)
+
+            results.append({
+                "time": dt.strftime("%Y-%m-%d"),
+                "open": c_open,
+                "high": c_high,
+                "low": c_low,
+                "close": c_close,
+                "value": c_close,
+                "volume": vol
+            })
+        return results
 
     @staticmethod
     async def fetch_stock_candles(ticker: str, timeframe: str = "1mo") -> list[dict]:
@@ -669,7 +805,7 @@ class MarketDataService:
         def _sync_candles():
             try:
                 stock = yf.Ticker(ticker_up, session=_yf_session)
-                hist = stock.history(period=period, interval=interval)
+                hist = stock.history(period=period, interval=interval, timeout=6.0)
                 if not hist.empty:
                     hist_clean = hist.dropna(subset=['Close'])
                     results = []
@@ -712,34 +848,27 @@ class MarketDataService:
             except Exception:
                 pass
 
-            # Deterministic Candle Generator Fallback
-            fb = MarketDataService._generate_fallback_price(ticker_up)
-            base_p = fb['close']
-            points_count = 30 if timeframe == '1m' else (7 if timeframe == '1w' else (90 if timeframe == '6m' else (250 if timeframe == '1y' else 50)))
-            results = []
-            now_dt = datetime.now()
-            
-            for i in range(points_count):
-                dt = now_dt - timedelta(days=(points_count - i))
-                wave = math.sin(i / 5.0) * (base_p * 0.05) + ((i - points_count/2) * (base_p * 0.001))
-                c_close = round(base_p + wave, 2)
-                c_open = round(c_close * (1 + ((i % 3) - 1) * 0.004), 2)
-                c_high = round(max(c_open, c_close) * 1.008, 2)
-                c_low = round(min(c_open, c_close) * 0.992, 2)
-                vol = int(50000 + abs(math.sin(i)) * 200000)
+            return MarketDataService._generate_fallback_candles(ticker_up, timeframe)
 
-                results.append({
-                    "time": dt.strftime("%Y-%m-%d"),
-                    "open": c_open,
-                    "high": c_high,
-                    "low": c_low,
-                    "close": c_close,
-                    "value": c_close,
-                    "volume": vol
-                })
-            return results
+        try:
+            return await run_blocking_yf(_sync_candles, timeout=10.0)
+        except Exception:
+            logger.debug(f"Timeout candele per {ticker_up}, uso fallback deterministico.")
+            return MarketDataService._generate_fallback_candles(ticker_up, timeframe)
 
-        return await asyncio.to_thread(_sync_candles)
+    @staticmethod
+    def _fallback_portfolio_history(holdings: list[dict], days: int) -> list[dict]:
+        """Serie storica sintetica (fallback offline) basata sul valore corrente delle posizioni."""
+        current_total = sum((h.get("current_price") or h.get("avg_purchase_price") or 50.0) * h["quantity"] for h in holdings)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        res = []
+        for i in range(days):
+            growth = math.sin(i / 6.0) * (current_total * 0.02) + (i / float(days)) * (current_total * 0.04)
+            res.append({
+                "date": (cutoff + timedelta(days=i)).strftime("%Y-%m-%d"),
+                "value": round(current_total * 0.96 + growth, 2)
+            })
+        return res
 
     @staticmethod
     async def calculate_portfolio_history(holdings: list[dict], days: int = 30) -> list[dict]:
@@ -754,7 +883,7 @@ class MarketDataService:
                 tickers = [h["ticker"] for h in holdings]
                 qty_map = {h["ticker"]: h["quantity"] for h in holdings}
                 
-                df = yf.download(tickers, period=period, interval="1d", progress=False, group_by='ticker', auto_adjust=True, session=_yf_session)
+                df = yf.download(tickers, period=period, interval="1d", progress=False, group_by='ticker', auto_adjust=True, session=_yf_session, timeout=6.0)
                 
                 if not df.empty:
                     history_points = []
@@ -793,48 +922,62 @@ class MarketDataService:
             except Exception:
                 pass
 
-            # Fallback based on holding values
-            current_total = sum((h.get("current_price") or h.get("avg_purchase_price") or 50.0) * h["quantity"] for h in holdings)
-            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-            res = []
-            for i in range(days):
-                growth = math.sin(i / 6.0) * (current_total * 0.02) + (i / float(days)) * (current_total * 0.04)
-                res.append({
-                    "date": (cutoff + timedelta(days=i)).strftime("%Y-%m-%d"),
-                    "value": round(current_total * 0.96 + growth, 2)
-                })
-            return res
+            return MarketDataService._fallback_portfolio_history(holdings, days)
 
-        return await asyncio.to_thread(_sync_portfolio_history)
+        try:
+            return await run_blocking_yf(_sync_portfolio_history, timeout=15.0)
+        except Exception:
+            logger.debug("Timeout/errore portfolio history, uso fallback.")
+            return MarketDataService._fallback_portfolio_history(holdings, days)
 
     @staticmethod
-    async def fetch_all_prices(db_session: AsyncSession) -> list:
+    async def fetch_all_prices(db_session: AsyncSession, batch_timeout: float | None = None) -> list:
+        """
+        Aggiorna i prezzi di tutti i titoli attivi con UNA sola richiesta batch
+        e persiste in PriceHistory solo i prezzi reali (i fallback stale vengono scartati).
+
+        `batch_timeout`: budget opzionale del batch. Il job di background passa
+        BATCH_FETCH_TIMEOUT_BACKGROUND (~15s). Se None, resta il default user-facing.
+        """
         result = await db_session.execute(select(Stock).where(Stock.is_active == True))
         stocks = result.scalars().all()
         if not stocks:
             return []
 
-        tasks = [MarketDataService.fetch_current_price(stock.ticker) for stock in stocks]
-        prices = await asyncio.gather(*tasks, return_exceptions=True)
+        tickers = [stock.ticker for stock in stocks]
+        if batch_timeout is None:
+            prices_map = await MarketDataService.fetch_batch_prices(tickers)
+        else:
+            prices_map = await MarketDataService.fetch_batch_prices(tickers, timeout=batch_timeout)
 
         saved_prices = []
         now_utc = datetime.now(timezone.utc)
+        skipped_stale = 0
 
-        for stock, price_data in zip(stocks, prices):
-            if isinstance(price_data, dict) and price_data.get('close'):
-                history_entry = PriceHistory(
-                    stock_id=stock.id,
-                    timestamp=now_utc,
-                    open=price_data.get('open', price_data['close']),
-                    high=price_data.get('high', price_data['close']),
-                    low=price_data.get('low', price_data['close']),
-                    close=price_data['close'],
-                    volume=price_data.get('volume', 0)
-                )
-                db_session.add(history_entry)
-                saved_prices.append(history_entry)
+        for stock in stocks:
+            price_data = prices_map.get(stock.ticker)
+            if not isinstance(price_data, dict) or not price_data.get('close'):
+                continue
+            if price_data.get('stale'):
+                # Prezzo sintetico di fallback: NON va persistito nello storico.
+                skipped_stale += 1
+                continue
+
+            history_entry = PriceHistory(
+                stock_id=stock.id,
+                timestamp=now_utc,
+                open=price_data.get('open', price_data['close']),
+                high=price_data.get('high', price_data['close']),
+                low=price_data.get('low', price_data['close']),
+                close=price_data['close'],
+                volume=price_data.get('volume', 0)
+            )
+            db_session.add(history_entry)
+            saved_prices.append(history_entry)
 
         await db_session.commit()
+        if skipped_stale:
+            logger.info(f"Prezzi stale non persistiti: {skipped_stale} titoli su {len(stocks)}.")
         return saved_prices
 
     @staticmethod
@@ -873,7 +1016,7 @@ class MarketDataService:
                 return []
 
         try:
-            remote = await asyncio.wait_for(asyncio.to_thread(_sync_search), timeout=1.5)
+            remote = await run_blocking_yf(_sync_search, timeout=1.5)
         except Exception:
             remote = []
 

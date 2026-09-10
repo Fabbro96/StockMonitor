@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import math
+from sqlalchemy import func
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -61,10 +62,11 @@ async def get_latest_price(db: AsyncSession, stock_id: int, ticker: str, fallbac
     return {"price": None, "stale": True, "previous_close": None}
 
 
-async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None) -> list[dict]:
+async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None, usd_to_eur: float | None = None) -> list[dict]:
     """
     Costruisce le righe complete del portafoglio (holdings + prezzi live/DB) filtrate per utente.
     Usa selectinload per eliminare query N+1 ed esegue conversione valuta FX.
+    `usd_to_eur` opzionale permette di riusare un tasso già calcolato nella stessa richiesta.
     """
     query = (
         select(Holding)
@@ -80,14 +82,28 @@ async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None) -> 
     if not holdings:
         return []
 
-    usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
+    if usd_to_eur is None:
+        usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
 
-    # 1. Recupera la cronologia recente da DB per tutti gli stock_id in una singola query
+    # 1. Recupera SOLO le ultime 2 righe PriceHistory per stock (window function),
+    #    senza caricare l'intero storico di ogni titolo.
     stock_ids = [h.stock_id for h in holdings]
+    ranked_prices = (
+        select(
+            PriceHistory,
+            func.row_number().over(
+                partition_by=PriceHistory.stock_id,
+                order_by=PriceHistory.timestamp.desc()
+            ).label("rn")
+        )
+        .where(PriceHistory.stock_id.in_(stock_ids))
+        .subquery()
+    )
     ph_result = await db.execute(
         select(PriceHistory)
-        .where(PriceHistory.stock_id.in_(stock_ids))
-        .order_by(PriceHistory.timestamp.desc())
+        .join(ranked_prices, PriceHistory.id == ranked_prices.c.id)
+        .where(ranked_prices.c.rn <= 2)
+        .order_by(PriceHistory.stock_id, PriceHistory.timestamp.desc())
     )
     db_prices: dict[int, list[PriceHistory]] = {}
     for ph in ph_result.scalars().all():
@@ -159,8 +175,9 @@ async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None) -> 
 
 async def build_portfolio_summary(db: AsyncSession, user_id: int | None = None) -> dict:
     """Riepilogo aggregato del portafoglio in valuta base EUR filtrato per utente."""
-    portfolio = await build_portfolio_rows(db, user_id=user_id)
+    # Calcola il tasso FX UNA sola volta e lo passa a build_portfolio_rows
     usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
+    portfolio = await build_portfolio_rows(db, user_id=user_id, usd_to_eur=usd_to_eur)
 
     total_invested = sum(h.get("total_invested_eur", h["total_invested"]) for h in portfolio)
     total_value = sum(h.get("total_value_eur", h["total_value"]) for h in portfolio)

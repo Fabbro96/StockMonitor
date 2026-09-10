@@ -1,14 +1,32 @@
 import logging
 import html
 import httpx
+from sqlalchemy.future import select
+from sqlalchemy.orm import selectinload
 from backend.config import settings
 from backend.database import session_scope
+from backend.models.user import User
+from backend.models.stock import Stock
+from backend.models.watchlist import WatchlistItem
 
 logger = logging.getLogger(__name__)
 
 
 def _is_key_configured(val: str | None) -> bool:
     return bool(val) and not str(val).strip().lower().startswith("your_")
+
+
+async def _get_admin_user(session):
+    """
+    Risolve l'utente a cui riferire i comandi Telegram: username ADMIN_USERNAME
+    (fallback: utente con id minimo). Ritorna None se non esiste alcun utente.
+    """
+    result = await session.execute(select(User).where(User.username == settings.ADMIN_USERNAME))
+    admin = result.scalars().first()
+    if not admin:
+        result = await session.execute(select(User).order_by(User.id).limit(1))
+        admin = result.scalars().first()
+    return admin
 
 
 class TelegramService:
@@ -149,8 +167,12 @@ class InteractiveTelegramBot:
         try:
             from backend.services.portfolio_service import build_portfolio_rows, build_portfolio_summary
             async with session_scope() as session:
-                summary = await build_portfolio_summary(session)
-                portfolio = await build_portfolio_rows(session)
+                admin = await _get_admin_user(session)
+                if not admin:
+                    await update.message.reply_text("⚠️ Nessun utente configurato.")
+                    return
+                summary = await build_portfolio_summary(session, user_id=admin.id)
+                portfolio = await build_portfolio_rows(session, user_id=admin.id)
 
             if not portfolio:
                 await update.message.reply_text("📭 Il portafoglio è vuoto. Aggiungi posizioni dalla web app.")
@@ -190,19 +212,20 @@ class InteractiveTelegramBot:
             return
         await update.message.reply_text("⏳ Interrogazione radar watchlist...")
         try:
-            from sqlalchemy.future import select
-            from backend.models.watchlist import WatchlistItem
-            from backend.models.stock import Stock
             from backend.services.market_data import MarketDataService
 
             async with session_scope() as session:
-                result = await session.execute(select(WatchlistItem).join(Stock))
-                items = result.scalars().all()
-                rows = []
-                for item in items:
-                    stock = await session.get(Stock, item.stock_id)
-                    if stock:
-                        rows.append(stock)
+                admin = await _get_admin_user(session)
+                if not admin:
+                    await update.message.reply_text("⚠️ Nessun utente configurato.")
+                    return
+                result = await session.execute(
+                    select(WatchlistItem)
+                    .join(Stock)
+                    .where(WatchlistItem.user_id == admin.id)
+                    .options(selectinload(WatchlistItem.stock))
+                )
+                rows = [item.stock for item in result.scalars().all() if item.stock]
 
             if not rows:
                 await update.message.reply_text("📭 La watchlist è vuota.")
@@ -246,9 +269,12 @@ class InteractiveTelegramBot:
             from backend.database import async_session_maker
 
             advisor = AdvisorService()
-            # Sessione dedicata e isolata per l'analisi on-demand
+            # Sessione dedicata e isolata per l'analisi on-demand (utente admin)
             async with async_session_maker() as session:
-                analysis = await advisor.analyze_single_stock(ticker, session)
+                admin = await _get_admin_user(session)
+                analysis = await advisor.analyze_single_stock(
+                    ticker, session, user_id=admin.id if admin else None
+                )
 
             if not analysis:
                 await update.message.reply_text(f"⚠️ Nessuna analisi disponibile per {ticker}.")

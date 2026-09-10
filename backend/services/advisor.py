@@ -3,13 +3,14 @@ import json
 import asyncio
 from datetime import datetime, timezone
 from google import genai
+from sqlalchemy import func
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models.stock import Stock, PriceHistory
 from backend.models.portfolio import Holding
-from backend.models.sentiment import Sentiment
 from backend.models.settings import UserSettings
 from backend.models.advice import Advice
+from backend.models.user import User
 from backend.services.sentiment import SentimentService
 from backend.services.market_data import MarketDataService
 from backend.config import settings
@@ -28,7 +29,12 @@ class AdvisorService:
             logger.warning("GEMINI_API_KEY non configurata.")
         self.sentiment_service = SentimentService()
 
-    async def generate_advice(self, db_session: AsyncSession, force: bool = False) -> list[dict]:
+    async def generate_advice(self, db_session: AsyncSession, force: bool = False, user_id: int | None = None) -> list[dict]:
+        """
+        Genera gli advice macro (IT/US). Se `user_id` è None (es. scheduler) genera
+        per TUTTI gli utenti attivi, un blocco Advice per utente; se valorizzato,
+        genera solo per quell'utente.
+        """
         if not force and not MarketDataService.are_any_markets_open():
             logger.info("Borse chiuse: generazione analisi saltata (nessun mercato aperto).")
             return []
@@ -38,129 +44,179 @@ class AdvisorService:
         if not stocks:
             logger.warning("Nessun titolo attivo trovato per la generazione dei consigli.")
             return []
-        
-        result = await db_session.execute(select(Holding))
-        holdings = result.scalars().all()
-        
-        result = await db_session.execute(select(UserSettings).limit(1))
-        user_settings = result.scalars().first()
-        
-        italian_stocks = []
-        us_stocks = []
 
+        # Contesto di mercato (prezzi + news) calcolato UNA sola volta per tutti gli utenti.
+        price_map = await self._latest_closes_by_stock(db_session, [s.id for s in stocks])
+        market_context = []
         for s in stocks:
-            ph_res = await db_session.execute(
-                select(PriceHistory)
-                .where(PriceHistory.stock_id == s.id)
-                .order_by(PriceHistory.timestamp.desc())
-                .limit(2)
-            )
-            prices = ph_res.scalars().all()
-            last_price = prices[0].close if prices else None
-            prev_price = prices[1].close if len(prices) > 1 else last_price
+            closes = price_map.get(s.id, [])
+            last_price = closes[0] if closes else None
+            prev_price = closes[1] if len(closes) > 1 else last_price
             day_change_pct = ((last_price - prev_price) / prev_price * 100) if (last_price and prev_price) else 0.0
 
             news_items = await self.sentiment_service.get_combined_market_context(s.ticker, s.name or s.ticker)
-            top_headlines = [n['title'] for n in news_items[:3]]
-
-            holding = next((h for h in holdings if h.stock_id == s.id), None)
-
-            stock_info = {
+            market_context.append({
+                "stock_id": s.id,
                 "ticker": s.ticker,
                 "name": s.name or s.ticker,
                 "current_price": round(last_price, 2) if last_price else "N/A",
                 "day_change_pct": round(day_change_pct, 2),
-                "in_portfolio": holding is not None,
-                "quantity_owned": holding.quantity if holding else 0,
-                "avg_purchase_price": holding.avg_purchase_price if holding else None,
-                "recent_news": top_headlines
-            }
+                "recent_news": [n['title'] for n in news_items[:3]],
+                "is_italian": bool(s.ticker.upper().endswith('.MI') or (s.market and s.market.upper() == 'IT')),
+            })
 
-            if s.ticker.upper().endswith('.MI') or (s.market and s.market.upper() == 'IT'):
-                italian_stocks.append(stock_info)
-            else:
-                us_stocks.append(stock_info)
+        users = await self._resolve_target_users(db_session, user_id)
+        if not users:
+            logger.warning("Nessun utente trovato per la generazione dei consigli.")
+            return []
 
-        settings_summary = {
-            "strategy": user_settings.strategy if user_settings else "mixed",
-            "total_budget": user_settings.total_budget if user_settings else 10000.0,
-            "target_markets": user_settings.markets.split(",") if (user_settings and user_settings.markets) else ["IT", "US"]
-        }
-
-        prompt = self._build_macro_prompt(italian_stocks, us_stocks, settings_summary)
-        
-        async with _gemini_semaphore:
-            response_json = await self._call_gemini(prompt)
-        
-        if not response_json or not ('borsa_italiana' in response_json or 'borsa_americana' in response_json):
-            logger.info("Risposta Gemini non disponibile, generazione consigli quantitativi di fallback...")
-            response_json = self._build_deterministic_macro_fallback(italian_stocks, us_stocks, settings_summary)
-
-        advices_created = []
+        advices_created: list[dict] = []
         now_utc = datetime.now(timezone.utc)
 
-        # 1. Borsa Italiana
-        it_data = response_json.get('borsa_italiana', {})
-        if it_data and 'overview' in it_data:
-            adv_it = Advice(
-                market="IT",
-                title=it_data.get('title', "Borsa Italiana (Piazza Affari)"),
-                action=it_data.get('action', 'MANTENIMENTO'),
-                overview=it_data.get('overview'),
-                reasoning=it_data.get('strategy'),
-                stocks_json=json.dumps(it_data.get('stocks_analysis', []), ensure_ascii=False),
-                risks=it_data.get('risks'),
-                confidence=it_data.get('confidence', 'MEDIUM').upper(),
-                timeframe=it_data.get('timeframe', 'Medio Termine'),
-                timestamp=now_utc
-            )
-            db_session.add(adv_it)
-            advices_created.append({
-                "market": "IT",
-                "title": adv_it.title,
-                "action": adv_it.action,
-                "overview": adv_it.overview,
-                "strategy": adv_it.reasoning,
-                "stocks_analysis": it_data.get('stocks_analysis', []),
-                "risks": adv_it.risks,
-                "confidence": adv_it.confidence,
-                "timeframe": adv_it.timeframe,
-                "timestamp": str(now_utc)
-            })
+        for user in users:
+            holdings_res = await db_session.execute(select(Holding).where(Holding.user_id == user.id))
+            holdings_by_stock = {h.stock_id: h for h in holdings_res.scalars().all()}
 
-        # 2. Borsa Americana
-        us_data = response_json.get('borsa_americana', {})
-        if us_data and 'overview' in us_data:
-            adv_us = Advice(
-                market="US",
-                title=us_data.get('title', "Borsa Americana (Wall Street)"),
-                action=us_data.get('action', 'MANTENIMENTO'),
-                overview=us_data.get('overview'),
-                reasoning=us_data.get('strategy'),
-                stocks_json=json.dumps(us_data.get('stocks_analysis', []), ensure_ascii=False),
-                risks=us_data.get('risks'),
-                confidence=us_data.get('confidence', 'MEDIUM').upper(),
-                timeframe=us_data.get('timeframe', 'Medio Termine'),
-                timestamp=now_utc
+            settings_res = await db_session.execute(
+                select(UserSettings).where(UserSettings.user_id == user.id).limit(1)
             )
-            db_session.add(adv_us)
-            advices_created.append({
-                "market": "US",
-                "title": adv_us.title,
-                "action": adv_us.action,
-                "overview": adv_us.overview,
-                "strategy": adv_us.reasoning,
-                "stocks_analysis": us_data.get('stocks_analysis', []),
-                "risks": adv_us.risks,
-                "confidence": adv_us.confidence,
-                "timeframe": adv_us.timeframe,
-                "timestamp": str(now_utc)
-            })
+            user_settings = settings_res.scalars().first()
+
+            italian_stocks = []
+            us_stocks = []
+            for ctx in market_context:
+                holding = holdings_by_stock.get(ctx["stock_id"])
+                stock_info = {
+                    "ticker": ctx["ticker"],
+                    "name": ctx["name"],
+                    "current_price": ctx["current_price"],
+                    "day_change_pct": ctx["day_change_pct"],
+                    "in_portfolio": holding is not None,
+                    "quantity_owned": holding.quantity if holding else 0,
+                    "avg_purchase_price": holding.avg_purchase_price if holding else None,
+                    "recent_news": ctx["recent_news"],
+                }
+                (italian_stocks if ctx["is_italian"] else us_stocks).append(stock_info)
+
+            settings_summary = {
+                "strategy": user_settings.strategy if user_settings else "mixed",
+                "total_budget": user_settings.total_budget if user_settings else 10000.0,
+                "target_markets": user_settings.markets.split(",") if (user_settings and user_settings.markets) else ["IT", "US"]
+            }
+
+            prompt = self._build_macro_prompt(italian_stocks, us_stocks, settings_summary)
+
+            async with _gemini_semaphore:
+                response_json = await self._call_gemini(prompt)
+
+            if not response_json or not ('borsa_italiana' in response_json or 'borsa_americana' in response_json):
+                logger.info(f"Risposta Gemini non disponibile (utente {user.id}), generazione consigli quantitativi di fallback...")
+                response_json = self._build_deterministic_macro_fallback(italian_stocks, us_stocks, settings_summary)
+
+            # 1. Borsa Italiana
+            record = self._build_advice_record(
+                db_session, response_json.get('borsa_italiana', {}),
+                market="IT", default_title="Borsa Italiana (Piazza Affari)",
+                now_utc=now_utc, user_id=user.id
+            )
+            if record:
+                advices_created.append(record)
+
+            # 2. Borsa Americana
+            record = self._build_advice_record(
+                db_session, response_json.get('borsa_americana', {}),
+                market="US", default_title="Borsa Americana (Wall Street)",
+                now_utc=now_utc, user_id=user.id
+            )
+            if record:
+                advices_created.append(record)
 
         await db_session.commit()
         return advices_created
 
-    async def analyze_single_stock(self, ticker: str, db_session: AsyncSession) -> dict:
+    @staticmethod
+    async def _resolve_target_users(db_session: AsyncSession, user_id: int | None) -> list[User]:
+        """Risolve gli utenti target: singolo utente o tutti gli utenti attivi."""
+        if user_id is not None:
+            user = await db_session.get(User, user_id)
+            return [user] if user else []
+        result = await db_session.execute(select(User).where(User.is_active == True).order_by(User.id))
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def _latest_closes_by_stock(db_session: AsyncSession, stock_ids: list[int]) -> dict[int, list[float]]:
+        """
+        Recupera in UNA sola query (window function) le ultime 2 chiusure per ogni stock.
+        Ritorna {stock_id: [close_ultima, close_precedente]}.
+        """
+        if not stock_ids:
+            return {}
+        row_number = func.row_number().over(
+            partition_by=PriceHistory.stock_id,
+            order_by=PriceHistory.timestamp.desc()
+        ).label("rn")
+        ranked = (
+            select(
+                PriceHistory.stock_id.label("stock_id"),
+                PriceHistory.close.label("close"),
+                row_number
+            )
+            .where(PriceHistory.stock_id.in_(stock_ids))
+            .subquery()
+        )
+        result = await db_session.execute(
+            select(ranked.c.stock_id, ranked.c.close)
+            .where(ranked.c.rn <= 2)
+            .order_by(ranked.c.stock_id, ranked.c.rn)
+        )
+        closes: dict[int, list[float]] = {}
+        for stock_id, close in result.all():
+            if close is not None:
+                closes.setdefault(stock_id, []).append(float(close))
+        return closes
+
+    def _build_advice_record(
+        self,
+        db_session: AsyncSession,
+        data: dict,
+        market: str,
+        default_title: str,
+        now_utc: datetime,
+        user_id: int | None
+    ) -> dict | None:
+        """Crea l'Advice ORM e ne restituisce la rappresentazione piatta (senza duplicare la logica IT/US)."""
+        if not data or 'overview' not in data:
+            return None
+
+        advice = Advice(
+            user_id=user_id,
+            market=market,
+            title=data.get('title') or default_title,
+            action=data.get('action', 'MANTENIMENTO'),
+            overview=data.get('overview'),
+            reasoning=data.get('strategy'),
+            stocks_json=json.dumps(data.get('stocks_analysis', []), ensure_ascii=False),
+            risks=data.get('risks'),
+            confidence=(data.get('confidence') or 'MEDIUM').upper(),
+            timeframe=data.get('timeframe', 'Medio Termine'),
+            timestamp=now_utc,
+        )
+        db_session.add(advice)
+        return {
+            "market": market,
+            "title": advice.title,
+            "action": advice.action,
+            "overview": advice.overview,
+            "strategy": advice.reasoning,
+            "stocks_analysis": data.get('stocks_analysis', []),
+            "risks": advice.risks,
+            "confidence": advice.confidence,
+            "timeframe": advice.timeframe,
+            "timestamp": str(now_utc),
+            "user_id": user_id,
+        }
+
+    async def analyze_single_stock(self, ticker: str, db_session: AsyncSession, user_id: int | None = None) -> dict:
         """
         Genera un'analisi approfondita istantanea su richiesta per un singolo titolo con Google Gemini 3.7 Flash,
         incorporando il contesto reale delle posizioni in portafoglio dell'utente.
@@ -168,11 +224,12 @@ class AdvisorService:
         ticker_up = ticker.strip().upper()
         deep_data = await MarketDataService.fetch_stock_deep_dive(ticker_up)
         
-        # Check if user holds this stock in portfolio
+        # Check if user holds this stock in portfolio (solo posizioni dell'utente)
         holding_info = None
-        res = await db_session.execute(
-            select(Holding).join(Stock).where(Stock.ticker == ticker_up)
-        )
+        holding_query = select(Holding).join(Stock).where(Stock.ticker == ticker_up)
+        if user_id is not None:
+            holding_query = holding_query.where(Holding.user_id == user_id)
+        res = await db_session.execute(holding_query)
         holding = res.scalars().first()
         if holding:
             cur_price = deep_data.get('current_price', holding.avg_purchase_price)
@@ -194,8 +251,11 @@ class AdvisorService:
         news_items = await self.sentiment_service.get_combined_market_context(ticker_up, name)
         headlines = [n["title"] for n in news_items[:5]]
 
-        # Profile settings
-        result = await db_session.execute(select(UserSettings).limit(1))
+        # Profile settings dell'utente (fallback al primo profilo per compatibilità legacy)
+        settings_query = select(UserSettings)
+        if user_id is not None:
+            settings_query = settings_query.where(UserSettings.user_id == user_id)
+        result = await db_session.execute(settings_query.limit(1))
         user_settings = result.scalars().first()
         strategy = user_settings.strategy if user_settings else "mixed"
 

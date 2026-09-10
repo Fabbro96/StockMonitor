@@ -25,15 +25,23 @@ _RISK_CACHE_TTL = 300.0  # 5 minuti
 # ---------------------------------------------------------------------------
 # Serie storica giornaliera del valore del portafoglio
 # ---------------------------------------------------------------------------
-async def build_portfolio_daily_series(db: AsyncSession, days: int = 180, user_id: int | None = None) -> list[dict]:
+async def build_portfolio_daily_series(
+    db: AsyncSession,
+    days: int = 180,
+    user_id: int | None = None,
+    portfolio_rows: list[dict] | None = None
+) -> list[dict]:
     """
     Costruisce la serie giornaliera del valore del portafoglio per un utente:
     1. chiusura giornaliera da PriceHistory (dati raccolti dallo scheduler)
     2. backfill con candele giornaliere Yahoo (fetch_stock_candles '1y')
     3. forward-fill dei giorni mancanti; prezzo corrente per l'ultimo giorno
     Ritorna [{"date": "YYYY-MM-DD", "value": float}] ordinato per data.
+
+    `portfolio_rows`: righe già calcolate da build_portfolio_rows per la stessa
+    richiesta; se fornite evitano un ricalcolo completo del portafoglio.
     """
-    portfolio = await build_portfolio_rows(db, user_id=user_id)
+    portfolio = portfolio_rows if portfolio_rows is not None else await build_portfolio_rows(db, user_id=user_id)
     if not portfolio:
         return []
 
@@ -120,11 +128,18 @@ def normalize_growth(series: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Metriche di rischio quantitative
 # ---------------------------------------------------------------------------
-async def compute_risk_metrics(db: AsyncSession, days: int = 180, user_id: int | None = None) -> dict:
+async def compute_risk_metrics(
+    db: AsyncSession,
+    days: int = 180,
+    user_id: int | None = None,
+    portfolio_rows: list[dict] | None = None
+) -> dict:
     """
     Calcola le metriche di rischio/performance del portafoglio per utente:
     Max Drawdown, Volatilità annualizzata, Sharpe Ratio, Beta pesato,
     Rendimento annualizzato.
+
+    `portfolio_rows` opzionale: righe già calcolate per la stessa richiesta.
     """
     cache_key = f"risk:{user_id}:{days}"
     now_ts = time.time()
@@ -132,7 +147,8 @@ async def compute_risk_metrics(db: AsyncSession, days: int = 180, user_id: int |
     if cached and now_ts - cached[1] < _RISK_CACHE_TTL:
         return cached[0]
 
-    series = await build_portfolio_daily_series(db, days=days, user_id=user_id)
+    portfolio = portfolio_rows if portfolio_rows is not None else await build_portfolio_rows(db, user_id=user_id)
+    series = await build_portfolio_daily_series(db, days=days, user_id=user_id, portfolio_rows=portfolio)
     values = [p["value"] for p in series if p["value"] > 0]
 
     metrics = {
@@ -176,7 +192,6 @@ async def compute_risk_metrics(db: AsyncSession, days: int = 180, user_id: int |
             metrics["sharpe_ratio"] = round((ann_return - settings.RISK_FREE_RATE) / ann_vol, 2)
 
     # --- Beta pesato (pesi = controvalore attuale) ---
-    portfolio = await build_portfolio_rows(db, user_id=user_id)
     total_value = sum(h["total_value"] for h in portfolio)
     if portfolio and total_value > 0:
         deep_tasks = [MarketDataService.fetch_stock_deep_dive(h["ticker"]) for h in portfolio]
@@ -223,16 +238,19 @@ async def compute_benchmark_comparison(
     db: AsyncSession,
     days: int = 90,
     benchmark_tickers: list[str] | None = None,
-    user_id: int | None = None
+    user_id: int | None = None,
+    portfolio_rows: list[dict] | None = None
 ) -> dict:
     """
     Confronta la crescita percentuale del portafoglio dell'utente con gli indici benchmark.
+    `portfolio_rows` opzionale: righe già calcolate per la stessa richiesta.
     """
     if benchmark_tickers is None:
         benchmark_tickers = ["^GSPC", "FTSEMIB.MI"]
 
     period = _period_for_days(days)
-    series = await build_portfolio_daily_series(db, days=days, user_id=user_id)
+    portfolio = portfolio_rows if portfolio_rows is not None else await build_portfolio_rows(db, user_id=user_id)
+    series = await build_portfolio_daily_series(db, days=days, user_id=user_id, portfolio_rows=portfolio)
     portfolio_growth = normalize_growth(series)
 
     start_date = series[0]["date"] if series else None

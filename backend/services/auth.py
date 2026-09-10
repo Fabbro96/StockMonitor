@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -28,6 +29,15 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     except Exception as e:
         logger.error(f"Errore durante la verifica della password: {e}")
         return False
+
+async def hash_password_async(password: str) -> str:
+    """Esegue l'hashing bcrypt (CPU-bound, cost 12) in un thread dedicato,
+    evitando di bloccare l'event loop su hardware ARM."""
+    return await asyncio.to_thread(hash_password, password)
+
+async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
+    """Esegue la verifica bcrypt in un thread dedicato (off event loop)."""
+    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()

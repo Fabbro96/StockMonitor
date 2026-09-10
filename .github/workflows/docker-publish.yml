@@ -7,7 +7,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Canonical lowercase image name (GHCR rejects uppercase; must match compose files)
+  IMAGE_NAME: fabbro96/stockmonitor
 
 jobs:
   build-and-push:

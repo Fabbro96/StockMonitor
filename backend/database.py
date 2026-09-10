@@ -98,6 +98,15 @@ async def init_db() -> None:
                 logger.error(f"Migrazione advices.user_id fallita: {e}")
                 raise
 
+        # Migrazione TargetAllocation.user_id (rebalancer per-utente):
+        # stessa regola, ignora SOLO la colonna già esistente.
+        try:
+            await conn.execute(text("ALTER TABLE target_allocations ADD COLUMN user_id INTEGER REFERENCES users(id)"))
+        except Exception as e:
+            if "duplicate column name" not in str(e).lower():
+                logger.error(f"Migrazione target_allocations.user_id fallita: {e}")
+                raise
+
         # Backfill advice storici orfani all'admin configurato (fallback: id minimo)
         try:
             admin_id = (await conn.execute(
@@ -124,6 +133,22 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # Backfill target allocation storici all'admin configurato (fallback: id minimo)
+        try:
+            admin_id = (await conn.execute(
+                text("SELECT id FROM users WHERE username = :username ORDER BY id LIMIT 1"),
+                {"username": settings.ADMIN_USERNAME}
+            )).scalar()
+            if admin_id is None:
+                admin_id = (await conn.execute(text("SELECT MIN(id) FROM users"))).scalar()
+            if admin_id is not None:
+                await conn.execute(
+                    text("UPDATE target_allocations SET user_id = :admin_id WHERE user_id IS NULL"),
+                    {"admin_id": admin_id}
+                )
+        except Exception as e:
+            logger.warning(f"Backfill target_allocations.user_id non riuscito: {e}")
+
         # Indici ad alte prestazioni per query multi-utente e serie storiche.
         # UNICA definizione dell'indice composito price_history(stock_id, timestamp):
         # definirlo qui (invece che nel model) copre anche i DB preesistenti.
@@ -137,6 +162,7 @@ async def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS ix_advices_timestamp ON advices(timestamp)",
             "CREATE INDEX IF NOT EXISTS ix_advices_user_id ON advices(user_id)",
             "CREATE INDEX IF NOT EXISTS ix_sentiments_stock_ts ON sentiments(stock_id, timestamp)",
+            "CREATE INDEX IF NOT EXISTS ix_target_allocations_user ON target_allocations(user_id)",
             "DROP INDEX IF EXISTS ix_price_history_stock_ts"
         ]:
             try:

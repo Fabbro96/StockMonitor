@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getChartThemeColors, CHART_FONT_FAMILY } from './app.js?v=3.0.0';
+import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getChartThemeColors, CHART_FONT_FAMILY, escapeHtml } from './app.js?v=3.0.0';
 
 let chart = null;
 let lineSeries = null;
@@ -248,12 +248,12 @@ const renderHeatmap = (items) => {
     const flag = item.market === 'IT' ? '🇮🇹' : '🇺🇸';
 
     return `
-      <div class="heatmap-tile ${tileClass}" onclick="window.openStockModal('${item.ticker}')">
+      <div class="heatmap-tile ${tileClass}" data-stock="${escapeHtml(item.ticker)}">
         <div class="flex justify-between items-center mb-1">
-          <span class="font-bold text-primary font-mono text-sm">${item.ticker}</span>
+          <span class="font-bold text-primary font-mono text-sm">${escapeHtml(item.ticker)}</span>
           <span class="text-xs">${flag}</span>
         </div>
-        <div class="text-xs text-secondary mb-1 tile-name">${item.name || item.ticker}</div>
+        <div class="text-xs text-secondary mb-1 tile-name">${escapeHtml(item.name || item.ticker)}</div>
         <div class="flex justify-between items-end">
           <span class="text-xs font-mono font-bold">${formatCurrency(item.current_price, item.currency)}</span>
           <span class="text-xs font-mono font-bold ${isUp ? 'text-profit' : 'text-loss'}">${sign}${chg.toFixed(2)}%</span>
@@ -473,8 +473,8 @@ const loadDashboardData = async (isSilentRefresh = false) => {
                 <div class="flex items-center gap-2">
                   <span>${flag}</span>
                   <div>
-                    <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${item.ticker}">${item.ticker}</a>
-                    <div class="text-xs text-secondary">${item.name || item.ticker}</div>
+                    <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(item.ticker)}">${escapeHtml(item.ticker)}</a>
+                    <div class="text-xs text-secondary">${escapeHtml(item.name || item.ticker)}</div>
                   </div>
                 </div>
               </td>
@@ -488,7 +488,7 @@ const loadDashboardData = async (isSilentRefresh = false) => {
                 ${formatPercent(pnlPct)}
               </td>
               <td class="text-center">
-                <button class="btn btn-ghost btn-sm" onclick="window.openStockModal('${item.ticker}')" title="Apri scheda completa">
+                <button class="btn btn-ghost btn-sm" data-stock="${escapeHtml(item.ticker)}" title="Apri scheda completa">
                   🔍
                 </button>
               </td>
@@ -517,12 +517,12 @@ const loadDashboardData = async (isSilentRefresh = false) => {
               <div class="flex justify-between items-center mb-1.5">
                 <span class="font-bold text-primary flex items-center gap-1.5 text-sm">
                   <span>${flag}</span>
-                  <span>${adv.title || (isIT ? 'Borsa Italiana' : 'Wall Street')}</span>
+                  <span>${escapeHtml(adv.title || (isIT ? 'Borsa Italiana' : 'Wall Street'))}</span>
                 </span>
-                <span class="badge ${badgeClass}">${action}</span>
+                <span class="badge ${badgeClass}">${escapeHtml(action)}</span>
               </div>
               <p class="text-xs text-secondary leading-relaxed clamp-2">
-                ${adv.overview || adv.strategy || 'Nessuna descrizione disponibile.'}
+                ${escapeHtml(adv.overview || adv.strategy || 'Nessuna descrizione disponibile.')}
               </p>
             </div>
           `;

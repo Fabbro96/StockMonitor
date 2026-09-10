@@ -247,6 +247,8 @@ async def test_rebalancer(c: httpx.AsyncClient, h: dict):
 
     r = await c.get("/api/portfolio/rebalance/targets", headers=h)
     check("GET targets -> 200 (3 target)", r.status_code == 200 and len(r.json()) == 3)
+    admin_targets = r.json()
+    admin_target_id = admin_targets[0]["id"] if admin_targets else None
 
     r = await c.post("/api/portfolio/rebalance/preview", headers=h, json={"extra_cash": 500})
     check("POST rebalance/preview -> 200", r.status_code == 200, str(r.status_code))
@@ -264,6 +266,50 @@ async def test_rebalancer(c: httpx.AsyncClient, h: dict):
             break
     else:
         check("target_value matematicamente coerente per tutti i bucket", True)
+
+    # --- Isolamento multi-utente dei Target Allocation ---
+    r = await c.post("/api/auth/users", headers=h,
+                     json={"username": "rebalance_user", "password": "Rebalance123!", "is_admin": False})
+    check("creazione utente rebalance -> 200", r.status_code == 200, str(r.status_code))
+    r = await c.post("/api/auth/login", json={"username": "rebalance_user", "password": "Rebalance123!"})
+    check("login utente rebalance -> 200", r.status_code == 200, str(r.status_code))
+    user_h = {"Authorization": f"Bearer {r.json().get('access_token', '')}"}
+
+    r = await c.get("/api/portfolio/rebalance/targets", headers=user_h)
+    check("utente rebalance NON vede i target admin (0)",
+          r.status_code == 200 and r.json() == [], str(r.json()))
+
+    r = await c.delete(f"/api/portfolio/rebalance/targets/{admin_target_id}", headers=user_h)
+    check("DELETE target admin da utente rebalance -> 404", r.status_code == 404, str(r.status_code))
+
+    r = await c.get("/api/portfolio/rebalance/targets", headers=h)
+    check("target admin intatti dopo il tentativo (3)",
+          r.status_code == 200 and len(r.json()) == 3)
+
+    r = await c.post("/api/portfolio/rebalance/preview", headers=user_h, json={"extra_cash": 0})
+    check("preview utente senza target -> 400", r.status_code == 400, str(r.status_code))
+
+    # L'utente crea un proprio target: isolato dall'admin in entrambe le direzioni
+    r = await c.post("/api/portfolio/rebalance/targets", headers=user_h,
+                     json={"name": "User Cash", "target_percent": 100, "scope_type": "CASH", "scope_value": ""})
+    check("POST target utente rebalance -> 200", r.status_code == 200, str(r.status_code))
+    user_target_id = r.json().get("id")
+    r = await c.get("/api/portfolio/rebalance/targets", headers=user_h)
+    check("utente vede solo il proprio target (1)", r.status_code == 200 and len(r.json()) == 1)
+    r = await c.get("/api/portfolio/rebalance/targets", headers=h)
+    check("admin NON vede il target dell'utente (3)",
+          r.status_code == 200 and len(r.json()) == 3)
+    r = await c.post("/api/portfolio/rebalance/preview", headers=user_h, json={"extra_cash": 0})
+    check("preview utente con target proprio -> 200",
+          r.status_code == 200 and "allocations" in r.json(), str(r.status_code))
+
+    r = await c.post("/api/portfolio/rebalance/preview", headers=h, json={"extra_cash": 500})
+    check("admin preview ancora 200 con 3 allocations",
+          r.status_code == 200 and len(r.json().get("allocations", [])) == 3, str(r.status_code))
+
+    if user_target_id:
+        r = await c.delete(f"/api/portfolio/rebalance/targets/{user_target_id}", headers=user_h)
+        check("DELETE proprio target utente -> 200", r.status_code == 200, str(r.status_code))
 
 
 async def test_settings_and_alerts(c: httpx.AsyncClient, h: dict):
@@ -546,9 +592,12 @@ async def test_data_layer_schema():
         ("advices", "ix_advices_user_id"),
         ("sentiments", "ix_sentiments_stock_ts"),
         ("alert_rules", "ix_alert_rules_is_active"),
+        ("target_allocations", "ix_target_allocations_user"),
     ]
 
     check("advices.user_id esiste (migrazione + model)", "user_id" in _column_names("advices"))
+    check("target_allocations.user_id esiste (migrazione + model)",
+          "user_id" in _column_names("target_allocations"))
     for table, idx in required_indexes:
         check(f"indice {idx} presente su {table}", idx in _index_names(table))
     check("duplicato ix_price_history_stock_ts assente", "ix_price_history_stock_ts" not in _index_names("price_history"))
@@ -571,6 +620,37 @@ async def test_data_layer_schema():
     check("indici richiesti ancora presenti dopo re-init", all(
         idx in _index_names(table) for table, idx in required_indexes
     ))
+
+    # Backfill dei target allocation orfani (user_id NULL) all'admin configurato:
+    # inseriamo una riga legacy, rieseguiamo init_db e la rimuoviamo subito dopo.
+    conn = sqlite3.connect(TEST_DB, timeout=10)
+    try:
+        admin_row = conn.execute("SELECT id FROM users WHERE username=?", (ADMIN_USER,)).fetchone()
+        conn.execute(
+            "INSERT INTO target_allocations (name, target_percent, scope_type, scope_value, user_id) "
+            "VALUES ('Legacy Target', 10, 'MARKET', 'IT', NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    backfill_error = ""
+    try:
+        await init_db()
+    except Exception as e:
+        backfill_error = str(e)[:200]
+
+    conn = sqlite3.connect(TEST_DB, timeout=10)
+    try:
+        legacy_row = conn.execute("SELECT user_id FROM target_allocations WHERE name='Legacy Target'").fetchone()
+        check("backfill target_allocations NULL -> admin",
+              admin_row is not None and legacy_row is not None and legacy_row[0] == admin_row[0],
+              f"legacy={legacy_row} admin={admin_row}")
+        check("init_db con backfill target senza errori", backfill_error == "", backfill_error)
+        conn.execute("DELETE FROM target_allocations WHERE name='Legacy Target'")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 async def test_retention_cleanup():

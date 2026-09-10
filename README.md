@@ -1,119 +1,74 @@
 # 📈 Stock Monitor
 
-Web application self-hosted per il monitoraggio orario di titoli azionari (Borsa Italiana, USA, Europa), gestione portafoglio con calcolo live di P&L, import/export CSV, modifiche al volo con conferma di sicurezza e 5 consigli finanziari giornalieri generati da **Google Gemini 3.7 Flash** integrando analisi tecnica e notizie multi-fonte.
+Web app self-hosted per il monitoraggio dei mercati (IT/US/EU) e la gestione del
+portafoglio, pensata per girare su NAS ARM64 con 2 GB di RAM. Include consigli
+finanziari AI (Google Gemini) e un bot Telegram interattivo.
 
 ---
 
-## ✨ Funzionalità Principali
+## ✨ Funzionalità
 
-- 📊 **Monitoraggio automatico orario** dei mercati finanziari (IT, US, EU).
-- 🧠 **Consigli Finanziari AI** basati su Gemini 3.7 Flash con Target Price, Timeframe e Razionale + **Analisi on-demand per singolo ticker**.
-- 💼 **Gestione Portafoglio Completa**:
-  - Modifica rapida di quantità e prezzo con ricalcolo P&L istantaneo.
-  - Barra di sicurezza e modale con conferma finale prima del salvataggio.
-  - Esportazione ed Importazione file CSV con rilevamento automatico colonne.
-- 📊 **Benchmark Comparison**: curva di crescita % del portafoglio a confronto diretto con **S&P 500 (`^GSPC`)** e **FTSE MIB (`FTSEMIB.MI`)** sullo stesso grafico.
-- 🛡️ **Metriche di Rischio Quantitative**: Max Drawdown, Volatilità Annualizzata, **Sharpe Ratio**, **Beta pesato** del portafoglio e Rendimento Annualizzato.
-- ⚖️ **Smart Portfolio Rebalancer**: allocazioni target per mercato/ticker/liquidità (es. 40% US Tech, 30% IT Dividend, 30% Cash) e generazione automatica degli ordini di ribilanciamento (unità in buy/sell).
-- 📈 **Grafici Avanzati** (TradingView Lightweight Charts): toggle **Area vs Candele (OHLC)**, sub-chart **volumi colorati**, linea **Breakeven** (prezzo medio di carico) sulle posizioni in portafoglio.
-- 🎨 **UI Institutional Fintech Dark**: skeleton shimmer, flash `pulse-green/pulse-red` sui prezzi live, drawer mobile con gesture touch e micro-animazioni.
-- 📰 **Motore Notizie & Sentiment Multi-Fonte Zero-Auth** (Yahoo Finance News, Google News RSS, Reddit pubblico).
-- 🔒 **Sicurezza & Autenticazione Solida**: JWT via cookie `HttpOnly`, anti brute-force, gestione utenti admin-only.
-- 🤖 **Bot Telegram Interattivo Bidirezionale**:
-  - `/value` ➔ report valore, P&L giornaliero e top movers
-  - `/radar` ➔ watchlist con prezzi live e segnali RSI
-  - `/advice <TICKER>` ➔ analisi AI Gemini on-demand
-- 🛡️ **Resilienza Dati Esterna**: circuit breaker + retry con backoff esponenziale + **fallback sull'ultimo prezzo noto (stale-cache/DB)** quando Yahoo Finance risponde 429/403.
-- 🧵 **SQLite in WAL ad alta concorrenza**: PRAGMA `busy_timeout=10000`, `journal_mode=WAL` e sessioni async isolate per ogni task.
-- 🚀 **Deploy NAS a File Singolo**: sul NAS serve solo il file `docker-compose.nas.yml`!
+- **UI minimal light/dark**, responsive e con **zero richieste esterne**: i grafici
+  usano Lightweight Charts vendorizzato in `frontend/vendor/` (licenza inclusa).
+- **Monitoraggio orario** dei mercati: prezzi scaricati con un'unica richiesta
+  batch e fallback "stale" quando Yahoo Finance risponde 429/403.
+- **Portafoglio multi-utente**: CRUD, P&L live, conversione FX EUR/USD,
+  import/export CSV.
+- **Analytics**: Max Drawdown, volatilità annualizzata, Sharpe Ratio, Beta pesato,
+  confronto benchmark (`^GSPC`, `FTSEMIB.MI`) e rebalancer con allocazioni target.
+- **AI & notizie**: consigli finanziari bilanciati (5–10) via Gemini, analisi
+  on-demand per ticker e sentiment multi-fonte zero-auth (Yahoo News, Google News
+  RSS, Reddit pubblico).
+- **Sicurezza**: JWT in cookie `HttpOnly`, utenti admin-only, lockout anti
+  brute-force.
+- **Bot Telegram**: `/value`, `/radar`, `/advice <TICKER>`.
 
----
+## 🛠️ Stack
 
-## 🚀 Deploy su NAS con 1 Solo File (`docker-compose.yml`)
+- **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.0 async + SQLite in modalità WAL.
+- **Dati di mercato**: yfinance con timeout HTTP espliciti, executor dedicato
+  bounded e cache TTL in-process.
+- **AI/Servizi**: google-genai (Gemini), python-telegram-bot, httpx, APScheduler.
 
-Grazie alla GitHub Actions CI/CD inclusa (`.github/workflows/docker-publish.yml`), quando pushi il codice su GitHub l'immagine Docker viene compilata e pubblicata automaticamente sul GitHub Container Registry (`ghcr.io`).
+## 🚀 Performance & NAS
 
-### 1. File unico per il NAS (`docker-compose.yml`)
+- Fetch prezzi **orario in batch** (una richiesta per tutti i ticker attivi, budget
+  dedicato per il job di background).
+- **Retention automatica** del DB: `price_history` 400 giorni, `sentiments`
+  30 giorni, cleanup notturno a batch.
+- Asset statici **versionati (`?v=`)** con `Cache-Control` lungo e `immutable`;
+  HTML sempre rivalidato.
+- **1 worker** uvicorn e limiti risorse Docker: **768 MB RAM / 1.5 CPU**.
 
-Crea sul tuo NAS una cartella (es. `/home/fabrizio/docker/stock_monitor`) con all'interno **esclusivamente questo file**:
+## 📦 Deploy su NAS (file unico)
 
-```yaml
-services:
-  stock-monitor:
-    image: ghcr.io/fabbro96/stockmonitor:latest
-    container_name: stock-monitor
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/app/data
-    environment:
-      - GEMINI_API_KEY=your_gemini_api_key_here
-      - GEMINI_MODEL=gemini-3.7-flash
-      - SECRET_KEY=stock-monitor-super-secret-key-2026-nas
-      - ADMIN_USERNAME=admin
-      - ADMIN_PASSWORD=admin123
-      - TELEGRAM_BOT_TOKEN=
-      - TELEGRAM_CHAT_ID=
-      - TELEGRAM_BOT_ENABLED=true
-      - RISK_FREE_RATE=0.02
-      - DB_PATH=data/stock_monitor.db
-      - ALERT_CHECK_INTERVAL_MINUTES=15
-      - LOG_LEVEL=INFO
-```
-
-### 2. Avvio
+Sul NAS serve solo `docker-compose.nas.yml`: copialo in una cartella (es.
+`/home/<utente>/docker/stock_monitor`) e avvia:
 
 ```bash
 docker compose up -d
 ```
-L'app sarà accessibile su `http://<IP-NAS>:8000/static/index.html`.
 
-### 3. Aggiornamento all'ultima versione di GitHub
+L'app risponde su `http://<IP-NAS>:8000/`. L'auto-update è gestito da
+**Watchtower**, che controlla `ghcr.io/fabbro96/stockmonitor:latest` ogni ora e
+riavvia il container quando esce una nuova immagine.
 
-Ogni volta che fai modifiche e pushi su GitHub, per aggiornare il NAS basta eseguire:
+> ⚠️ Prima del primo avvio cambia `SECRET_KEY`, `ADMIN_PASSWORD` e `GEMINI_API_KEY`
+> nel compose (il placeholder è `your_gemini_api_key_here`).
+>
+> Il container gira volutamente come **root**: il bind-mount `./data` contiene il
+> database SQLite creato dal container precedente e un UID non-root potrebbe non
+> avere i permessi di scrittura. Rischio accettato su LAN.
 
-```bash
-docker compose pull && docker compose up -d
-```
-*(Tutti i dati, utenti, titoli e storico rimangono intatti nella cartella `./data/`)*
+Tutti i dati (utenti, portafoglio, storico) restano in `./data/` e sopravvivono
+agli aggiornamenti dell'immagine.
 
----
-
-## 💻 Come Pushare su GitHub
-
-Dalla directory locale sul tuo computer:
-
-```bash
-# 1. Inizializza il repository (se non già fatto)
-git init
-git add .
-git commit -m "Initial commit Stock Monitor"
-
-# 2. Collega il tuo repository remoto su GitHub
-git remote add origin https://github.com/Fabbro96/StockMonitor.git
-git branch -M main
-
-# 3. Pusha il codice
-git push -u origin main
-```
-
-> **Nota per repository privati**: Se il tuo repo GitHub è privato, vai su **GitHub Settings ➔ Packages** del repository e imposta la visibilità del package su **Public**, oppure esegui `docker login ghcr.io` sul NAS con un Personal Access Token (PAT).
-
----
-
-## 🛠️ Stack Tecnologico
-
-- **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.0 (Async), aiosqlite, APScheduler, yfinance, google-genai (Gemini 3.7 Flash), httpx, python-telegram-bot.
-- **Frontend**: Vanilla HTML5, CSS3 Glassmorphism Dark Theme, JavaScript ES Modules, TradingView Lightweight Charts.
-- **Database**: SQLite in modalità WAL (Write-Ahead Logging) ad alta concorrenza (PRAGMA `busy_timeout=10000`, `synchronous=NORMAL`).
-- **Analytics**: NumPy & Pandas per metriche di rischio, benchmark e ribilanciamento.
-
-## 🧪 Test End-to-End Automatizzati
-
-Suite asincrona completa (83 verifiche) che copre: autenticazione, CRUD portafoglio/watchlist/stocks, metriche di rischio, benchmark, rebalancer, contratti REST (formato frontend e legacy), path di **fallback** per rate-limiting Yahoo (429/403), concorrenza SQLite e integrità WAL/PRAGMA.
+## 🧪 Test
 
 ```bash
-# Isola un DB temporaneo in /tmp, avvia uvicorn dedicato ed esegue tutte le verifiche
-./venv/bin/python tests/e2e_test.py
+.venv/bin/python tests/e2e_test.py
 ```
+
+Suite end-to-end (**180 check**) su DB temporaneo in `/tmp`: autenticazione, CRUD,
+portafoglio/watchlist, metriche di rischio, benchmark, rebalancer, fallback Yahoo,
+concorrenza SQLite/WAL, retention e contratti REST. Non tocca i dati reali.

@@ -1024,30 +1024,3 @@ class MarketDataService:
             if not any(m['ticker'] == r['ticker'] for m in matches):
                 matches.append(r)
         return matches[:8]
-
-    @staticmethod
-    async def get_price_change(stock_id: int, db_session: AsyncSession) -> dict:
-        result = await db_session.execute(
-            select(PriceHistory)
-            .where(PriceHistory.stock_id == stock_id)
-            .order_by(PriceHistory.timestamp.desc())
-            .limit(2)
-        )
-        histories = result.scalars().all()
-        
-        if len(histories) < 2:
-            return {"change_percent": 0.0, "change_abs": 0.0}
-            
-        current = histories[0].close
-        previous = histories[1].close
-        
-        if previous == 0:
-            return {"change_percent": 0.0, "change_abs": 0.0}
-            
-        change_abs = round(current - previous, 3)
-        change_percent = round((change_abs / previous) * 100, 2)
-        
-        return {
-            "change_abs": change_abs,
-            "change_percent": change_percent
-        }

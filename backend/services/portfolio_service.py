@@ -1,5 +1,4 @@
 import logging
-import asyncio
 import math
 from sqlalchemy import func
 from sqlalchemy.future import select
@@ -22,44 +21,6 @@ def _is_valid_float(v) -> bool:
         return not (math.isnan(f) or math.isinf(f)) and f > 0
     except (ValueError, TypeError):
         return False
-
-
-async def get_latest_price(db: AsyncSession, stock_id: int, ticker: str, fallback_price: float | None = None) -> dict:
-    """
-    Recupera l'ultimo prezzo noto per un titolo con strategia resiliente:
-    1. ultimo record PriceHistory nel DB
-    2. live MarketDataService (con retry e stale-cache interna)
-    3. prezzo di fallback fornito (es. avg_purchase_price)
-
-    Ritorna {"price", "stale", "previous_close"}.
-    """
-    price_result = await db.execute(
-        select(PriceHistory)
-        .where(PriceHistory.stock_id == stock_id)
-        .order_by(PriceHistory.timestamp.desc())
-        .limit(2)
-    )
-    latest_rows = price_result.scalars().all()
-    if latest_rows and _is_valid_float(latest_rows[0].close):
-        prev_close = latest_rows[1].close if (len(latest_rows) > 1 and _is_valid_float(latest_rows[1].close)) else None
-        return {
-            "price": float(latest_rows[0].close),
-            "stale": False,
-            "previous_close": float(prev_close) if prev_close else None,
-        }
-
-    price_data = await MarketDataService.fetch_current_price(ticker)
-    if price_data and _is_valid_float(price_data.get("close")):
-        prev_c = price_data.get("previous_close")
-        return {
-            "price": float(price_data["close"]),
-            "stale": bool(price_data.get("stale", False)),
-            "previous_close": float(prev_c) if _is_valid_float(prev_c) else None,
-        }
-
-    if _is_valid_float(fallback_price):
-        return {"price": float(fallback_price), "stale": True, "previous_close": None}
-    return {"price": None, "stale": True, "previous_close": None}
 
 
 async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None, usd_to_eur: float | None = None) -> list[dict]:

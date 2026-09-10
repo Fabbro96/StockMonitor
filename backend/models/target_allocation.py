@@ -15,6 +15,7 @@ class TargetAllocation(Base):
     __tablename__ = "target_allocations"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     name = Column(String, nullable=False)                # Es. "US Tech", "IT Dividend", "ETF/Cash"
     target_percent = Column(Float, nullable=False, default=0.0)
     scope_type = Column(String, nullable=False, default="MARKET")  # MARKET | TICKERS | CASH

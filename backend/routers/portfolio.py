@@ -151,8 +151,15 @@ class RebalancePreviewRequest(BaseModel):
     extra_cash: float = 0.0
 
 @router.get("/rebalance/targets")
-async def list_targets(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(TargetAllocation).order_by(TargetAllocation.id))
+async def list_targets(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(
+        select(TargetAllocation)
+        .where(TargetAllocation.user_id == current_user.id)
+        .order_by(TargetAllocation.id)
+    )
     targets = result.scalars().all()
     return [
         {
@@ -166,7 +173,11 @@ async def list_targets(db: AsyncSession = Depends(get_db)):
     ]
 
 @router.post("/rebalance/targets")
-async def create_target(data: TargetAllocationCreate, db: AsyncSession = Depends(get_db)):
+async def create_target(
+    data: TargetAllocationCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     if not (0.0 <= data.target_percent <= 100.0):
         raise HTTPException(status_code=400, detail="target_percent deve essere tra 0 e 100.")
     scope_type = (data.scope_type or "MARKET").upper()
@@ -176,6 +187,7 @@ async def create_target(data: TargetAllocationCreate, db: AsyncSession = Depends
         raise HTTPException(status_code=400, detail="Per scope MARKET indica scope_value (IT, US, EU).")
 
     target = TargetAllocation(
+        user_id=current_user.id,
         name=data.name.strip(),
         target_percent=data.target_percent,
         scope_type=scope_type,
@@ -192,9 +204,13 @@ async def create_target(data: TargetAllocationCreate, db: AsyncSession = Depends
             "scope_type": target.scope_type, "scope_value": target.scope_value or ""}
 
 @router.delete("/rebalance/targets/{target_id}")
-async def delete_target(target_id: int, db: AsyncSession = Depends(get_db)):
+async def delete_target(
+    target_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
     target = await db.get(TargetAllocation, target_id)
-    if not target:
+    if not target or target.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Allocazione target non trovata.")
     await db.delete(target)
     await db.commit()
@@ -210,7 +226,11 @@ async def rebalance_preview(
     Calcola il piano di ribilanciamento per il portafoglio dell'utente: delta per bucket e ordini buy/sell
     (quantità stimate) necessari per raggiungere le allocazioni target.
     """
-    result = await db.execute(select(TargetAllocation).order_by(TargetAllocation.id))
+    result = await db.execute(
+        select(TargetAllocation)
+        .where(TargetAllocation.user_id == current_user.id)
+        .order_by(TargetAllocation.id)
+    )
     targets = result.scalars().all()
     if not targets:
         raise HTTPException(status_code=400, detail="Nessuna allocazione target configurata.")

@@ -12,7 +12,6 @@ class Settings(BaseSettings):
     GEMINI_MODEL: str = "gemini-3.7-flash"
     REDDIT_CLIENT_ID: str | None = None
     REDDIT_CLIENT_SECRET: str | None = None
-    REDDIT_USER_AGENT: str = "stock_monitor/1.0"
     DB_PATH: str = "data/stock_monitor.db"
     ALERT_CHECK_INTERVAL_MINUTES: int = 15
     LOG_LEVEL: str = "INFO"

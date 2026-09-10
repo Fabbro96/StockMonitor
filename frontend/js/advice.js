@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatDateTime, showLoading, hideLoading, showToast } from './app.js?v=3.0.0';
+import { formatCurrency, formatDateTime, showLoading, hideLoading, showToast, escapeHtml } from './app.js?v=3.0.0';
 
 let currentPage = 1;
 let currentFilters = { market: '', action: '', date: '', q: '' };
@@ -70,8 +70,8 @@ const renderAdviceCard = (advice) => {
                 return `
                   <tr>
                     <td>
-                      <a href="#" class="stock-ticker-link font-bold font-mono text-sm" data-stock="${s.ticker}">${s.ticker}</a>
-                      <div class="text-xs text-muted truncate max-w-150">${s.name || ''}</div>
+                      <a href="#" class="stock-ticker-link font-bold font-mono text-sm" data-stock="${escapeHtml(s.ticker)}">${escapeHtml(s.ticker)}</a>
+                      <div class="text-xs text-muted truncate max-w-150">${escapeHtml(s.name || '')}</div>
                     </td>
                     <td class="text-center">
                       <span class="badge ${sBadge} text-xs font-semibold">${sLabel}</span>
@@ -83,10 +83,10 @@ const renderAdviceCard = (advice) => {
                       ${s.target_price ? formatCurrency(s.target_price) : '--'}
                     </td>
                     <td class="text-sm text-secondary leading-relaxed">
-                      ${s.note || s.reasoning || '--'}
+                      ${escapeHtml(s.note || s.reasoning || '--')}
                     </td>
                     <td class="text-center">
-                      <button type="button" class="btn btn-ghost btn-xs py-1 px-2 text-xs" onclick="window.openStockModal('${s.ticker}')" title="Apri Scheda Tecnica">🔍</button>
+                      <button type="button" class="btn btn-ghost btn-xs py-1 px-2 text-xs" data-stock="${escapeHtml(s.ticker)}" title="Apri Scheda Tecnica">🔍</button>
                     </td>
                   </tr>
                 `;
@@ -99,11 +99,11 @@ const renderAdviceCard = (advice) => {
   }
 
   const followBtnHtml = isFollowed
-    ? `<button class="btn btn-sm btn-success" onclick="window.toggleFollow(${advice.id})">
+    ? `<button class="btn btn-sm btn-success" data-follow-id="${advice.id}">
          <span>✅ Letto</span>
          <span class="text-2xs opacity-80">(Segna come Non Letto)</span>
        </button>`
-    : `<button class="btn btn-sm btn-ghost" onclick="window.toggleFollow(${advice.id})">
+    : `<button class="btn btn-sm btn-ghost" data-follow-id="${advice.id}">
          <span>👁️ Segna come Letto</span>
        </button>`;
 
@@ -114,7 +114,7 @@ const renderAdviceCard = (advice) => {
         <div>
           <div class="flex items-center gap-3 mb-1 flex-wrap">
             <span class="text-xl">${flag}</span>
-            <h3 class="text-xl font-bold">${advice.title || (isIT ? 'Borsa Italiana (Piazza Affari)' : 'Wall Street')}</h3>
+            <h3 class="text-xl font-bold">${escapeHtml(advice.title || (isIT ? 'Borsa Italiana (Piazza Affari)' : 'Wall Street'))}</h3>
             <span class="badge ${actionBadge}">${actionText}</span>
           </div>
           <div class="text-xs text-muted">Analisi elaborata: <strong>${formatDateTime(advice.timestamp)}</strong></div>
@@ -128,14 +128,14 @@ const renderAdviceCard = (advice) => {
       ${advice.overview ? `
       <div class="mb-4">
         <h4 class="text-xs font-bold text-muted uppercase tracking-wider mb-1">🌐 Quadro & Scenario Generale</h4>
-        <p class="text-primary leading-relaxed text-base">${advice.overview}</p>
+        <p class="text-primary leading-relaxed text-base">${escapeHtml(advice.overview)}</p>
       </div>` : ''}
 
       <!-- Strategy Section -->
       ${advice.strategy ? `
       <div class="callout mb-4">
         <h4 class="text-xs font-bold text-muted uppercase tracking-wider mb-1">🎯 Strategia Operativa & Piano d'Azione</h4>
-        <p class="text-primary leading-relaxed text-base">${advice.strategy}</p>
+        <p class="text-primary leading-relaxed text-base">${escapeHtml(advice.strategy)}</p>
       </div>` : ''}
 
       <!-- Stocks Breakdown -->
@@ -147,14 +147,14 @@ const renderAdviceCard = (advice) => {
         <h4 class="text-xs font-bold mb-1 text-danger flex items-center gap-1">
           <span>⚠️ Punti di Attenzione & Rischi Chiave</span>
         </h4>
-        <p class="text-xs text-secondary leading-relaxed mb-0">${advice.risks}</p>
+        <p class="text-xs text-secondary leading-relaxed mb-0">${escapeHtml(advice.risks)}</p>
       </div>` : ''}
 
       <!-- Footer Info -->
       <div class="flex gap-4 text-xs text-muted mt-4 pt-3 border-t flex-wrap items-center justify-between">
         <div class="flex gap-4 flex-wrap">
-          ${advice.confidence ? `<div>Confidenza IA: <strong class="text-primary">${advice.confidence}</strong></div>` : ''}
-          ${advice.timeframe ? `<div>Orizzonte: <strong class="text-primary">${advice.timeframe}</strong></div>` : ''}
+          ${advice.confidence ? `<div>Confidenza IA: <strong class="text-primary">${escapeHtml(advice.confidence)}</strong></div>` : ''}
+          ${advice.timeframe ? `<div>Orizzonte: <strong class="text-primary">${escapeHtml(advice.timeframe)}</strong></div>` : ''}
         </div>
         <div class="text-xs text-muted">Archivio Ultimi 7 Giorni • Gemini 3.7 Flash</div>
       </div>
@@ -221,11 +221,11 @@ window.toggleFollow = async (id) => {
     if (container) {
       const isFollowed = Boolean(res.followed);
       container.innerHTML = isFollowed
-        ? `<button class="btn btn-sm btn-success" onclick="window.toggleFollow(${id})">
+        ? `<button class="btn btn-sm btn-success" data-follow-id="${id}">
              <span>✅ Letto</span>
              <span class="text-2xs opacity-80">(Segna come Non Letto)</span>
            </button>`
-        : `<button class="btn btn-sm btn-ghost" onclick="window.toggleFollow(${id})">
+        : `<button class="btn btn-sm btn-ghost" data-follow-id="${id}">
              <span>👁️ Segna come Letto</span>
            </button>`;
     }
@@ -292,12 +292,12 @@ const runSingleStockAnalysis = async () => {
       <div class="card callout-accent p-4">
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
           <div class="flex items-center gap-2 flex-wrap">
-            <span class="text-xl font-bold font-mono text-primary">${result.ticker}</span>
-            <span class="text-sm text-secondary">${result.name}</span>
-            <span class="badge ${actionBadgeClass}">${result.action_label || result.action}</span>
+            <span class="text-xl font-bold font-mono text-primary">${escapeHtml(result.ticker)}</span>
+            <span class="text-sm text-secondary">${escapeHtml(result.name)}</span>
+            <span class="badge ${actionBadgeClass}">${escapeHtml(result.action_label || result.action)}</span>
           </div>
           <div class="text-xs text-muted">
-            Confidenza: <strong class="text-primary">${result.confidence}</strong> • Orizzonte: <strong class="text-primary">${result.timeframe}</strong>
+            Confidenza: <strong class="text-primary">${escapeHtml(result.confidence)}</strong> • Orizzonte: <strong class="text-primary">${escapeHtml(result.timeframe)}</strong>
           </div>
         </div>
 
@@ -312,27 +312,27 @@ const runSingleStockAnalysis = async () => {
           </div>
         </div>
 
-        <p class="text-sm text-primary leading-relaxed mb-3">${result.summary || ''}</p>
+        <p class="text-sm text-primary leading-relaxed mb-3">${escapeHtml(result.summary || '')}</p>
 
         <div class="split-grid mb-3 text-xs">
           <div class="callout-success p-2.5">
             <strong class="text-profit block mb-1">🟢 Bull Case & Catalizzatori</strong>
-            <span class="text-secondary leading-normal">${result.bull_case || '--'}</span>
+            <span class="text-secondary leading-normal">${escapeHtml(result.bull_case || '--')}</span>
           </div>
           <div class="callout-danger p-2.5">
             <strong class="text-loss block mb-1">🔴 Bear Case & Rischi</strong>
-            <span class="text-secondary leading-normal">${result.bear_case || '--'}</span>
+            <span class="text-secondary leading-normal">${escapeHtml(result.bear_case || '--')}</span>
           </div>
         </div>
 
         <div class="flex justify-between items-center flex-wrap gap-2 pt-2 border-t">
-          <div class="text-xs text-secondary">💡 <strong>Strategia:</strong> ${result.operational_strategy || '--'}</div>
-          <button class="btn btn-ghost btn-sm" onclick="window.openStockModal('${result.ticker}')">Apri Scheda Completa ➔</button>
+          <div class="text-xs text-secondary">💡 <strong>Strategia:</strong> ${escapeHtml(result.operational_strategy || '--')}</div>
+          <button class="btn btn-ghost btn-sm" data-stock="${escapeHtml(result.ticker)}">Apri Scheda Completa ➔</button>
         </div>
       </div>
     `;
   } catch (e) {
-    resContainer.innerHTML = `<div class="alert-error text-center py-4 text-xs">Errore analisi: ${e.message}</div>`;
+    resContainer.innerHTML = `<div class="alert-error text-center py-4 text-xs">Errore analisi: ${escapeHtml(e.message)}</div>`;
   } finally {
     btn.disabled = false;
     btn.textContent = 'Analizza Titolo con IA ➔';
@@ -342,6 +342,15 @@ const runSingleStockAnalysis = async () => {
 const initAdvice = () => {
   loadAdvice(1);
   checkMarketStatus();
+
+  // Delegated "follow" action (avoids inline handlers with interpolated ids)
+  const listEl = document.getElementById('adviceList');
+  listEl?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-follow-id]');
+    if (!btn) return;
+    const id = parseInt(btn.dataset.followId, 10);
+    if (!isNaN(id) && window.toggleFollow) window.toggleFollow(id);
+  });
 
   document.getElementById('btnAnalyzeSingle').addEventListener('click', runSingleStockAnalysis);
   document.getElementById('aiSingleTicker').addEventListener('keydown', (e) => {

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Watchlist - Stock Monitor</title>
+    <link rel="icon" href="data:,">
     <script>
         (function () {
             try {
@@ -18,7 +19,7 @@
         })();
     </script>
     <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
-    <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.0"></script>
 </head>
 <body>
     <div class="app-container">
@@ -120,7 +121,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2 class="modal-title">⭐ Aggiungi Titolo al Radar</h2>
-                <button class="modal-close" id="closeAddWatchlistModal">×</button>
+                <button class="modal-close" id="closeAddWatchlistModal" aria-label="Chiudi">×</button>
             </div>
             <form id="addWatchlistForm">
                 <div class="form-group relative">
@@ -163,7 +164,7 @@
         <div class="modal-content modal-sm">
             <div class="modal-header">
                 <h2 class="modal-title">🔔 Imposta Alert di Prezzo</h2>
-                <button class="modal-close" id="closeEditAlertModal">×</button>
+                <button class="modal-close" id="closeEditAlertModal" aria-label="Chiudi">×</button>
             </div>
             <form id="editAlertForm">
                 <input type="hidden" id="editAlertItemId">
@@ -192,6 +193,14 @@
         </div>
     </div>
 
+    <script>
+        (function () {
+            var b = document.getElementById('btnThemeToggle');
+            if (b && b.firstElementChild) {
+                b.firstElementChild.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
+            }
+        })();
+    </script>
     <script type="module" src="/static/js/app.js?v=3.0.0"></script>
     <script type="module" src="/static/js/watchlist.js?v=3.0.0"></script>
 </body>

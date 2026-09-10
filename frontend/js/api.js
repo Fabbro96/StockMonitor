@@ -85,26 +85,17 @@ export const api = {
     body: JSON.stringify(data)
   }),
   deleteUser: (id) => fetchApi(`/auth/users/${id}`, { method: 'DELETE' }),
-  resetUserPassword: (id, new_password) => fetchApi(`/auth/users/${id}/reset-password`, {
-    method: 'PUT',
-    body: JSON.stringify({ new_password })
-  }),
 
   // Stocks & Deep-Dive
-  getStocks: () => fetchApi('/stocks/'),
-  addStock: (data) => fetchApi('/stocks/', { method: 'POST', body: JSON.stringify(data) }),
-  deleteStock: (id) => fetchApi(`/stocks/${id}`, { method: 'DELETE' }),
   searchStocks: (query) => fetchApi(`/stocks/search?q=${encodeURIComponent(query)}`),
   getStockDetails: (ticker) => fetchApi(`/stocks/${encodeURIComponent(ticker)}/details`),
   getStockCandles: (ticker, timeframe = '1m') => fetchApi(`/stocks/${encodeURIComponent(ticker)}/candles?timeframe=${timeframe}`),
-  getStockHistory: (id, days = 7) => fetchApi(`/stocks/${id}/history?days=${days}`),
   
   // Watchlist
   getWatchlist: () => fetchApi('/watchlist/'),
   addToWatchlist: (data) => fetchApi('/watchlist/', { method: 'POST', body: JSON.stringify(data) }),
   updateWatchlistAlert: (id, data) => fetchApi(`/watchlist/${id}/alert`, { method: 'PUT', body: JSON.stringify(data) }),
   removeFromWatchlist: (id) => fetchApi(`/watchlist/${id}`, { method: 'DELETE' }),
-  removeWatchlistByTicker: (ticker) => fetchApi(`/watchlist/ticker/${encodeURIComponent(ticker)}`, { method: 'DELETE' }),
 
   // Portfolio
   getPortfolio: () => fetchApi('/portfolio/'),
@@ -113,13 +104,11 @@ export const api = {
   getRiskMetrics: (days = 180) => fetchApi(`/portfolio/risk-metrics?days=${days}`),
   getBenchmarks: (days = 90, tickers = null) => fetchApi(`/portfolio/benchmarks?days=${days}${tickers ? `&tickers=${encodeURIComponent(tickers)}` : ''}`),
   addHolding: (data) => fetchApi('/portfolio/holdings', { method: 'POST', body: JSON.stringify(data) }),
-  updateHolding: (id, data) => fetchApi(`/portfolio/holdings/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteHolding: (id) => fetchApi(`/portfolio/holdings/${id}`, { method: 'DELETE' }),
   batchUpdateHoldings: (holdings) => fetchApi('/portfolio/batch', {
     method: 'PUT',
     body: JSON.stringify({ holdings })
   }),
-  exportPortfolioUrl: (format = 'csv') => `${API_BASE}/portfolio/export?format=${format}`,
 
   // Rebalancer
   getRebalanceTargets: () => fetchApi('/portfolio/rebalance/targets'),

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Consigli IA - Stock Monitor</title>
+    <link rel="icon" href="data:,">
     <script>
         (function () {
             try {
@@ -18,7 +19,7 @@
         })();
     </script>
     <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
-    <script src="/static/vendor/lightweight-charts.standalone.production.js"></script>
+    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.0"></script>
 </head>
 <body>
     <div class="app-container">
@@ -179,6 +180,14 @@
         </div>
     </div>
 
+    <script>
+        (function () {
+            var b = document.getElementById('btnThemeToggle');
+            if (b && b.firstElementChild) {
+                b.firstElementChild.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
+            }
+        })();
+    </script>
     <script type="module" src="/static/js/app.js?v=3.0.0"></script>
     <script type="module" src="/static/js/advice.js?v=3.0.0"></script>
 </body>

@@ -45,6 +45,17 @@ export const formatDateTime = (dateString) => {
   }).format(new Date(dateString));
 };
 
+// Escapes dynamic values before interpolation into innerHTML (XSS hardening).
+export const escapeHtml = (value) => {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
 export const showToast = (message, type = 'info', actionText = null, onAction = null) => {
   let container = document.querySelector('.toast-container');
   if (!container) {
@@ -58,10 +69,10 @@ export const showToast = (message, type = 'info', actionText = null, onAction = 
   
   let actionHtml = '';
   if (actionText && typeof onAction === 'function') {
-    actionHtml = `<button class="btn btn-ghost btn-sm toast-action" id="toastActionBtn">${actionText}</button>`;
+    actionHtml = `<button class="btn btn-ghost btn-sm toast-action" id="toastActionBtn">${escapeHtml(actionText)}</button>`;
   }
 
-  toast.innerHTML = `<span>${message}</span>${actionHtml}`;
+  toast.innerHTML = `<span>${escapeHtml(message)}</span>${actionHtml}`;
   container.appendChild(toast);
 
   if (actionText && onAction) {
@@ -261,11 +272,11 @@ export const initTickerMarquee = async () => {
       const changeClass = isUp ? 'up' : 'down';
       const sign = isUp ? '+' : '';
       return `
-        <div class="ticker-item" onclick="window.openStockModal && window.openStockModal('${idx.ticker}')">
-          <span>${idx.flag || '📊'}</span>
-          <span class="ticker-name">${idx.name}</span>
-          <span class="ticker-price">${idx.price}</span>
-          <span class="ticker-change ${changeClass}">${sign}${idx.change_percent}%</span>
+        <div class="ticker-item" data-stock="${escapeHtml(idx.ticker)}">
+          <span>${escapeHtml(idx.flag || '📊')}</span>
+          <span class="ticker-name">${escapeHtml(idx.name)}</span>
+          <span class="ticker-price">${escapeHtml(idx.price)}</span>
+          <span class="ticker-change ${changeClass}">${sign}${escapeHtml(idx.change_percent)}%</span>
         </div>
       `;
     }).join('');
@@ -717,18 +728,22 @@ const runModalStockAi = async () => {
         <div class="callout-accent p-2.5 mb-3">
           <div class="text-xs text-primary font-bold mb-1">💼 Posizione nel tuo Portafoglio</div>
           <div class="flex justify-between items-center text-xs font-mono flex-wrap gap-2">
-            <span>Possiedi: <strong>${hc.quantity}</strong> azioni a carico <strong>${formatCurrency(hc.avg_purchase_price)}</strong></span>
+            <span>Possiedi: <strong>${escapeHtml(hc.quantity)}</strong> azioni a carico <strong>${formatCurrency(hc.avg_purchase_price)}</strong></span>
             <span class="${hc.current_pnl_pct >= 0 ? 'text-profit' : 'text-loss'} font-bold">P&L: ${formatCurrency(hc.current_pnl_abs)} (${formatPercent(hc.current_pnl_pct)})</span>
           </div>
         </div>
       `;
     }
 
+    // Coercizione numerica sicura: l'output LLM non è validato e finisce in innerHTML.
+    const upsideRaw = Number(result.upside_potential_pct);
+    const upsidePct = Number.isFinite(upsideRaw) ? upsideRaw : 0;
+
     container.innerHTML = `
       <div>
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-          <span class="badge ${actionBadgeClass}">${result.action_label || result.action}</span>
-          <div class="text-xs text-muted">Confidenza: <strong class="text-primary">${result.confidence || 'MEDIA'}</strong> • Orizzonte: <strong class="text-primary">${result.timeframe || 'Medio Termine'}</strong></div>
+          <span class="badge ${actionBadgeClass}">${escapeHtml(result.action_label || result.action)}</span>
+          <div class="text-xs text-muted">Confidenza: <strong class="text-primary">${escapeHtml(result.confidence || 'MEDIA')}</strong> • Orizzonte: <strong class="text-primary">${escapeHtml(result.timeframe || 'Medio Termine')}</strong></div>
         </div>
 
         ${holdingBox}
@@ -736,7 +751,7 @@ const runModalStockAi = async () => {
         <div class="split-grid mb-3">
           <div class="callout p-2.5">
             <div class="text-xs text-muted">🎯 Target Price Stimato</div>
-            <div class="text-lg font-bold text-primary font-mono">${formatCurrency(result.target_price)} <span class="text-xs text-profit">(+${result.upside_potential_pct || 0}%)</span></div>
+            <div class="text-lg font-bold text-primary font-mono">${formatCurrency(result.target_price)} <span class="text-xs text-profit">(+${upsidePct}%)</span></div>
           </div>
           <div class="callout p-2.5">
             <div class="text-xs text-muted">🛡️ Stop Loss Consigliato</div>
@@ -744,27 +759,27 @@ const runModalStockAi = async () => {
           </div>
         </div>
 
-        <p class="text-sm text-primary leading-relaxed mb-3">${result.summary || ''}</p>
+        <p class="text-sm text-primary leading-relaxed mb-3">${escapeHtml(result.summary || '')}</p>
 
         <div class="split-grid mb-3 text-xs">
           <div class="callout-success p-2.5">
             <strong class="text-profit block mb-1">🟢 Bull Case & Punti di Forza</strong>
-            <span class="text-secondary leading-normal">${result.bull_case || '--'}</span>
+            <span class="text-secondary leading-normal">${escapeHtml(result.bull_case || '--')}</span>
           </div>
           <div class="callout-danger p-2.5">
             <strong class="text-loss block mb-1">🔴 Bear Case & Rischi Chiave</strong>
-            <span class="text-secondary leading-normal">${result.bear_case || '--'}</span>
+            <span class="text-secondary leading-normal">${escapeHtml(result.bear_case || '--')}</span>
           </div>
         </div>
 
         <div class="callout p-2.5">
           <strong class="text-xs text-primary block mb-1">💡 Strategia Operativa Suggerita</strong>
-          <span class="text-xs text-secondary leading-normal">${result.operational_strategy || '--'}</span>
+          <span class="text-xs text-secondary leading-normal">${escapeHtml(result.operational_strategy || '--')}</span>
         </div>
       </div>
     `;
   } catch (e) {
-    container.innerHTML = `<div class="alert-error text-center py-4 text-xs">Impossibile completare l'analisi per ${currentModalTicker}: ${e.message}</div>`;
+    container.innerHTML = `<div class="alert-error text-center py-4 text-xs">Impossibile completare l'analisi per ${escapeHtml(currentModalTicker)}: ${escapeHtml(e.message)}</div>`;
   } finally {
     btn.disabled = false;
     btn.textContent = '⚡ Rielabora Analisi';
@@ -921,7 +936,8 @@ const initSidebar = () => {
         }
         document.querySelectorAll('.modal-overlay.active').forEach(modal => {
           modal.classList.remove('active');
-        });        document.querySelectorAll('.autocomplete-dropdown, #autocompleteResults, #wlAutocompleteResults').forEach(drop => {
+        });
+        document.querySelectorAll('.autocomplete-dropdown, #autocompleteResults, #wlAutocompleteResults').forEach(drop => {
           drop.style.display = 'none';
         });
       }
@@ -931,14 +947,18 @@ const initSidebar = () => {
   // Sidebar collapse toggle (desktop)
   const collapseBtn = document.getElementById('btnSidebarCollapse');
   if (collapseBtn && sidebar) {
+    const syncCollapseButton = (collapsed) => {
+      collapseBtn.textContent = collapsed ? '»' : '«';
+      collapseBtn.title = collapsed ? 'Espandi menu' : 'Comprimi menu';
+      collapseBtn.setAttribute('aria-label', collapseBtn.title);
+    };
     if (localStorage.getItem('sidebar_collapsed') === '1') {
       sidebar.classList.add('collapsed');
-      collapseBtn.textContent = '»';
+      syncCollapseButton(true);
     }
     collapseBtn.addEventListener('click', () => {
       const collapsed = sidebar.classList.toggle('collapsed');
-      collapseBtn.textContent = collapsed ? '»' : '«';
-      collapseBtn.title = collapsed ? 'Espandi menu' : 'Comprimi menu';
+      syncCollapseButton(collapsed);
       localStorage.setItem('sidebar_collapsed', collapsed ? '1' : '0');
     });
   }
@@ -951,7 +971,7 @@ const initSidebar = () => {
     footer.innerHTML = `
       <div class="sidebar-user">
         <span>👤</span>
-        <span class="sidebar-username">${username}</span>
+        <span class="sidebar-username">${escapeHtml(username)}</span>
       </div>
       <button id="btnLogout" class="icon-btn" title="Disconnetti" aria-label="Disconnetti">🚪</button>
     `;
@@ -1217,12 +1237,12 @@ const renderCommandPaletteResults = async (query = '') => {
           <div class="cmd-item-left">
             <span class="cmd-item-icon">${flag}</span>
             <div>
-              <div class="cmd-item-title font-mono">${s.ticker} <span class="text-xs text-secondary font-normal">— ${s.name || ''}</span></div>
+              <div class="cmd-item-title font-mono">${escapeHtml(s.ticker)} <span class="text-xs text-secondary font-normal">— ${escapeHtml(s.name || '')}</span></div>
               <div class="cmd-item-desc">Apri analisi fondamentale, RSI, grafici e scheda titolo</div>
             </div>
           </div>
           <div class="cmd-item-right">
-            <span class="badge ${isIT ? 'badge-primary' : 'badge-hold'} text-xs">${s.market || (isIT ? 'IT' : 'US')}</span>
+            <span class="badge ${isIT ? 'badge-primary' : 'badge-hold'} text-xs">${escapeHtml(s.market || (isIT ? 'IT' : 'US'))}</span>
             <span class="text-muted text-xs">↵</span>
           </div>
         </div>
@@ -1231,7 +1251,7 @@ const renderCommandPaletteResults = async (query = '') => {
   }
 
   if (paletteCurrentItems.length === 0) {
-    html = `<div class="text-muted text-xs py-8 text-center">Nessun risultato trovato per "${query}". Premi <kbd class="kbd-badge">esc</kbd> per chiudere.</div>`;
+    html = `<div class="text-muted text-xs py-8 text-center">Nessun risultato trovato per "${escapeHtml(query)}". Premi <kbd class="kbd-badge">esc</kbd> per chiudere.</div>`;
   }
 
   container.innerHTML = html;

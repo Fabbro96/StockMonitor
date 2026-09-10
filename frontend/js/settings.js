@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { showLoading, hideLoading, showToast, formatDate } from './app.js?v=3.0.0';
+import { showLoading, hideLoading, showToast, formatDate, escapeHtml } from './app.js?v=3.0.0';
 
 let alertRules = [];
 let currentUser = null;
@@ -14,12 +14,12 @@ const renderAlertRules = () => {
   
   tbody.innerHTML = alertRules.map(rule => `
     <tr>
-        <td><span class="font-bold text-primary">${rule.ticker}</span></td>
-        <td><span class="badge ${rule.direction === 'UP' ? 'badge-buy' : 'badge-sell'}">${rule.direction}</span></td>
+        <td><span class="font-bold text-primary">${escapeHtml(rule.ticker)}</span></td>
+        <td><span class="badge ${rule.direction === 'UP' ? 'badge-buy' : 'badge-sell'}">${escapeHtml(rule.direction)}</span></td>
         <td class="font-mono font-bold">${rule.threshold}%</td>
         <td><span class="badge ${rule.active !== false ? 'badge-buy' : 'badge-sell'}">${rule.active !== false ? 'Attivo' : 'Inattivo'}</span></td>
         <td class="text-center">
-            <button type="button" class="btn btn-ghost btn-sm text-loss" title="Elimina regola" onclick="window.deleteAlert(${rule.id})">🗑️</button>
+            <button type="button" class="btn btn-ghost btn-sm text-loss" title="Elimina regola" data-action="delete-alert" data-id="${rule.id}">🗑️</button>
         </td>
     </tr>
   `).join('');
@@ -37,7 +37,7 @@ const renderUsersTable = (users) => {
   tbody.innerHTML = users.map(u => `
     <tr>
       <td>
-        <span class="font-bold ${u.is_admin ? 'text-primary' : ''}">${u.username}</span>
+        <span class="font-bold ${u.is_admin ? 'text-primary' : ''}">${escapeHtml(u.username)}</span>
         ${u.id === currentUser?.id ? '<span class="text-xs text-muted"> (Tu)</span>' : ''}
       </td>
       <td>
@@ -49,7 +49,7 @@ const renderUsersTable = (users) => {
       <td class="text-secondary text-sm">${u.last_login ? formatDate(u.last_login) : 'Mai'}</td>
       <td class="text-center">
         ${u.id !== currentUser?.id ? `
-          <button type="button" class="btn btn-ghost btn-sm text-loss" title="Elimina utente" onclick="window.deleteUser(${u.id}, '${u.username}')">🗑️</button>
+          <button type="button" class="btn btn-ghost btn-sm text-loss" title="Elimina utente" data-action="delete-user" data-id="${u.id}" data-username="${escapeHtml(u.username)}">🗑️</button>
         ` : '<span class="text-xs text-muted">-</span>'}
       </td>
     </tr>
@@ -71,7 +71,7 @@ const renderTimeInputs = (count, values = []) => {
   let html = '';
   for (let i = 0; i < count; i++) {
     const val = values[i] || (i === 0 ? '09:00' : '18:00');
-    html += `<input type="time" name="reportTime" value="${val}" class="input-time" required>`;
+    html += `<input type="time" name="reportTime" value="${escapeHtml(val)}" class="input-time" required>`;
   }
   container.innerHTML = html;
 };
@@ -176,6 +176,21 @@ window.deleteUser = async (id, username) => {
 
 const initSettings = () => {
   loadSettings();
+
+  // Delegated admin/alert actions (avoids inline handlers with interpolated values)
+  document.getElementById('alertRulesBody')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action="delete-alert"]');
+    if (!btn) return;
+    const id = parseInt(btn.dataset.id, 10);
+    if (!isNaN(id) && window.deleteAlert) window.deleteAlert(id);
+  });
+
+  document.getElementById('usersTableBody')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action="delete-user"]');
+    if (!btn) return;
+    const id = parseInt(btn.dataset.id, 10);
+    if (!isNaN(id) && window.deleteUser) window.deleteUser(id, btn.dataset.username || '');
+  });
 
   document.getElementById('reportFreq').addEventListener('change', (e) => {
     const existing = Array.from(document.querySelectorAll('input[name="reportTime"]')).map(i => i.value);

@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getTheme } from './app.js?v=3.0.0';
+import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getTheme, escapeHtml } from './app.js?v=3.0.0';
 
 let portfolioData = [];
 let summaryData = {};
@@ -86,7 +86,7 @@ const drawPieChart = (data) => {
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
           <div style="width:10px;height:10px;background-color:${colors[i % colors.length]};border-radius:3px;"></div>
-          <span class="font-bold text-primary font-mono">${item.label}</span>
+          <span class="font-bold text-primary font-mono">${escapeHtml(item.label)}</span>
         </div>
         <span class="font-mono text-secondary">${formatPercent((item.value / total) * 100)}</span>
       </div>
@@ -179,17 +179,17 @@ const renderTable = () => {
           <div class="flex items-center gap-2">
             <span>${flag}</span>
             <div>
-              <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${item.ticker}">${item.ticker}</a>
-              ${item.notes ? `<div class="text-2xs text-muted" title="${item.notes}">📝 ${item.notes.substring(0, 20)}</div>` : ''}
+              <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(item.ticker)}">${escapeHtml(item.ticker)}</a>
+              ${item.notes ? `<div class="text-2xs text-muted" title="${escapeHtml(item.notes)}">📝 ${escapeHtml(item.notes.substring(0, 20))}</div>` : ''}
             </div>
           </div>
         </td>
-        <td class="text-secondary">${item.name || item.ticker}</td>
+        <td class="text-secondary">${escapeHtml(item.name || item.ticker)}</td>
         
         <!-- Editable Quantity -->
         <td class="text-right">
           <div class="modern-stepper">
-            <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci (−1, Shift: −10)" aria-label="Diminuisci quantità per ${item.ticker}">−</button>
+            <button type="button" class="stepper-btn dec" data-step="1" title="Diminuisci (−1, Shift: −10)" aria-label="Diminuisci quantità per ${escapeHtml(item.ticker)}">−</button>
             <input 
               type="number" 
               class="inline-input input-qty font-mono" 
@@ -197,16 +197,16 @@ const renderTable = () => {
               value="${displayQty}" 
               step="1" 
               min="0"
-              aria-label="Quantità per ${item.ticker}"
+              aria-label="Quantità per ${escapeHtml(item.ticker)}"
             >
-            <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta (+1, Shift: +10)" aria-label="Aumenta quantità per ${item.ticker}">+</button>
+            <button type="button" class="stepper-btn inc" data-step="1" title="Aumenta (+1, Shift: +10)" aria-label="Aumenta quantità per ${escapeHtml(item.ticker)}">+</button>
           </div>
         </td>
 
         <!-- Editable Purchase Price -->
         <td class="text-right">
           <div class="modern-stepper">
-            <button type="button" class="stepper-btn dec" data-step="0.5" title="Diminuisci (−0.50, Shift: −5.00)" aria-label="Diminuisci prezzo di carico per ${item.ticker}">−</button>
+            <button type="button" class="stepper-btn dec" data-step="0.5" title="Diminuisci (−0.50, Shift: −5.00)" aria-label="Diminuisci prezzo di carico per ${escapeHtml(item.ticker)}">−</button>
             <input 
               type="number" 
               class="inline-input input-price font-mono" 
@@ -214,9 +214,9 @@ const renderTable = () => {
               value="${displayPrice}" 
               step="any" 
               min="0"
-              aria-label="Prezzo medio carico per ${item.ticker}"
+              aria-label="Prezzo medio carico per ${escapeHtml(item.ticker)}"
             >
-            <button type="button" class="stepper-btn inc" data-step="0.5" title="Aumenta (+0.50, Shift: +5.00)" aria-label="Aumenta prezzo di carico per ${item.ticker}">+</button>
+            <button type="button" class="stepper-btn inc" data-step="0.5" title="Aumenta (+0.50, Shift: +5.00)" aria-label="Aumenta prezzo di carico per ${escapeHtml(item.ticker)}">+</button>
           </div>
         </td>
 
@@ -230,7 +230,7 @@ const renderTable = () => {
         </td>
         <td class="text-center">
           <div class="flex justify-center gap-1">
-            <button class="btn btn-ghost btn-sm text-loss" title="Elimina" aria-label="Elimina posizione ${item.ticker}" onclick="window.deleteHolding(${item.id})">🗑️</button>
+            <button class="btn btn-ghost btn-sm text-loss" title="Elimina" aria-label="Elimina posizione ${escapeHtml(item.ticker)}" data-action="delete-holding" data-id="${item.id}">🗑️</button>
           </div>
         </td>
       </tr>
@@ -343,6 +343,7 @@ export const loadPortfolio = async () => {
     updateAllocationChart();
     loadRealizedPnL();
     loadTransactions();
+    loadDividends();
 
   } catch (error) {
     showToast('Errore nel caricamento del portafoglio', 'error');
@@ -378,7 +379,7 @@ export const loadTransactions = async (type = currentTxFilter) => {
       tbody.innerHTML = `
         <tr>
           <td colspan="10" class="text-center text-muted py-6">
-            Nessuna transazione registrata ${type !== 'ALL' ? `con filtro <strong>${type}</strong>` : ''}.
+            Nessuna transazione registrata ${type !== 'ALL' ? `con filtro <strong>${escapeHtml(type)}</strong>` : ''}.
             <div class="mt-2">
               <button class="btn btn-primary btn-sm" onclick="window.openTxModal()">➕ Registra la prima esecuzione</button>
             </div>
@@ -409,19 +410,19 @@ export const loadTransactions = async (type = currentTxFilter) => {
 
       return `
         <tr>
-          <td class="font-mono text-xs text-muted">${dateStr}</td>
+          <td class="font-mono text-xs text-muted">${escapeHtml(dateStr)}</td>
           <td>${typeBadge}</td>
           <td>
-            <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${tx.ticker}">${tx.ticker}</a>
+            <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(tx.ticker)}">${escapeHtml(tx.ticker)}</a>
           </td>
-          <td class="text-secondary text-xs">${tx.name || tx.ticker}</td>
+          <td class="text-secondary text-xs">${escapeHtml(tx.name || tx.ticker)}</td>
           <td class="text-right font-mono">${isDiv ? '--' : tx.quantity}</td>
           <td class="text-right font-mono">${formatCurrency(tx.price, tx.currency)}</td>
           <td class="text-right font-mono text-muted text-xs">${tx.fee > 0 ? formatCurrency(tx.fee, 'EUR') : '0 €'}</td>
           <td class="text-right font-mono">${pnlHtml}</td>
-          <td class="text-xs text-muted" title="${tx.notes || ''}">${tx.notes ? tx.notes.substring(0, 25) : '--'}</td>
+          <td class="text-xs text-muted" title="${escapeHtml(tx.notes || '')}">${tx.notes ? escapeHtml(tx.notes.substring(0, 25)) : '--'}</td>
           <td class="text-center">
-            <button class="btn btn-ghost btn-sm text-loss" title="Elimina transazione" aria-label="Elimina transazione #${tx.id}" onclick="window.deleteTransaction(${tx.id})">🗑️</button>
+            <button class="btn btn-ghost btn-sm text-loss" title="Elimina transazione" aria-label="Elimina transazione #${tx.id}" data-action="delete-transaction" data-id="${tx.id}">🗑️</button>
           </td>
         </tr>
       `;
@@ -466,6 +467,248 @@ window.deleteHolding = async (id) => {
   }
 };
 
+// ==========================================
+// Smart Rebalancer
+// ==========================================
+const SCOPE_LABELS = { MARKET: 'Mercato', TICKERS: 'Ticker', CASH: 'Liquidità' };
+
+const renderRebalanceTargets = (targets) => {
+  const tbody = document.getElementById('targetsTableBody');
+  if (!tbody) return;
+
+  if (!targets || targets.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3 text-xs">Nessuna allocazione target definita.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = targets.map(t => `
+    <tr data-target-id="${t.id}">
+      <td class="font-bold text-primary">${escapeHtml(t.name)}</td>
+      <td class="text-center">
+        <span class="badge badge-hold">${escapeHtml(SCOPE_LABELS[t.scope_type] || t.scope_type || '')}</span>
+        ${t.scope_value ? `<span class="text-xs text-muted font-mono">${escapeHtml(t.scope_value)}</span>` : ''}
+      </td>
+      <td class="text-right font-mono font-bold text-primary">${(Number(t.target_percent) || 0).toFixed(1)}%</td>
+      <td class="text-center">
+        <button class="btn btn-ghost btn-sm text-loss" data-action="delete-target" data-target-id="${t.id}" data-target-name="${escapeHtml(t.name)}" title="Elimina target" aria-label="Elimina target ${escapeHtml(t.name)}">🗑️</button>
+      </td>
+    </tr>
+  `).join('');
+};
+
+const loadRebalanceTargets = async () => {
+  const tbody = document.getElementById('targetsTableBody');
+  if (!tbody) return;
+
+  try {
+    const targets = await api.getRebalanceTargets();
+    renderRebalanceTargets(targets);
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-loss py-3 text-xs">Errore nel caricamento delle allocazioni target.</td></tr>';
+  }
+};
+
+const handleAddTarget = async () => {
+  const nameEl = document.getElementById('targetName');
+  const pctEl = document.getElementById('targetPct');
+  const scopeTypeEl = document.getElementById('targetScopeType');
+  const scopeValueEl = document.getElementById('targetScopeValue');
+  if (!nameEl || !pctEl || !scopeTypeEl || !scopeValueEl) return;
+
+  const name = nameEl.value.trim();
+  const targetPercent = parseFloat(pctEl.value);
+  const scopeType = (scopeTypeEl.value || 'MARKET').toUpperCase();
+  const scopeValue = scopeValueEl.value.trim().toUpperCase();
+
+  if (!name) {
+    showToast('Inserisci un nome per l\'allocazione target', 'error');
+    return;
+  }
+  if (isNaN(targetPercent) || targetPercent < 0 || targetPercent > 100) {
+    showToast('La percentuale target deve essere un numero tra 0 e 100', 'error');
+    return;
+  }
+  if (scopeType !== 'CASH' && !scopeValue) {
+    showToast(scopeType === 'MARKET' ? 'Per lo scope Mercato indica il valore (IT, US, EU)' : 'Per lo scope Ticker indica i simboli (es. AAPL,MSFT)', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('btnAddTarget');
+  if (btn) btn.disabled = true;
+  try {
+    await api.addRebalanceTarget({
+      name,
+      target_percent: targetPercent,
+      scope_type: scopeType,
+      scope_value: scopeValue
+    });
+    nameEl.value = '';
+    pctEl.value = '';
+    scopeValueEl.value = '';
+    showToast('Allocazione target aggiunta con successo', 'success');
+    await loadRebalanceTargets();
+  } catch (e) {
+    showToast(e.message || 'Errore durante l\'aggiunta dell\'allocazione target', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
+const renderRebalancePlan = (plan) => {
+  const container = document.getElementById('rebalanceResult');
+  if (!container) return;
+
+  const orders = Array.isArray(plan?.orders) ? plan.orders : [];
+
+  if (orders.length === 0) {
+    container.className = 'text-xs text-muted py-4 text-center';
+    container.innerHTML = plan?.portfolio_empty
+      ? 'Portafoglio vuoto: aggiungi delle posizioni per generare un piano di ribilanciamento.'
+      : 'Il portafoglio è già allineato alle allocazioni target: nessun ordine necessario.';
+    return;
+  }
+
+  container.className = '';
+  container.innerHTML = `
+    <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
+      <span class="text-xs text-muted">Valore totale (incl. liquidità): <strong class="font-mono text-primary">${formatCurrency(plan.total_value || 0)}</strong></span>
+      <span class="text-xs text-muted">BUY: <strong class="font-mono text-profit">${formatCurrency(plan.total_buy_value || 0)}</strong> • SELL: <strong class="font-mono text-loss">${formatCurrency(plan.total_sell_value || 0)}</strong></span>
+    </div>
+    <div class="table-container table-bordered">
+      <table>
+        <thead>
+          <tr>
+            <th class="text-center w-80">Lato</th>
+            <th>Titolo</th>
+            <th class="text-right">Quantità</th>
+            <th class="text-right">Prezzo Stimato</th>
+            <th class="text-right">Importo</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orders.map(o => {
+            const isBuy = o.side === 'BUY';
+            return `
+              <tr>
+                <td class="text-center">
+                  <span class="badge ${isBuy ? 'badge-buy' : 'badge-sell'}">${isBuy ? '🟢 BUY' : '🔴 SELL'}</span>
+                </td>
+                <td>
+                  <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(o.ticker)}">${escapeHtml(o.ticker)}</a>
+                  <div class="text-xs text-secondary">${escapeHtml(o.name || '')}${o.allocation_name ? ` • ${escapeHtml(o.allocation_name)}` : ''}</div>
+                </td>
+                <td class="text-right font-mono">${o.quantity}</td>
+                <td class="text-right font-mono">${formatCurrency(o.estimated_price, o.currency)}</td>
+                <td class="text-right font-mono font-bold ${isBuy ? 'text-profit' : 'text-loss'}">${formatCurrency(o.estimated_value, o.currency)}</td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+};
+
+const handleRebalancePreview = async () => {
+  const container = document.getElementById('rebalanceResult');
+  if (!container) return;
+
+  const cashInput = document.getElementById('rebalanceCashInput');
+  let extraCash = parseFloat(cashInput?.value);
+  if (isNaN(extraCash) || extraCash < 0) extraCash = 0;
+
+  const btn = document.getElementById('btnRebalancePreview');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Calcolo...';
+  }
+  container.className = 'text-xs text-muted py-4 text-center';
+  container.innerHTML = '<div class="flex justify-center items-center py-2"><div class="spinner"></div></div>';
+
+  try {
+    const plan = await api.rebalancePreview(extraCash);
+    renderRebalancePlan(plan);
+  } catch (e) {
+    container.className = 'text-xs py-4 text-center';
+    container.innerHTML = `<div class="text-loss">${escapeHtml(e.message || 'Errore durante il calcolo del piano')}</div>`;
+    showToast(e.message || 'Errore durante il calcolo del piano di ribilanciamento', 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Calcola Ordini ➔';
+    }
+  }
+};
+
+// ==========================================
+// Dividendi (markup caricato in parallelo: guardie null ovunque)
+// ==========================================
+const renderDividends = (data) => {
+  const tbody = document.getElementById('dividendsTableBody');
+  const emptyEl = document.getElementById('dividendsEmpty');
+  const holdings = Array.isArray(data?.holdings) ? data.holdings : [];
+
+  const totalAnnualEl = document.getElementById('divTotalAnnual');
+  if (totalAnnualEl) totalAnnualEl.textContent = formatCurrency(data?.total_annual_dividend_eur || 0);
+  const totalMonthlyEl = document.getElementById('divTotalMonthly');
+  if (totalMonthlyEl) totalMonthlyEl.textContent = formatCurrency(data?.total_monthly_dividend_eur || 0);
+  const yocEl = document.getElementById('divYieldOnCost');
+  if (yocEl) yocEl.textContent = `${(Number(data?.portfolio_yield_on_cost) || 0).toFixed(2)}%`;
+
+  if (emptyEl) emptyEl.hidden = holdings.length > 0;
+  if (!tbody) return;
+
+  if (holdings.length === 0) {
+    tbody.innerHTML = emptyEl
+      ? ''
+      : '<tr><td colspan="8" class="text-center text-muted py-4">Nessun dividendo stimato per le posizioni attuali.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = holdings.map(h => {
+    const flag = h.market === 'IT' ? '🇮🇹' : '🇺🇸';
+    return `
+      <tr>
+        <td>
+          <div class="flex items-center gap-2">
+            <span>${flag}</span>
+            <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(h.ticker)}">${escapeHtml(h.ticker)}</a>
+          </div>
+        </td>
+        <td class="text-secondary">${escapeHtml(h.name || h.ticker)}</td>
+        <td class="text-right font-mono">${h.quantity ?? 0}</td>
+        <td class="text-right font-mono">${formatCurrency(h.annual_dividend_per_share || 0, h.currency)}</td>
+        <td class="text-right font-mono">${(Number(h.dividend_yield_pct) || 0).toFixed(2)}%</td>
+        <td class="text-right font-mono font-bold text-profit">${(Number(h.yield_on_cost_pct) || 0).toFixed(2)}%</td>
+        <td class="text-right font-mono font-bold text-profit">${formatCurrency(h.annual_income_eur || 0)}</td>
+        <td class="text-right font-mono text-secondary">${formatCurrency(h.monthly_income_eur || 0)}</td>
+      </tr>
+    `;
+  }).join('');
+};
+
+const loadDividends = async () => {
+  const card = document.getElementById('dividendsCard');
+  const tbody = document.getElementById('dividendsTableBody');
+  if (!card && !tbody) return; // markup Dividendi non ancora presente
+
+  const emptyEl = document.getElementById('dividendsEmpty');
+  const btn = document.getElementById('btnRefreshDividends');
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api.getDividends();
+    renderDividends(data);
+  } catch (e) {
+    if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-loss py-4">Errore nel caricamento dei dividendi</td></tr>';
+    }
+    if (emptyEl) emptyEl.hidden = true;
+    showToast(e.message || 'Errore nel caricamento dei dividendi', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+};
+
 // Modals
 const holdingModal = document.getElementById('holdingModal');
 const confirmSaveModal = document.getElementById('confirmSaveModal');
@@ -504,6 +747,48 @@ const closeTxModal = () => txModal?.classList.remove('active');
 
 const initPortfolio = () => {
   loadPortfolio();
+  loadRebalanceTargets();
+
+  // Smart Rebalancer: aggiunta target + piano ordini
+  document.getElementById('btnAddTarget')?.addEventListener('click', handleAddTarget);
+  document.getElementById('btnRebalancePreview')?.addEventListener('click', handleRebalancePreview);
+
+  const targetsBody = document.getElementById('targetsTableBody');
+  if (targetsBody) {
+    targetsBody.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-action="delete-target"]');
+      if (!btn) return;
+      const id = parseInt(btn.dataset.targetId, 10);
+      if (isNaN(id)) return;
+      const targetName = btn.dataset.targetName || 'questa allocazione';
+      if (!confirm(`Eliminare l'allocazione target "${targetName}"?`)) return;
+      try {
+        await api.deleteRebalanceTarget(id);
+        showToast('Allocazione target rimossa', 'info');
+        await loadRebalanceTargets();
+      } catch (err) {
+        showToast(err.message || 'Errore durante la rimozione dell\'allocazione target', 'error');
+      }
+    });
+  }
+
+  // Dividendi: refresh manuale
+  document.getElementById('btnRefreshDividends')?.addEventListener('click', loadDividends);
+
+  // Azioni delegate su tabelle (evita handler inline con id interpolati)
+  document.getElementById('portfolioTableBody')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action="delete-holding"]');
+    if (!btn) return;
+    const id = parseInt(btn.dataset.id, 10);
+    if (!isNaN(id) && window.deleteHolding) window.deleteHolding(id);
+  });
+
+  document.getElementById('transactionsTableBody')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action="delete-transaction"]');
+    if (!btn) return;
+    const id = parseInt(btn.dataset.id, 10);
+    if (!isNaN(id) && window.deleteTransaction) window.deleteTransaction(id);
+  });
 
   // Listen for theme changes to redraw canvas chart
   window.addEventListener('themeChanged', () => {
@@ -564,7 +849,7 @@ const initPortfolio = () => {
     listEl.innerHTML = Array.from(modifiedHoldings.values()).map(m => `
       <div class="change-item">
         <div>
-          <span class="font-bold text-primary font-mono">${m.ticker}</span>
+          <span class="font-bold text-primary font-mono">${escapeHtml(m.ticker)}</span>
         </div>
         <div class="text-right font-mono text-xs">
           <div>Q.tà: <span class="text-muted line-through">${m.originalQty}</span> ➔ <strong class="text-profit">${m.newQty}</strong></div>
@@ -641,9 +926,8 @@ const initPortfolio = () => {
           const results = await api.searchStocks(q);
           if (results && results.length > 0) {
             resultsDiv.innerHTML = results.map(r => `
-              <div class="autocomplete-item"
-                   onclick="document.getElementById('tickerInput').value='${r.ticker}';document.getElementById('autocompleteResults').style.display='none';">
-                <strong class="text-primary font-mono">${r.ticker}</strong> — <span class="text-secondary">${r.name}</span>
+              <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
+                <strong class="text-primary font-mono">${escapeHtml(r.ticker)}</strong> — <span class="text-secondary">${escapeHtml(r.name)}</span>
               </div>
             `).join('');
             resultsDiv.style.display = 'block';
@@ -654,6 +938,13 @@ const initPortfolio = () => {
           resultsDiv.style.display = 'none';
         }
       }, 250);
+    });
+
+    resultsDiv.addEventListener('click', (e) => {
+      const option = e.target.closest('.autocomplete-item[data-ticker]');
+      if (!option) return;
+      tickerInput.value = option.dataset.ticker;
+      resultsDiv.style.display = 'none';
     });
   }
 
@@ -744,9 +1035,8 @@ const initPortfolio = () => {
           const results = await api.searchStocks(q);
           if (results && results.length > 0) {
             txResultsDiv.innerHTML = results.map(r => `
-              <div class="autocomplete-item"
-                   onclick="document.getElementById('txTickerInput').value='${r.ticker}';document.getElementById('txAutocompleteResults').style.display='none';">
-                <strong class="text-primary font-mono">${r.ticker}</strong> — <span class="text-secondary">${r.name}</span>
+              <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
+                <strong class="text-primary font-mono">${escapeHtml(r.ticker)}</strong> — <span class="text-secondary">${escapeHtml(r.name)}</span>
               </div>
             `).join('');
             txResultsDiv.style.display = 'block';
@@ -757,6 +1047,13 @@ const initPortfolio = () => {
           txResultsDiv.style.display = 'none';
         }
       }, 250);
+    });
+
+    txResultsDiv.addEventListener('click', (e) => {
+      const option = e.target.closest('.autocomplete-item[data-ticker]');
+      if (!option) return;
+      txTickerInput.value = option.dataset.ticker;
+      txResultsDiv.style.display = 'none';
     });
   }
 

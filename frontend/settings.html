@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Impostazioni - Stock Monitor</title>
+    <link rel="icon" href="data:,">
     <script>
         (function () {
             try {
@@ -284,6 +285,14 @@
         </main>
     </div>
 
+    <script>
+        (function () {
+            var b = document.getElementById('btnThemeToggle');
+            if (b && b.firstElementChild) {
+                b.firstElementChild.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
+            }
+        })();
+    </script>
     <script type="module" src="/static/js/app.js?v=3.0.0"></script>
     <script type="module" src="/static/js/settings.js?v=3.0.0"></script>
 </body>

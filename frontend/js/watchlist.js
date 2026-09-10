@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showToast, showLoading, hideLoading } from './app.js?v=3.0.0';
+import { formatCurrency, formatPercent, showToast, showLoading, hideLoading, escapeHtml } from './app.js?v=3.0.0';
 
 let watchlistData = [];
 
@@ -57,9 +57,9 @@ const renderWatchlist = () => {
           <div class="flex items-center gap-2">
             <span>${flag}</span>
             <div>
-              <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${item.ticker}">${item.ticker}</a>
-              <div class="text-xs text-secondary">${item.name || item.ticker}</div>
-              ${item.notes ? `<div class="text-2xs text-muted mt-0.5" title="${item.notes}">📝 ${item.notes.substring(0, 26)}</div>` : ''}
+              <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(item.ticker)}">${escapeHtml(item.ticker)}</a>
+              <div class="text-xs text-secondary">${escapeHtml(item.name || item.ticker)}</div>
+              ${item.notes ? `<div class="text-2xs text-muted mt-0.5" title="${escapeHtml(item.notes)}">📝 ${escapeHtml(item.notes.substring(0, 26))}</div>` : ''}
             </div>
           </div>
         </td>
@@ -80,10 +80,10 @@ const renderWatchlist = () => {
           </div>
         </td>
         <td class="text-center">
-          <span class="badge ${item.rsi_badge || 'badge-hold'}" title="RSI a 14 periodi">${item.rsi || '--'} (${item.rsi_status || 'Neutro'})</span>
+          <span class="badge ${escapeHtml(item.rsi_badge || 'badge-hold')}" title="RSI a 14 periodi">${item.rsi || '--'} (${escapeHtml(item.rsi_status || 'Neutro')})</span>
         </td>
         <td class="text-center">
-          <button class="btn btn-ghost btn-sm btn-alert" onclick="window.openEditAlertModal(${item.id}, '${item.ticker}', ${item.alert_above || 'null'}, ${item.alert_below || 'null'})" title="Modifica Alert">
+          <button class="btn btn-ghost btn-sm btn-alert" data-action="edit-alert" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" data-above="${item.alert_above ?? ''}" data-below="${item.alert_below ?? ''}" title="Modifica Alert">
             ${alertHtml}
           </button>
         </td>
@@ -91,16 +91,16 @@ const renderWatchlist = () => {
         <td class="text-right font-mono text-xs text-profit">${item.dividend_yield ? `${item.dividend_yield.toFixed(2)}%` : '--'}</td>
         <td class="text-center">
           <div class="flex justify-center gap-1.5 flex-wrap">
-            <button class="btn btn-ghost btn-sm" onclick="window.openStockModal('${item.ticker}')" title="Apri Scheda Completa" aria-label="Analisi e scheda completa per ${item.ticker}">
+            <button class="btn btn-ghost btn-sm" data-action="open-stock" data-ticker="${escapeHtml(item.ticker)}" title="Apri Scheda Completa" aria-label="Analisi e scheda completa per ${escapeHtml(item.ticker)}">
               🔍
             </button>
-            <button class="btn btn-ghost btn-sm" onclick="window.openEditAlertModal(${item.id}, '${item.ticker}', ${item.alert_above || 'null'}, ${item.alert_below || 'null'})" title="Imposta Alert Prezzo" aria-label="Imposta alert di prezzo per ${item.ticker}">
+            <button class="btn btn-ghost btn-sm" data-action="edit-alert" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" data-above="${item.alert_above ?? ''}" data-below="${item.alert_below ?? ''}" title="Imposta Alert Prezzo" aria-label="Imposta alert di prezzo per ${escapeHtml(item.ticker)}">
               🔔
             </button>
-            <button class="btn btn-primary btn-sm" onclick="window.location.href='/static/portfolio.html?add=${encodeURIComponent(item.ticker)}'" title="Aggiungi alle Holding" aria-label="Aggiungi ${item.ticker} al portafoglio">
+            <button class="btn btn-primary btn-sm" data-action="add-holding" data-ticker="${escapeHtml(item.ticker)}" title="Aggiungi alle Holding" aria-label="Aggiungi ${escapeHtml(item.ticker)} al portafoglio">
               💼
             </button>
-            <button class="btn btn-ghost btn-sm text-loss" onclick="window.removeFromWatchlist(${item.id}, '${item.ticker}')" title="Rimuovi dal radar" aria-label="Rimuovi ${item.ticker} dalla watchlist">
+            <button class="btn btn-ghost btn-sm text-loss" data-action="remove-watchlist" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" title="Rimuovi dal radar" aria-label="Rimuovi ${escapeHtml(item.ticker)} dalla watchlist">
               🗑️
             </button>
           </div>
@@ -191,6 +191,30 @@ const initWatchlist = () => {
   document.getElementById('closeEditAlertModal')?.addEventListener('click', closeEditAlertModal);
   document.getElementById('cancelEditAlert')?.addEventListener('click', closeEditAlertModal);
 
+  // Delegated row actions (avoids inline handlers with interpolated tickers)
+  const tableBody = document.getElementById('watchlistTableBody');
+  if (tableBody) {
+    tableBody.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-action]');
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const ticker = btn.dataset.ticker || '';
+
+      if (action === 'open-stock') {
+        if (window.openStockModal) window.openStockModal(ticker);
+      } else if (action === 'add-holding') {
+        window.location.href = `/static/portfolio.html?add=${encodeURIComponent(ticker)}`;
+      } else if (action === 'remove-watchlist') {
+        window.removeFromWatchlist(parseInt(btn.dataset.id, 10), ticker);
+      } else if (action === 'edit-alert') {
+        const id = parseInt(btn.dataset.id, 10);
+        const above = btn.dataset.above !== '' ? parseFloat(btn.dataset.above) : null;
+        const below = btn.dataset.below !== '' ? parseFloat(btn.dataset.below) : null;
+        window.openEditAlertModal(id, ticker, above, below);
+      }
+    });
+  }
+
   let searchTimer = null;
   document.getElementById('watchlistSearch')?.addEventListener('input', () => {
     clearTimeout(searchTimer);
@@ -262,9 +286,8 @@ const initWatchlist = () => {
           const results = await api.searchStocks(q);
           if (results && results.length > 0) {
             resultsDiv.innerHTML = results.map(r => `
-              <div class="autocomplete-item"
-                   onclick="document.getElementById('wlTickerInput').value='${r.ticker}';document.getElementById('wlAutocompleteResults').style.display='none';">
-                <strong class="text-primary font-mono">${r.ticker}</strong> — <span class="text-secondary">${r.name}</span>
+              <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
+                <strong class="text-primary font-mono">${escapeHtml(r.ticker)}</strong> — <span class="text-secondary">${escapeHtml(r.name)}</span>
               </div>
             `).join('');
             resultsDiv.style.display = 'block';
@@ -275,6 +298,13 @@ const initWatchlist = () => {
           resultsDiv.style.display = 'none';
         }
       }, 250);
+    });
+
+    resultsDiv.addEventListener('click', (e) => {
+      const option = e.target.closest('.autocomplete-item[data-ticker]');
+      if (!option) return;
+      input.value = option.dataset.ticker;
+      resultsDiv.style.display = 'none';
     });
   }
 };

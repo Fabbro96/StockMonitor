@@ -152,22 +152,78 @@ export const toggleTheme = () => {
 };
 window.toggleTheme = toggleTheme;
 
+export const initTopBarControls = () => {
+  const topbar = document.querySelector('.topbar');
+  if (!topbar) return;
+
+  // Trova o crea il contenitore dei controlli sulla destra della topbar
+  let actionGroup = topbar.querySelector('.topbar-actions') || 
+                    topbar.querySelector('#marketStatus')?.parentElement ||
+                    topbar.querySelector('.flex.items-center:last-child') ||
+                    topbar.querySelector('.flex.gap-2.items-center') ||
+                    topbar.querySelector('.flex:last-child');
+  
+  if (!actionGroup) {
+    actionGroup = document.createElement('div');
+    actionGroup.className = 'flex items-center gap-2 topbar-actions';
+    topbar.appendChild(actionGroup);
+  }
+
+  // 1. Bottone Ricerca Globale (Spotlight Ctrl+K)
+  if (!document.getElementById('btnGlobalSearch')) {
+    const searchBtn = document.createElement('button');
+    searchBtn.className = 'topbar-search-btn';
+    searchBtn.id = 'btnGlobalSearch';
+    searchBtn.onclick = () => window.openCommandPalette && window.openCommandPalette();
+    searchBtn.title = 'Cerca titoli o naviga (Ctrl+K)';
+    searchBtn.innerHTML = `
+      <span style="font-size: 0.95rem;">🔍</span>
+      <span class="search-text">Cerca...</span>
+      <kbd class="kbd-badge">Ctrl K</kbd>
+    `;
+    const themeBtn = document.getElementById('btnThemeToggle');
+    if (themeBtn && themeBtn.parentNode) {
+      themeBtn.parentNode.insertBefore(searchBtn, themeBtn);
+    } else {
+      actionGroup.appendChild(searchBtn);
+    }
+  }
+
+  // 2. Bottone Scorciatoie da Tastiera (?)
+  if (!document.getElementById('btnShortcutsHelp')) {
+    const helpBtn = document.createElement('button');
+    helpBtn.className = 'topbar-help-btn';
+    helpBtn.id = 'btnShortcutsHelp';
+    helpBtn.onclick = () => window.openShortcutsHelp && window.openShortcutsHelp();
+    helpBtn.title = 'Scorciatoie da tastiera (?)';
+    helpBtn.setAttribute('aria-label', 'Scorciatoie da tastiera');
+    helpBtn.innerHTML = `<span>?</span>`;
+    const themeBtn = document.getElementById('btnThemeToggle');
+    if (themeBtn && themeBtn.parentNode) {
+      themeBtn.parentNode.insertBefore(helpBtn, themeBtn.nextSibling);
+    } else {
+      actionGroup.appendChild(helpBtn);
+    }
+  }
+
+  // 3. Bottone Cambio Tema (se non presente nel template HTML)
+  if (!document.getElementById('btnThemeToggle')) {
+    const saved = getTheme();
+    const themeBtn = document.createElement('button');
+    themeBtn.className = 'theme-toggle-btn';
+    themeBtn.id = 'btnThemeToggle';
+    themeBtn.onclick = () => window.toggleTheme();
+    themeBtn.title = 'Cambia tema';
+    themeBtn.setAttribute('aria-label', 'Cambia tema');
+    themeBtn.innerHTML = `<span>${saved === 'light' ? '☀️' : '🌙'}</span>`;
+    actionGroup.appendChild(themeBtn);
+  }
+};
+
 const initTheme = () => {
   const saved = getTheme();
   document.documentElement.setAttribute('data-theme', saved);
-
-  // Inject Theme Toggle into Topbar if not present in HTML
-  const topbar = document.querySelector('.topbar');
-  if (topbar && !document.getElementById('btnThemeToggle')) {
-    const toggleContainer = document.createElement('div');
-    toggleContainer.className = 'flex items-center gap-2';
-    toggleContainer.innerHTML = `
-      <button class="theme-toggle-btn" id="btnThemeToggle" onclick="window.toggleTheme()" title="Cambia tema" aria-label="Cambia tema">
-        <span>${saved === 'light' ? '☀️' : '🌙'}</span>
-      </button>
-    `;
-    topbar.appendChild(toggleContainer);
-  }
+  initTopBarControls();
   updateThemeToggleButton();
 };
 
@@ -910,6 +966,367 @@ const loadGoogleFont = () => {
   document.head.appendChild(link);
 };
 
+// ==========================================
+// Live Price Flash Micro-Interaction
+// ==========================================
+export const flashPriceChange = (el, isUp) => {
+  if (!el) return;
+  const cls = isUp ? 'flash-up' : 'flash-down';
+  el.classList.remove('flash-up', 'flash-down');
+  void el.offsetWidth; // Trigger reflow per riavviare l'animazione
+  el.classList.add(cls);
+  setTimeout(() => el.classList.remove(cls), 850);
+};
+window.flashPriceChange = flashPriceChange;
+
+// ==========================================
+// Command Palette & Keyboard Shortcuts System
+// ==========================================
+const COMMAND_NAV_ITEMS = [
+  { type: 'nav', icon: '🏠', title: 'Dashboard', desc: 'Panoramica patrimonio, indici globali e heatmap', url: '/static/index.html', shortcut: 'D' },
+  { type: 'nav', icon: '⭐', title: 'Watchlist & Radar', desc: 'Monitoraggio titoli osservati e alert prezzi', url: '/static/watchlist.html', shortcut: 'W' },
+  { type: 'nav', icon: '💼', title: 'Portafoglio & Ledger', desc: 'Holdings, trade ledger, dividendi e ribilanciamento', url: '/static/portfolio.html', shortcut: 'P' },
+  { type: 'nav', icon: '🧠', title: 'Consigli IA & Sentiment', desc: 'Report di intelligence e raccomandazioni operative', url: '/static/advice.html', shortcut: 'C' },
+  { type: 'nav', icon: '⚙️', title: 'Impostazioni & Alert', desc: 'Configurazione budget, notifiche Telegram e profilo', url: '/static/settings.html', shortcut: 'S' },
+  { type: 'action', icon: '🌓', title: 'Alterna Tema (Dark/Light)', desc: 'Passa al tema chiaro o scuro', action: () => toggleTheme(), shortcut: 'T' },
+  { type: 'action', icon: '❓', title: 'Scorciatoie Tastiera', desc: 'Visualizza tutte le scorciatoie disponibili', action: () => openShortcutsHelp(), shortcut: '?' }
+];
+
+const DEFAULT_POPULAR_STOCKS = [
+  { ticker: 'FTSEMIB.MI', name: 'FTSE MIB', market: 'IT', icon: '🇮🇹' },
+  { ticker: '^GSPC', name: 'S&P 500', market: 'US', icon: '🇺🇸' },
+  { ticker: '^IXIC', name: 'NASDAQ', market: 'US', icon: '🇺🇸' },
+  { ticker: 'BTC-USD', name: 'Bitcoin', market: 'CRYPTO', icon: '🪙' },
+  { ticker: 'GC=F', name: 'Oro (Futures)', market: 'COMMODITY', icon: '🥇' },
+  { ticker: 'RACE.MI', name: 'Ferrari N.V.', market: 'IT', icon: '🏎️' },
+  { ticker: 'ENEL.MI', name: 'Enel S.p.A.', market: 'IT', icon: '⚡' },
+  { ticker: 'AAPL', name: 'Apple Inc.', market: 'US', icon: '🍏' },
+  { ticker: 'NVDA', name: 'NVIDIA Corp.', market: 'US', icon: '🟢' }
+];
+
+let activePaletteIndex = 0;
+let paletteCurrentItems = [];
+let paletteSearchDebounce = null;
+
+const injectCommandPaletteHTML = () => {
+  if (document.getElementById('commandPaletteBackdrop')) return;
+
+  const html = `
+    <div class="cmd-palette-backdrop" id="commandPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Command Palette">
+      <div class="cmd-palette-card" onclick="event.stopPropagation()">
+        <div class="cmd-palette-header">
+          <span class="cmd-palette-search-icon">🔍</span>
+          <input type="text" class="cmd-palette-input" id="cmdPaletteInput" placeholder="Cerca titolo, ticker o naviga (es. AAPL, RACE, Portafoglio)..." autocomplete="off" spellcheck="false" />
+          <kbd class="kbd-badge" style="cursor: pointer;" onclick="window.closeCommandPalette()">esc</kbd>
+        </div>
+        <div class="cmd-palette-body" id="cmdPaletteResults">
+          <!-- Popolato dinamicamente -->
+        </div>
+        <div class="cmd-palette-footer">
+          <div class="cmd-hints">
+            <span class="cmd-hint-item"><kbd class="kbd-badge">↑↓</kbd> Naviga</span>
+            <span class="cmd-hint-item"><kbd class="kbd-badge">↵</kbd> Seleziona</span>
+            <span class="cmd-hint-item"><kbd class="kbd-badge">esc</kbd> Chiudi</span>
+          </div>
+          <div class="text-xs text-muted font-mono">Stock Monitor Spotlight</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="shortcutsHelpModal" onclick="if(event.target===this) window.closeShortcutsHelp()" style="z-index: 10000;">
+      <div class="modal-card" style="max-width: 540px;" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <h3 class="modal-title">⌨️ Scorciatoie da Tastiera</h3>
+          <button class="btn-close" onclick="window.closeShortcutsHelp()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-xs text-secondary mb-3">Naviga e gestisci il tuo portafoglio ad alta velocità con questi comandi globali:</p>
+          <div class="shortcuts-grid">
+            <div class="shortcut-row">
+              <span class="shortcut-action">Cerca Titolo / Naviga</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">Ctrl</kbd> + <kbd class="kbd-badge">K</kbd> / <kbd class="kbd-badge">/</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Vai alla Dashboard</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">D</kbd> / <kbd class="kbd-badge">1</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Vai alla Watchlist</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">W</kbd> / <kbd class="kbd-badge">2</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Vai al Portafoglio</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">P</kbd> / <kbd class="kbd-badge">3</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Vai ai Consigli IA</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">C</kbd> / <kbd class="kbd-badge">4</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Vai alle Impostazioni</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">S</kbd> / <kbd class="kbd-badge">5</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Alterna Tema Chiaro / Scuro</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">T</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Apri questa Guida</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">?</kbd></div>
+            </div>
+            <div class="shortcut-row">
+              <span class="shortcut-action">Chiudi Finestre e Modal</span>
+              <div class="shortcut-keys"><kbd class="kbd-badge">Esc</kbd></div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" onclick="window.closeShortcutsHelp()">Ho capito</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  const backdrop = document.getElementById('commandPaletteBackdrop');
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) closeCommandPalette();
+  });
+
+  const input = document.getElementById('cmdPaletteInput');
+  input.addEventListener('input', (e) => {
+    const q = e.target.value.trim();
+    clearTimeout(paletteSearchDebounce);
+    paletteSearchDebounce = setTimeout(() => {
+      renderCommandPaletteResults(q);
+    }, 150);
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (paletteCurrentItems.length > 0) {
+        activePaletteIndex = (activePaletteIndex + 1) % paletteCurrentItems.length;
+        updatePaletteSelection();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (paletteCurrentItems.length > 0) {
+        activePaletteIndex = (activePaletteIndex - 1 + paletteCurrentItems.length) % paletteCurrentItems.length;
+        updatePaletteSelection();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (paletteCurrentItems.length > 0 && paletteCurrentItems[activePaletteIndex]) {
+        executePaletteItem(paletteCurrentItems[activePaletteIndex]);
+      }
+    }
+  });
+};
+
+const executePaletteItem = (item) => {
+  closeCommandPalette();
+  if (item.type === 'stock') {
+    if (window.openStockModal) {
+      window.openStockModal(item.ticker);
+    }
+  } else if (item.type === 'nav') {
+    if (item.url) window.location.href = item.url;
+  } else if (item.type === 'action') {
+    if (typeof item.action === 'function') item.action();
+  }
+};
+
+const updatePaletteSelection = () => {
+  const container = document.getElementById('cmdPaletteResults');
+  if (!container) return;
+  const items = container.querySelectorAll('.cmd-palette-item');
+  items.forEach((el, idx) => {
+    if (idx === activePaletteIndex) {
+      el.classList.add('active');
+      el.scrollIntoView({ block: 'nearest' });
+    } else {
+      el.classList.remove('active');
+    }
+  });
+};
+
+const renderCommandPaletteResults = async (query = '') => {
+  const container = document.getElementById('cmdPaletteResults');
+  if (!container) return;
+
+  const q = query.toLowerCase();
+  paletteCurrentItems = [];
+  activePaletteIndex = 0;
+
+  // 1. Filtra elementi di navigazione
+  const matchedNav = COMMAND_NAV_ITEMS.filter(item => 
+    !q || 
+    item.title.toLowerCase().includes(q) || 
+    item.desc.toLowerCase().includes(q) || 
+    (item.shortcut && item.shortcut.toLowerCase() === q)
+  );
+
+  let stockResults = [];
+  if (q.length >= 2) {
+    try {
+      stockResults = await api.searchStocks(query).catch(() => []);
+    } catch (e) {
+      stockResults = [];
+    }
+  } else if (!q) {
+    stockResults = DEFAULT_POPULAR_STOCKS;
+  }
+
+  let html = '';
+
+  if (matchedNav.length > 0) {
+    html += `<div class="cmd-palette-category">⚡ Navigazione & Azioni Rapide</div>`;
+    matchedNav.forEach(item => {
+      const idx = paletteCurrentItems.length;
+      paletteCurrentItems.push(item);
+      html += `
+        <div class="cmd-palette-item ${idx === 0 ? 'active' : ''}" data-idx="${idx}">
+          <div class="cmd-item-left">
+            <span class="cmd-item-icon">${item.icon}</span>
+            <div>
+              <div class="cmd-item-title">${item.title}</div>
+              <div class="cmd-item-desc">${item.desc}</div>
+            </div>
+          </div>
+          <div class="cmd-item-right">
+            ${item.shortcut ? `<kbd class="kbd-badge">${item.shortcut}</kbd>` : ''}
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  if (stockResults.length > 0) {
+    const headerTitle = q ? '📈 Titoli Corrispondenti' : '⭐ Titoli & Indici Chiave';
+    html += `<div class="cmd-palette-category">${headerTitle}</div>`;
+    stockResults.slice(0, 8).forEach(s => {
+      const idx = paletteCurrentItems.length;
+      const isIT = (s.market === 'IT' || (s.ticker || '').endsWith('.MI'));
+      const flag = s.icon || (isIT ? '🇮🇹' : '🇺🇸');
+      const stockItem = { type: 'stock', ticker: s.ticker, name: s.name, market: s.market };
+      paletteCurrentItems.push(stockItem);
+
+      html += `
+        <div class="cmd-palette-item ${idx === 0 ? 'active' : ''}" data-idx="${idx}">
+          <div class="cmd-item-left">
+            <span class="cmd-item-icon">${flag}</span>
+            <div>
+              <div class="cmd-item-title font-mono">${s.ticker} <span class="text-xs text-secondary font-normal">— ${s.name || ''}</span></div>
+              <div class="cmd-item-desc">Apri analisi fondamentale, RSI, grafici e scheda titolo</div>
+            </div>
+          </div>
+          <div class="cmd-item-right">
+            <span class="badge ${isIT ? 'badge-primary' : 'badge-hold'} text-xs">${s.market || (isIT ? 'IT' : 'US')}</span>
+            <span class="text-muted text-xs">↵</span>
+          </div>
+        </div>
+      `;
+    });
+  }
+
+  if (paletteCurrentItems.length === 0) {
+    html = `<div class="text-muted text-xs py-8 text-center">Nessun risultato trovato per "${query}". Premi <kbd class="kbd-badge">esc</kbd> per chiudere.</div>`;
+  }
+
+  container.innerHTML = html;
+
+  container.querySelectorAll('.cmd-palette-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.idx);
+      if (!isNaN(idx) && paletteCurrentItems[idx]) {
+        executePaletteItem(paletteCurrentItems[idx]);
+      }
+    });
+  });
+};
+
+export const openCommandPalette = () => {
+  injectCommandPaletteHTML();
+  const backdrop = document.getElementById('commandPaletteBackdrop');
+  const input = document.getElementById('cmdPaletteInput');
+  if (!backdrop || !input) return;
+  backdrop.classList.add('active');
+  input.value = '';
+  renderCommandPaletteResults('');
+  setTimeout(() => input.focus(), 60);
+};
+window.openCommandPalette = openCommandPalette;
+
+export const closeCommandPalette = () => {
+  const backdrop = document.getElementById('commandPaletteBackdrop');
+  if (backdrop) backdrop.classList.remove('active');
+};
+window.closeCommandPalette = closeCommandPalette;
+
+export const openShortcutsHelp = () => {
+  closeCommandPalette();
+  injectCommandPaletteHTML();
+  const modal = document.getElementById('shortcutsHelpModal');
+  if (modal) modal.classList.add('active');
+};
+window.openShortcutsHelp = openShortcutsHelp;
+
+export const closeShortcutsHelp = () => {
+  const modal = document.getElementById('shortcutsHelpModal');
+  if (modal) modal.classList.remove('active');
+};
+window.closeShortcutsHelp = closeShortcutsHelp;
+
+const initGlobalKeyboardShortcuts = () => {
+  window.addEventListener('keydown', (e) => {
+    const activeTag = document.activeElement ? document.activeElement.tagName.toLowerCase() : '';
+    const isInput = activeTag === 'input' || activeTag === 'textarea' || document.activeElement?.isContentEditable;
+
+    // Ctrl+K o Cmd+K
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      openCommandPalette();
+      return;
+    }
+
+    // '/' quando non si sta digitando in un campo
+    if (e.key === '/' && !isInput) {
+      e.preventDefault();
+      openCommandPalette();
+      return;
+    }
+
+    // Escape chiude tutto
+    if (e.key === 'Escape') {
+      closeCommandPalette();
+      closeShortcutsHelp();
+      document.querySelectorAll('.modal-overlay.active, .modal-backdrop.active').forEach(m => m.classList.remove('active'));
+      return;
+    }
+
+    // '?' apre la guida scorciatoie
+    if (e.key === '?' && !isInput) {
+      e.preventDefault();
+      openShortcutsHelp();
+      return;
+    }
+
+    // Navigazione rapida a tasto singolo quando non si è in un campo input e nessun modal è aperto
+    const isModalOpen = document.querySelector('.modal-overlay.active, .modal-backdrop.active, .cmd-palette-backdrop.active');
+    if (!isInput && !isModalOpen && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const k = e.key.toLowerCase();
+      if (k === '1' || k === 'd') window.location.href = '/static/index.html';
+      else if (k === '2' || k === 'w') window.location.href = '/static/watchlist.html';
+      else if (k === '3' || k === 'p') window.location.href = '/static/portfolio.html';
+      else if (k === '4' || k === 'c') window.location.href = '/static/advice.html';
+      else if (k === '5' || k === 's') window.location.href = '/static/settings.html';
+      else if (k === 't') toggleTheme();
+    }
+  });
+};
+
 const initApp = () => {
   loadGoogleFont();
   initTheme();
@@ -918,6 +1335,8 @@ const initApp = () => {
   initTickerMarquee();
   injectStockModalHTML();
   initSteppers();
+  injectCommandPaletteHTML();
+  initGlobalKeyboardShortcuts();
 
   // Listen for theme changes to update modal chart
   window.addEventListener('themeChanged', () => {
@@ -965,3 +1384,4 @@ if (document.readyState === 'loading') {
 } else {
   initApp();
 }
+

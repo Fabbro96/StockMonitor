@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse, FileResponse
 from sqlalchemy.future import select
 import uvicorn
@@ -95,6 +96,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZip compression middleware (riduce i payload JSON pesanti fino al 75-80%)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.middleware("http")
 async def add_no_cache_header(request, call_next):

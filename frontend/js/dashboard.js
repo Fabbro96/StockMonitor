@@ -415,6 +415,12 @@ const loadDashboardData = async (isSilentRefresh = false) => {
     const divYieldEl = document.getElementById('statDividendYield');
     if (divYieldEl) divYieldEl.textContent = `Yield Stimato: ${(summary.estimated_dividend_yield || 0).toFixed(2)}%`;
 
+    if (isSilentRefresh && window.flashPriceChange) {
+      if (totalValEl) window.flashPriceChange(totalValEl, (summary.daily_pnl || 0) >= 0);
+      if (dailyEl) window.flashPriceChange(dailyEl, (summary.daily_pnl || 0) >= 0);
+      if (totalEl) window.flashPriceChange(totalEl, (summary.total_pnl || 0) >= 0);
+    }
+
     // Top Gainer
     const tgEl = document.getElementById('statTopGainer');
     const tgDescEl = document.getElementById('statTopGainerDesc');

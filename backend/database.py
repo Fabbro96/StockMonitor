@@ -96,6 +96,20 @@ async def init_db() -> None:
         except Exception:
             pass
 
+        # Indici ad alte prestazioni per query multi-utente e serie storiche
+        for idx_sql in [
+            "CREATE INDEX IF NOT EXISTS ix_holdings_user_ticker ON holdings(user_id, ticker)",
+            "CREATE INDEX IF NOT EXISTS ix_transactions_user_date ON transactions(user_id, date)",
+            "CREATE INDEX IF NOT EXISTS ix_watchlist_user_ticker ON watchlist_items(user_id, ticker)",
+            "CREATE INDEX IF NOT EXISTS ix_alert_rules_user ON alert_rules(user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_stock_history_ticker_date ON stock_history(ticker, date)"
+        ]:
+            try:
+                await conn.execute(text(idx_sql))
+            except Exception:
+                pass
+
+
 
 from contextlib import asynccontextmanager
 

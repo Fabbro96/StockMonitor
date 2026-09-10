@@ -852,8 +852,16 @@ class MarketDataService:
         def _sync_search():
             try:
                 stock = yf.Ticker(query, session=_yf_session)
-                info = stock.info or {}
-                name = info.get("shortName") or info.get("longName")
+                info = getattr(stock, 'fast_info', None)
+                name = None
+                if info and hasattr(info, 'currency'):
+                    name = query.upper()
+                try:
+                    full_info = stock.info or {}
+                    name = full_info.get("shortName") or full_info.get("longName") or name
+                except Exception:
+                    pass
+
                 if name:
                     return [{
                         "ticker": query.upper(),
@@ -864,7 +872,11 @@ class MarketDataService:
             except Exception:
                 return []
 
-        remote = await asyncio.to_thread(_sync_search)
+        try:
+            remote = await asyncio.wait_for(asyncio.to_thread(_sync_search), timeout=1.5)
+        except Exception:
+            remote = []
+
         for r in remote:
             if not any(m['ticker'] == r['ticker'] for m in matches):
                 matches.append(r)

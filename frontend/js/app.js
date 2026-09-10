@@ -1043,32 +1043,8 @@ const injectCommandPaletteHTML = () => {
           <p class="text-xs text-secondary mb-3">Naviga e gestisci il tuo portafoglio ad alta velocità con questi comandi globali:</p>
           <div class="shortcuts-grid">
             <div class="shortcut-row">
-              <span class="shortcut-action">Cerca Titolo / Naviga</span>
+              <span class="shortcut-action">Apri Command Palette / Cerca</span>
               <div class="shortcut-keys"><kbd class="kbd-badge">Ctrl</kbd> + <kbd class="kbd-badge">K</kbd> / <kbd class="kbd-badge">/</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Vai alla Dashboard</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">D</kbd> / <kbd class="kbd-badge">1</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Vai alla Watchlist</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">W</kbd> / <kbd class="kbd-badge">2</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Vai al Portafoglio</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">P</kbd> / <kbd class="kbd-badge">3</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Vai ai Consigli IA</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">C</kbd> / <kbd class="kbd-badge">4</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Vai alle Impostazioni</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">S</kbd> / <kbd class="kbd-badge">5</kbd></div>
-            </div>
-            <div class="shortcut-row">
-              <span class="shortcut-action">Alterna Tema Chiaro / Scuro</span>
-              <div class="shortcut-keys"><kbd class="kbd-badge">T</kbd></div>
             </div>
             <div class="shortcut-row">
               <span class="shortcut-action">Apri questa Guida</span>
@@ -1100,7 +1076,7 @@ const injectCommandPaletteHTML = () => {
     clearTimeout(paletteSearchDebounce);
     paletteSearchDebounce = setTimeout(() => {
       renderCommandPaletteResults(q);
-    }, 150);
+    }, 300);
   });
 
   input.addEventListener('keydown', (e) => {
@@ -1170,10 +1146,20 @@ const renderCommandPaletteResults = async (query = '') => {
 
   let stockResults = [];
   if (q.length >= 2) {
+    // Filtro istantaneo locale sui titoli predefiniti/noti
+    const localMatches = DEFAULT_POPULAR_STOCKS.filter(s => 
+      s.ticker.toLowerCase().includes(q) || 
+      (s.name && s.name.toLowerCase().includes(q))
+    );
     try {
-      stockResults = await api.searchStocks(query).catch(() => []);
+      const remote = await api.searchStocks(query).catch(() => []);
+      const combined = [...localMatches];
+      for (const r of remote) {
+        if (!combined.some(c => c.ticker === r.ticker)) combined.push(r);
+      }
+      stockResults = combined;
     } catch (e) {
-      stockResults = [];
+      stockResults = localMatches;
     }
   } else if (!q) {
     stockResults = DEFAULT_POPULAR_STOCKS;
@@ -1311,18 +1297,6 @@ const initGlobalKeyboardShortcuts = () => {
       e.preventDefault();
       openShortcutsHelp();
       return;
-    }
-
-    // Navigazione rapida a tasto singolo quando non si è in un campo input e nessun modal è aperto
-    const isModalOpen = document.querySelector('.modal-overlay.active, .modal-backdrop.active, .cmd-palette-backdrop.active');
-    if (!isInput && !isModalOpen && !e.ctrlKey && !e.altKey && !e.metaKey) {
-      const k = e.key.toLowerCase();
-      if (k === '1' || k === 'd') window.location.href = '/static/index.html';
-      else if (k === '2' || k === 'w') window.location.href = '/static/watchlist.html';
-      else if (k === '3' || k === 'p') window.location.href = '/static/portfolio.html';
-      else if (k === '4' || k === 'c') window.location.href = '/static/advice.html';
-      else if (k === '5' || k === 's') window.location.href = '/static/settings.html';
-      else if (k === 't') toggleTheme();
     }
   });
 };

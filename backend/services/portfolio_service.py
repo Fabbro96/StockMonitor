@@ -77,23 +77,54 @@ async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None) -> 
 
     result = await db.execute(query)
     holdings = result.scalars().all()
+    if not holdings:
+        return []
+
     usd_to_eur = await MarketDataService.get_fx_rate("USD", "EUR")
+
+    # 1. Recupera la cronologia recente da DB per tutti gli stock_id in una singola query
+    stock_ids = [h.stock_id for h in holdings]
+    ph_result = await db.execute(
+        select(PriceHistory)
+        .where(PriceHistory.stock_id.in_(stock_ids))
+        .order_by(PriceHistory.timestamp.desc())
+    )
+    db_prices: dict[int, list[PriceHistory]] = {}
+    for ph in ph_result.scalars().all():
+        db_prices.setdefault(ph.stock_id, []).append(ph)
+
+    # 2. Per i titoli senza prezzo valido nel DB, scarica i prezzi live in un'unica chiamata BATCH
+    missing_live_tickers = []
+    for h in holdings:
+        ph_list = db_prices.get(h.stock_id, [])
+        if not (ph_list and _is_valid_float(ph_list[0].close)):
+            missing_live_tickers.append(h.stock.ticker)
+
+    batch_prices = {}
+    if missing_live_tickers:
+        batch_prices = await MarketDataService.fetch_batch_prices(missing_live_tickers)
 
     portfolio = []
     for h in holdings:
         stock = h.stock
-        price_info = await get_latest_price(
-            db, h.stock_id, stock.ticker, fallback_price=h.avg_purchase_price
-        )
-        raw_p = price_info.get("price")
-        current_price = float(raw_p) if _is_valid_float(raw_p) else (float(h.avg_purchase_price) if _is_valid_float(h.avg_purchase_price) else 0.0)
-        previous_close = float(price_info["previous_close"]) if _is_valid_float(price_info.get("previous_close")) else None
+        ph_list = db_prices.get(h.stock_id, [])
 
+        if ph_list and _is_valid_float(ph_list[0].close):
+            raw_p = float(ph_list[0].close)
+            prev_close = float(ph_list[1].close) if (len(ph_list) > 1 and _is_valid_float(ph_list[1].close)) else None
+            is_stale = False
+        else:
+            pdata = batch_prices.get(stock.ticker) or {}
+            raw_p = pdata.get("close")
+            prev_close = float(pdata["previous_close"]) if _is_valid_float(pdata.get("previous_close")) else None
+            is_stale = bool(pdata.get("stale", False))
+
+        current_price = float(raw_p) if _is_valid_float(raw_p) else (float(h.avg_purchase_price) if _is_valid_float(h.avg_purchase_price) else 0.0)
         pnl = calculate_pnl(current_price, h.avg_purchase_price, h.quantity)
 
         daily_pnl = None
-        if previous_close:
-            daily_pnl = round((current_price - previous_close) * h.quantity, 2)
+        if prev_close:
+            daily_pnl = round((current_price - prev_close) * h.quantity, 2)
 
         currency = stock.currency or ("EUR" if stock.ticker.endswith(".MI") else "USD")
         market = stock.market or ("IT" if stock.ticker.endswith(".MI") else "US")
@@ -109,8 +140,8 @@ async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None) -> 
             "quantity": h.quantity,
             "avg_purchase_price": h.avg_purchase_price,
             "current_price": current_price,
-            "previous_close": previous_close,
-            "price_stale": price_info.get("stale", False),
+            "previous_close": prev_close,
+            "price_stale": is_stale,
             "total_value": round(h.quantity * current_price, 2),
             "total_invested": round(h.quantity * h.avg_purchase_price, 2),
             "total_value_eur": round(h.quantity * current_price * fx_rate, 2),

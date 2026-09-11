@@ -883,6 +883,72 @@ export const openStockModal = async (ticker) => {
 
 window.openStockModal = openStockModal;
 
+// Editor mercato di un titolo (lo Stock è globale: la correzione vale per tutti).
+export const openMarketEditor = (ticker, currentMarket = 'US', onSaved = null) => {
+  const normalizedTicker = (ticker || '').toUpperCase();
+  if (!normalizedTicker) return;
+  const current = (currentMarket || 'US').toUpperCase();
+
+  document.getElementById('marketEditorModal')?.remove();
+
+  const options = [
+    { value: 'IT', label: '🇮🇹 IT — Borsa Italiana' },
+    { value: 'US', label: '🇺🇸 US — Wall Street' },
+    { value: 'EU', label: '🇪🇺 EU — Europa' }
+  ];
+
+  const modalEl = document.createElement('div');
+  modalEl.className = 'modal-overlay';
+  modalEl.id = 'marketEditorModal';
+  modalEl.setAttribute('role', 'dialog');
+  modalEl.setAttribute('aria-modal', 'true');
+  modalEl.setAttribute('aria-labelledby', 'marketEditorTitle');
+  modalEl.innerHTML = `
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 class="modal-title" id="marketEditorTitle">🏛️ Mercato di ${escapeHtml(normalizedTicker)}</h2>
+        <button class="modal-close" id="closeMarketEditor" aria-label="Chiudi finestra">×</button>
+      </div>
+      <div class="form-group">
+        <label for="marketEditorSelect">Borsa di quotazione</label>
+        <select id="marketEditorSelect">
+          ${options.map(o => `<option value="${o.value}"${o.value === current ? ' selected' : ''}>${o.label}</option>`).join('')}
+        </select>
+        <div class="text-xs text-muted mt-2">La correzione vale per tutti gli utenti: il mercato è una proprietà del titolo, non della posizione.</div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button class="btn btn-ghost" id="cancelMarketEditor">Annulla</button>
+        <button class="btn btn-primary" id="saveMarketEditor">💾 Salva</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modalEl);
+
+  const close = () => modalEl.remove();
+  document.getElementById('closeMarketEditor').addEventListener('click', close);
+  document.getElementById('cancelMarketEditor').addEventListener('click', close);
+  modalEl.addEventListener('click', (e) => { if (e.target === modalEl) close(); });
+
+  document.getElementById('saveMarketEditor').addEventListener('click', async () => {
+    const select = document.getElementById('marketEditorSelect');
+    const market = select ? select.value : current;
+    const saveBtn = document.getElementById('saveMarketEditor');
+    saveBtn.disabled = true;
+    try {
+      const updated = await api.updateStockMarket(normalizedTicker, market);
+      showToast(`Mercato di ${normalizedTicker} impostato a ${updated.market || market}`, 'success');
+      close();
+      if (typeof onSaved === 'function') onSaved(updated);
+    } catch (err) {
+      showToast(err.message || 'Errore durante il salvataggio del mercato', 'error');
+      saveBtn.disabled = false;
+    }
+  });
+
+  modalEl.classList.add('active');
+};
+window.openMarketEditor = openMarketEditor;
+
 const initSidebar = () => {
   const currentPath = window.location.pathname;
   const links = document.querySelectorAll('.nav-link');

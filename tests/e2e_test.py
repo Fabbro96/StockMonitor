@@ -1241,6 +1241,89 @@ async def test_perf_caches_and_contracts(c: httpx.AsyncClient, h: dict):
         md.yf.download = orig_download
 
 
+async def test_stock_market_update(c: httpx.AsyncClient, h: dict):
+    print("\n[23] PUT /api/stocks/{ticker}: correzione mercato/valuta (globale)")
+    from backend.services import market_data as md
+
+    # Utente dedicato isolato (stile [21])
+    r = await c.post("/api/auth/users", headers=h,
+                     json={"username": "marketfix_user", "password": "Market123!", "is_admin": False})
+    check("creazione utente marketfix -> 200", r.status_code == 200, str(r.status_code))
+    r = await c.post("/api/auth/login", json={"username": "marketfix_user", "password": "Market123!"})
+    check("login utente marketfix -> 200", r.status_code == 200, str(r.status_code))
+    uh = {"Authorization": f"Bearer {r.json().get('access_token', '')}"}
+
+    # Yahoo in fallimento totale: ticker bare creato come US/USD
+    orig_ticker = md.yf.Ticker
+    orig_download = md.yf.download
+
+    def _yahoo_down(*args, **kwargs):
+        raise RuntimeError("Yahoo down (mock e2e)")
+
+    md.yf.Ticker = _yahoo_down
+    md.yf.download = _yahoo_down
+    try:
+        r = await c.post("/api/portfolio/holdings", headers=uh,
+                         json={"ticker": "E2EMKT", "quantity": 10, "avg_purchase_price": 5.0})
+        check("POST holding E2EMKT senza Yahoo -> 200", r.status_code == 200, str(r.status_code))
+        rows = (await c.get("/api/portfolio/", headers=uh)).json()
+        row = next((x for x in rows if x["ticker"] == "E2EMKT"), None)
+        check("E2EMKT creato come US/USD",
+              bool(row) and row.get("market") == "US" and row.get("currency") == "USD", str(row))
+
+        # Validazione: mercato non ammesso -> 422
+        r = await c.put("/api/stocks/E2EMKT", headers=uh, json={"market": "XX"})
+        check("PUT mercato invalido -> 422", r.status_code == 422, str(r.status_code))
+        # Ticker inesistente -> 404
+        r = await c.put("/api/stocks/E2ENOPE", headers=uh, json={"market": "IT"})
+        check("PUT ticker inesistente -> 404", r.status_code == 404, str(r.status_code))
+
+        # Correzione: ticker case-insensitive, market IT -> currency EUR
+        r = await c.put("/api/stocks/e2emkt", headers=uh, json={"market": "IT"})
+        check("PUT mercato->IT -> 200", r.status_code == 200, str(r.status_code))
+        body = r.json()
+        check("risposta StockResponse con market IT + currency EUR",
+              body.get("ticker") == "E2EMKT" and body.get("market") == "IT"
+              and body.get("currency") == "EUR", str(body))
+
+        # Portfolio coerente: riga IT/EUR e summary con allocazione IT in EUR
+        rows = (await c.get("/api/portfolio/", headers=uh)).json()
+        row = next((x for x in rows if x["ticker"] == "E2EMKT"), None)
+        check("holding riflette IT/EUR",
+              bool(row) and row.get("market") == "IT" and row.get("currency") == "EUR", str(row))
+        s = (await c.get("/api/portfolio/summary", headers=uh)).json()
+        check("summary coerente: allocazione IT > 0 (EUR)",
+              isinstance(s, dict) and float(s.get("market_allocation", {}).get("IT", 0)) > 0,
+              str(s.get("market_allocation")))
+
+        # Persistenza reale su stocks
+        conn = sqlite3.connect(TEST_DB, timeout=10)
+        try:
+            persisted = conn.execute(
+                "SELECT market, currency FROM stocks WHERE ticker=?", ("E2EMKT",)).fetchone()
+        finally:
+            conn.close()
+        check("stocks.E2EMKT persistito IT/EUR",
+              persisted is not None and persisted[0] == "IT" and persisted[1] == "EUR",
+              str(persisted))
+    finally:
+        md.yf.Ticker = orig_ticker
+        md.yf.download = orig_download
+
+    # Secondo utente vede la correzione: lo Stock è globale (documentato)
+    r = await c.post("/api/auth/users", headers=h,
+                     json={"username": "marketfix_bob", "password": "Market123!", "is_admin": False})
+    check("creazione secondo utente -> 200", r.status_code == 200, str(r.status_code))
+    r = await c.post("/api/auth/login", json={"username": "marketfix_bob", "password": "Market123!"})
+    check("login secondo utente -> 200", r.status_code == 200, str(r.status_code))
+    bh = {"Authorization": f"Bearer {r.json().get('access_token', '')}"}
+    stocks = (await c.get("/api/stocks/", headers=bh)).json()
+    stock = next((x for x in stocks if x["ticker"] == "E2EMKT"), None)
+    check("secondo utente vede correzione globale IT/EUR",
+          bool(stock) and stock.get("market") == "IT" and stock.get("currency") == "EUR",
+          str(stock))
+
+
 # ===========================================================================
 # MAIN RUNNER
 # ===========================================================================
@@ -1283,6 +1366,7 @@ async def run_all():
             await test_fetch_batch_single_ticker_multiindex()
             await test_alerting_stale_uses_db()
             await test_perf_caches_and_contracts(c, h)
+            await test_stock_market_update(c, h)
             await test_concurrency(c, h)
             await test_sqlite_integrity()
 

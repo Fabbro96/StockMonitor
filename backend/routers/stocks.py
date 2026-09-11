@@ -102,6 +102,32 @@ async def remove_stock(stock_id: int, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {"status": "success"}
 
+class StockMarketUpdate(BaseModel):
+    market: str
+
+@router.put("/{ticker}", response_model=StockResponse)
+async def update_stock_market(ticker: str, payload: StockMarketUpdate, db: AsyncSession = Depends(get_db)):
+    """
+    Corregge il mercato di uno stock esistente. Lo Stock è globale (condiviso
+    tra utenti): la correzione vale per tutti. La valuta segue il mercato
+    (EUR per IT/EU, USD per US — stessa convenzione di add_stock).
+    """
+    clean_ticker = (ticker or "").upper().strip()
+    market = (payload.market or "").upper().strip()
+    if market not in ("IT", "US", "EU"):
+        raise HTTPException(status_code=422, detail="market deve essere IT, US o EU.")
+
+    result = await db.execute(select(Stock).where(Stock.ticker == clean_ticker))
+    stock = result.scalar_one_or_none()
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock not found")
+
+    stock.market = market
+    stock.currency = "EUR" if market in ("IT", "EU") else "USD"
+    await db.commit()
+    await db.refresh(stock)
+    return stock
+
 @router.get("/search")
 async def search_ticker(q: str):
     results = await MarketDataService.search_ticker(q)

@@ -90,6 +90,10 @@ export const api = {
   searchStocks: (query) => fetchApi(`/stocks/search?q=${encodeURIComponent(query)}`),
   getStockDetails: (ticker) => fetchApi(`/stocks/${encodeURIComponent(ticker)}/details`),
   getStockCandles: (ticker, timeframe = '1m') => fetchApi(`/stocks/${encodeURIComponent(ticker)}/candles?timeframe=${timeframe}`),
+  updateStockMarket: (ticker, market) => fetchApi(`/stocks/${encodeURIComponent(ticker)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ market })
+  }),
   
   // Watchlist
   getWatchlist: () => fetchApi('/watchlist/'),

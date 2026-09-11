@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showToast, showLoading, hideLoading, escapeHtml } from './app.js?v=3.0.0';
+import { formatCurrency, formatPercent, showToast, showLoading, hideLoading, escapeHtml, openMarketEditor } from './app.js?v=3.0.0';
 
 let watchlistData = [];
 
@@ -55,7 +55,7 @@ const renderWatchlist = () => {
       <tr id="wl-row-${item.id}">
         <td>
           <div class="flex items-center gap-2">
-            <span>${flag}</span>
+            <button class="btn btn-ghost btn-sm" data-action="edit-market" data-ticker="${escapeHtml(item.ticker)}" data-market="${escapeHtml(item.market || '')}" title="Modifica mercato" aria-label="Modifica mercato di ${escapeHtml(item.ticker)}">${flag}</button>
             <div>
               <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(item.ticker)}">${escapeHtml(item.ticker)}</a>
               <div class="text-xs text-secondary">${escapeHtml(item.name || item.ticker)}</div>
@@ -211,6 +211,8 @@ const initWatchlist = () => {
         const above = btn.dataset.above !== '' ? parseFloat(btn.dataset.above) : null;
         const below = btn.dataset.below !== '' ? parseFloat(btn.dataset.below) : null;
         window.openEditAlertModal(id, ticker, above, below);
+      } else if (action === 'edit-market') {
+        openMarketEditor(ticker, btn.dataset.market, () => loadWatchlist());
       }
     });
   }

@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getTheme, escapeHtml } from './app.js?v=3.0.0';
+import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getTheme, escapeHtml, openMarketEditor } from './app.js?v=3.0.0';
 
 let portfolioData = [];
 let summaryData = {};
@@ -185,7 +185,7 @@ const renderTable = () => {
       <tr class="${isModified ? 'row-modified' : ''}" data-id="${item.id}">
         <td>
           <div class="flex items-center gap-2">
-            <span>${flag}</span>
+            <button class="btn btn-ghost btn-sm" data-action="edit-market" data-ticker="${escapeHtml(item.ticker)}" data-market="${escapeHtml(item.market || '')}" title="Modifica mercato" aria-label="Modifica mercato di ${escapeHtml(item.ticker)}">${flag}</button>
             <div>
               <a href="#" class="stock-ticker-link font-bold font-mono" data-stock="${escapeHtml(item.ticker)}">${escapeHtml(item.ticker)}</a>
               ${item.notes ? `<div class="text-2xs text-muted" title="${escapeHtml(item.notes)}">📝 ${escapeHtml(item.notes.substring(0, 20))}</div>` : ''}
@@ -786,9 +786,15 @@ const initPortfolio = () => {
   // Azioni delegate su tabelle (evita handler inline con id interpolati)
   document.getElementById('portfolioTableBody')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action="delete-holding"]');
-    if (!btn) return;
-    const id = parseInt(btn.dataset.id, 10);
-    if (!isNaN(id) && window.deleteHolding) window.deleteHolding(id);
+    if (btn) {
+      const id = parseInt(btn.dataset.id, 10);
+      if (!isNaN(id) && window.deleteHolding) window.deleteHolding(id);
+      return;
+    }
+    const marketBtn = e.target.closest('[data-action="edit-market"]');
+    if (marketBtn) {
+      openMarketEditor(marketBtn.dataset.ticker, marketBtn.dataset.market, () => loadPortfolio());
+    }
   });
 
   document.getElementById('transactionsTableBody')?.addEventListener('click', (e) => {

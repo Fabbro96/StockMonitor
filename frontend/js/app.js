@@ -17,7 +17,7 @@ export const formatPercent = (val) => {
   return `${sign}${val.toFixed(2)}%`;
 };
 
-export const formatCompactNumber = (val) => {
+const formatCompactNumber = (val) => {
   if (!val || isNaN(val)) return '-';
   return new Intl.NumberFormat('it-IT', {
     notation: 'compact',
@@ -84,9 +84,11 @@ export const showToast = (message, type = 'info', actionText = null, onAction = 
 
   setTimeout(() => toast.classList.add('show'), 10);
   
+  let removeTimer = null;
   const timer = setTimeout(() => {
     toast.classList.remove('show');
-    setTimeout(() => toast.remove(), 300);
+    clearTimeout(removeTimer);
+    removeTimer = setTimeout(() => toast.remove(), 300);
   }, 4000);
 
   toast.addEventListener('mouseenter', () => clearTimeout(timer));
@@ -148,7 +150,7 @@ export const getChartThemeColors = () => {
   };
 };
 
-export const updateThemeToggleButton = () => {
+const updateThemeToggleButton = () => {
   const btn = document.getElementById('btnThemeToggle');
   if (!btn) return;
   const isLight = getTheme() === 'light';
@@ -159,30 +161,25 @@ export const updateThemeToggleButton = () => {
   btn.setAttribute('aria-label', btn.title);
 };
 
-export const setTheme = (theme) => {
+const setTheme = (theme) => {
   localStorage.setItem('app_theme', theme);
   document.documentElement.setAttribute('data-theme', theme);
   updateThemeToggleButton();
   window.dispatchEvent(new CustomEvent('themeChanged', { detail: { theme } }));
 };
 
-export const toggleTheme = () => {
+const toggleTheme = () => {
   const current = getTheme();
   const next = current === 'light' ? 'dark' : 'light';
   setTheme(next);
 };
-window.toggleTheme = toggleTheme;
 
-export const initTopBarControls = () => {
+const initTopBarControls = () => {
   const topbar = document.querySelector('.topbar');
   if (!topbar) return;
 
-  // Trova o crea il contenitore dei controlli sulla destra della topbar
-  let actionGroup = topbar.querySelector('.topbar-actions') || 
-                    topbar.querySelector('#marketStatus')?.parentElement ||
-                    topbar.querySelector('.flex.items-center:last-child') ||
-                    topbar.querySelector('.flex.gap-2.items-center') ||
-                    topbar.querySelector('.flex:last-child');
+  // Controlli sulla destra della topbar
+  let actionGroup = topbar.querySelector('.topbar-actions');
   
   if (!actionGroup) {
     actionGroup = document.createElement('div');
@@ -195,7 +192,7 @@ export const initTopBarControls = () => {
     const searchBtn = document.createElement('button');
     searchBtn.className = 'topbar-search-btn';
     searchBtn.id = 'btnGlobalSearch';
-    searchBtn.onclick = () => window.openCommandPalette && window.openCommandPalette();
+    searchBtn.addEventListener('click', () => openCommandPalette());
     searchBtn.title = 'Cerca titoli o naviga (Ctrl+K)';
     searchBtn.innerHTML = `
       <span>🔍</span>
@@ -215,7 +212,7 @@ export const initTopBarControls = () => {
     const helpBtn = document.createElement('button');
     helpBtn.className = 'topbar-help-btn';
     helpBtn.id = 'btnShortcutsHelp';
-    helpBtn.onclick = () => window.openShortcutsHelp && window.openShortcutsHelp();
+    helpBtn.addEventListener('click', () => openShortcutsHelp());
     helpBtn.title = 'Scorciatoie da tastiera (?)';
     helpBtn.setAttribute('aria-label', 'Scorciatoie da tastiera');
     helpBtn.innerHTML = `<span>?</span>`;
@@ -227,18 +224,8 @@ export const initTopBarControls = () => {
     }
   }
 
-  // 3. Bottone Cambio Tema (se non presente nel template HTML)
-  if (!document.getElementById('btnThemeToggle')) {
-    const saved = getTheme();
-    const themeBtn = document.createElement('button');
-    themeBtn.className = 'theme-toggle-btn';
-    themeBtn.id = 'btnThemeToggle';
-    themeBtn.onclick = () => window.toggleTheme();
-    themeBtn.title = 'Cambia tema';
-    themeBtn.setAttribute('aria-label', 'Cambia tema');
-    themeBtn.innerHTML = `<span>${saved === 'light' ? '☀️' : '🌙'}</span>`;
-    actionGroup.appendChild(themeBtn);
-  }
+  // 3. Bottone Cambio Tema (presente in tutte le pagine)
+  document.getElementById('btnThemeToggle')?.addEventListener('click', toggleTheme);
 };
 
 const initTheme = () => {
@@ -251,7 +238,7 @@ const initTheme = () => {
 // ==========================================
 // Global Marquee Ticker
 // ==========================================
-export const initTickerMarquee = async () => {
+const initTickerMarquee = async () => {
   const mainContent = document.querySelector('.main-content');
   if (!mainContent) return;
 
@@ -295,7 +282,7 @@ export const initTickerMarquee = async () => {
 // ==========================================
 // Modern Number Steppers (+ / -)
 // ==========================================
-export const initSteppers = () => {
+const initSteppers = () => {
   let activeTimer = null;
   let activeInterval = null;
 
@@ -391,6 +378,19 @@ let currentModalTicker = null;
 let currentModalTimeframe = '1m';
 let currentModalChartType = 'area'; // 'area' | 'candle'
 let rawCandlesData = [];
+let modalLoadGeneration = 0;
+
+const disposeModalChart = () => {
+  modalLoadGeneration++;
+  if (modalChart) {
+    try { modalChart.remove(); } catch (e) {}
+  }
+  modalChart = null;
+  modalAreaSeries = null;
+  modalCandleSeries = null;
+  modalVolumeSeries = null;
+  modalBreakevenLine = null;
+};
 
 const injectStockModalHTML = () => {
   if (document.getElementById('stockDeepDiveModal')) return;
@@ -554,6 +554,7 @@ const injectStockModalHTML = () => {
 
   // Listeners
   document.getElementById('closeStockModal').addEventListener('click', () => {
+    disposeModalChart();
     modalEl.classList.remove('active');
   });
 
@@ -602,6 +603,7 @@ const injectStockModalHTML = () => {
   });
 
   document.getElementById('btnModalAddHolding').addEventListener('click', () => {
+    disposeModalChart();
     modalEl.classList.remove('active');
     if (window.location.pathname.includes('portfolio.html')) {
       const tickerInput = document.getElementById('tickerInput');
@@ -698,10 +700,11 @@ const applyModalChartData = () => {
   modalChart.timeScale().fitContent();
 };
 
-const loadModalChart = async (ticker, timeframe = '1m') => {
+const loadModalChart = async (ticker, timeframe = '1m', generation = modalLoadGeneration) => {
   if (!modalChart || !ticker) return;
   try {
     rawCandlesData = await api.getStockCandles(ticker, timeframe);
+    if (generation !== modalLoadGeneration || !modalChart) return;
     applyModalChartData();
   } catch (e) {
     console.error('Errore caricamento candele modale:', e);
@@ -786,11 +789,12 @@ const runModalStockAi = async () => {
   }
 };
 
-export const openStockModal = async (ticker) => {
+const openStockModal = async (ticker) => {
   if (!ticker) return;
   injectStockModalHTML();
   
   currentModalTicker = ticker.trim().toUpperCase();
+  const generation = ++modalLoadGeneration;
   const modal = document.getElementById('stockDeepDiveModal');
   modal.classList.add('active');
 
@@ -810,13 +814,16 @@ export const openStockModal = async (ticker) => {
   document.getElementById('smBreakevenLegend').style.display = 'none';
 
   initModalChart();
-  loadModalChart(currentModalTicker, currentModalTimeframe);
+  loadModalChart(currentModalTicker, currentModalTimeframe, generation);
 
   try {
     const [data, portfolio] = await Promise.all([
       api.getStockDetails(currentModalTicker).catch(() => ({})),
       api.getPortfolio().catch(() => [])
     ]);
+
+    // Modal chiuso o riaperto nel frattempo: continuazione obsoleta, niente scritture.
+    if (generation !== modalLoadGeneration) return;
 
     document.getElementById('smName').textContent = data.name || currentModalTicker;
     document.getElementById('smPrice').textContent = formatCurrency(data.current_price, data.currency);
@@ -837,18 +844,20 @@ export const openStockModal = async (ticker) => {
     if (held) {
       document.getElementById('smHeldBadge').style.display = 'inline-flex';
       document.getElementById('smBreakevenLegend').style.display = 'inline';
-      
-      if (modalBreakevenLine) {
-        modalAreaSeries.removePriceLine(modalBreakevenLine);
+
+      if (modalAreaSeries) {
+        if (modalBreakevenLine) {
+          modalAreaSeries.removePriceLine(modalBreakevenLine);
+        }
+        modalBreakevenLine = modalAreaSeries.createPriceLine({
+          price: held.avg_purchase_price,
+          color: '#f59e0b',
+          lineWidth: 2,
+          lineStyle: 2, // Dashed
+          axisLabelVisible: true,
+          title: `Carico ${formatCurrency(held.avg_purchase_price, held.currency)}`
+        });
       }
-      modalBreakevenLine = modalAreaSeries.createPriceLine({
-        price: held.avg_purchase_price,
-        color: '#f59e0b',
-        lineWidth: 2,
-        lineStyle: 2, // Dashed
-        axisLabelVisible: true,
-        title: `Carico ${formatCurrency(held.avg_purchase_price, held.currency)}`
-      });
     }
 
     const tech = data.technical || {};
@@ -947,7 +956,6 @@ export const openMarketEditor = (ticker, currentMarket = 'US', onSaved = null) =
 
   modalEl.classList.add('active');
 };
-window.openMarketEditor = openMarketEditor;
 
 const initSidebar = () => {
   const currentPath = window.location.pathname;
@@ -991,22 +999,6 @@ const initSidebar = () => {
         sidebar.classList.remove('open');
         backdrop.classList.remove('active');
       });
-    });
-
-    // Global Escape Key Listener for Modals, Dropdowns and Sidebar
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        if (sidebar && sidebar.classList.contains('open')) {
-          sidebar.classList.remove('open');
-          backdrop.classList.remove('active');
-        }
-        document.querySelectorAll('.modal-overlay.active').forEach(modal => {
-          modal.classList.remove('active');
-        });
-        document.querySelectorAll('.autocomplete-dropdown, #autocompleteResults, #wlAutocompleteResults').forEach(drop => {
-          drop.style.display = 'none';
-        });
-      }
     });
   }
 
@@ -1070,13 +1062,20 @@ const checkAuth = async () => {
 // ==========================================
 // Live Price Flash Micro-Interaction
 // ==========================================
-export const flashPriceChange = (el, isUp) => {
+const flashPriceTimeouts = new WeakMap();
+
+const flashPriceChange = (el, isUp) => {
   if (!el) return;
   const cls = isUp ? 'flash-up' : 'flash-down';
+  const prevTimer = flashPriceTimeouts.get(el);
+  if (prevTimer) clearTimeout(prevTimer);
   el.classList.remove('flash-up', 'flash-down');
   void el.offsetWidth; // Trigger reflow per riavviare l'animazione
   el.classList.add(cls);
-  setTimeout(() => el.classList.remove(cls), 850);
+  flashPriceTimeouts.set(el, setTimeout(() => {
+    el.classList.remove(cls);
+    flashPriceTimeouts.delete(el);
+  }, 850));
 };
 window.flashPriceChange = flashPriceChange;
 
@@ -1107,18 +1106,20 @@ const DEFAULT_POPULAR_STOCKS = [
 
 let activePaletteIndex = 0;
 let paletteCurrentItems = [];
+let paletteItemElements = [];
 let paletteSearchDebounce = null;
+let paletteSearchAbortController = null;
 
 const injectCommandPaletteHTML = () => {
   if (document.getElementById('commandPaletteBackdrop')) return;
 
   const html = `
     <div class="cmd-palette-backdrop" id="commandPaletteBackdrop" role="dialog" aria-modal="true" aria-label="Command Palette">
-      <div class="cmd-palette-card" onclick="event.stopPropagation()">
+      <div class="cmd-palette-card">
         <div class="cmd-palette-header">
           <span class="cmd-palette-search-icon">🔍</span>
           <input type="text" class="cmd-palette-input" id="cmdPaletteInput" placeholder="Cerca titolo, ticker o naviga (es. AAPL, RACE, Portafoglio)..." autocomplete="off" spellcheck="false" />
-          <kbd class="kbd-badge cursor-pointer" onclick="window.closeCommandPalette()">esc</kbd>
+          <kbd class="kbd-badge cursor-pointer">esc</kbd>
         </div>
         <div class="cmd-palette-body" id="cmdPaletteResults">
           <!-- Popolato dinamicamente -->
@@ -1134,11 +1135,11 @@ const injectCommandPaletteHTML = () => {
       </div>
     </div>
 
-    <div class="modal-overlay" id="shortcutsHelpModal" onclick="if(event.target===this) window.closeShortcutsHelp()">
-      <div class="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-overlay" id="shortcutsHelpModal" role="dialog" aria-modal="true" aria-labelledby="shortcutsHelpTitle">
+      <div class="modal-content">
         <div class="modal-header">
-          <h3 class="modal-title">⌨️ Scorciatoie da Tastiera</h3>
-          <button class="modal-close" onclick="window.closeShortcutsHelp()" aria-label="Chiudi">&times;</button>
+          <h3 class="modal-title" id="shortcutsHelpTitle">⌨️ Scorciatoie da Tastiera</h3>
+          <button class="modal-close" aria-label="Chiudi">&times;</button>
         </div>
         <p class="text-xs text-secondary mb-3">Naviga e gestisci il tuo portafoglio ad alta velocità con questi comandi globali:</p>
         <div class="shortcuts-grid">
@@ -1156,7 +1157,7 @@ const injectCommandPaletteHTML = () => {
           </div>
         </div>
         <div class="flex justify-end mt-3">
-          <button class="btn btn-primary" onclick="window.closeShortcutsHelp()">Ho capito</button>
+          <button class="btn btn-primary">Ho capito</button>
         </div>
       </div>
     </div>
@@ -1168,6 +1169,32 @@ const injectCommandPaletteHTML = () => {
   backdrop.addEventListener('click', (e) => {
     if (e.target === backdrop) closeCommandPalette();
   });
+
+  // Badge "esc": chiude la palette
+  backdrop.querySelector('.cmd-palette-header .kbd-badge')?.addEventListener('click', closeCommandPalette);
+
+  // Guida scorciatoie: overlay, pulsante di chiusura e "Ho capito"
+  const shortcutsModal = document.getElementById('shortcutsHelpModal');
+  if (shortcutsModal) {
+    shortcutsModal.addEventListener('click', (e) => {
+      if (e.target === shortcutsModal) closeShortcutsHelp();
+    });
+    shortcutsModal.querySelector('.modal-close')?.addEventListener('click', closeShortcutsHelp);
+    shortcutsModal.querySelector('.modal-content .btn-primary')?.addEventListener('click', closeShortcutsHelp);
+  }
+
+  // Delegated click sui risultati (bound una sola volta)
+  const results = document.getElementById('cmdPaletteResults');
+  if (results) {
+    results.addEventListener('click', (e) => {
+      const itemEl = e.target.closest('.cmd-palette-item');
+      if (!itemEl) return;
+      const idx = parseInt(itemEl.dataset.idx, 10);
+      if (!isNaN(idx) && paletteCurrentItems[idx]) {
+        executePaletteItem(paletteCurrentItems[idx]);
+      }
+    });
+  }
 
   const input = document.getElementById('cmdPaletteInput');
   input.addEventListener('input', (e) => {
@@ -1214,10 +1241,7 @@ const executePaletteItem = (item) => {
 };
 
 const updatePaletteSelection = () => {
-  const container = document.getElementById('cmdPaletteResults');
-  if (!container) return;
-  const items = container.querySelectorAll('.cmd-palette-item');
-  items.forEach((el, idx) => {
+  paletteItemElements.forEach((el, idx) => {
     if (idx === activePaletteIndex) {
       el.classList.add('active');
       el.scrollIntoView({ block: 'nearest' });
@@ -1230,6 +1254,12 @@ const updatePaletteSelection = () => {
 const renderCommandPaletteResults = async (query = '') => {
   const container = document.getElementById('cmdPaletteResults');
   if (!container) return;
+
+  // Annulla la ricerca precedente ancora in volo
+  if (paletteSearchAbortController) {
+    paletteSearchAbortController.abort();
+    paletteSearchAbortController = null;
+  }
 
   const q = query.toLowerCase();
   paletteCurrentItems = [];
@@ -1250,14 +1280,18 @@ const renderCommandPaletteResults = async (query = '') => {
       s.ticker.toLowerCase().includes(q) || 
       (s.name && s.name.toLowerCase().includes(q))
     );
+    paletteSearchAbortController = new AbortController();
+    const controller = paletteSearchAbortController;
     try {
-      const remote = await api.searchStocks(query).catch(() => []);
+      const remote = await api.searchStocks(query, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       const combined = [...localMatches];
       for (const r of remote) {
         if (!combined.some(c => c.ticker === r.ticker)) combined.push(r);
       }
       stockResults = combined;
     } catch (e) {
+      if (e && e.name === 'AbortError') return;
       stockResults = localMatches;
     }
   } else if (!q) {
@@ -1301,7 +1335,7 @@ const renderCommandPaletteResults = async (query = '') => {
       html += `
         <div class="cmd-palette-item ${idx === 0 ? 'active' : ''}" data-idx="${idx}">
           <div class="cmd-item-left">
-            <span class="cmd-item-icon">${flag}</span>
+            <span class="cmd-item-icon">${escapeHtml(flag)}</span>
             <div>
               <div class="cmd-item-title font-mono">${escapeHtml(s.ticker)} <span class="text-xs text-secondary font-normal">— ${escapeHtml(s.name || '')}</span></div>
               <div class="cmd-item-desc">Apri analisi fondamentale, RSI, grafici e scheda titolo</div>
@@ -1321,18 +1355,10 @@ const renderCommandPaletteResults = async (query = '') => {
   }
 
   container.innerHTML = html;
-
-  container.querySelectorAll('.cmd-palette-item').forEach(el => {
-    el.addEventListener('click', () => {
-      const idx = parseInt(el.dataset.idx);
-      if (!isNaN(idx) && paletteCurrentItems[idx]) {
-        executePaletteItem(paletteCurrentItems[idx]);
-      }
-    });
-  });
+  paletteItemElements = Array.from(container.querySelectorAll('.cmd-palette-item'));
 };
 
-export const openCommandPalette = () => {
+const openCommandPalette = () => {
   injectCommandPaletteHTML();
   const backdrop = document.getElementById('commandPaletteBackdrop');
   const input = document.getElementById('cmdPaletteInput');
@@ -1342,27 +1368,23 @@ export const openCommandPalette = () => {
   renderCommandPaletteResults('');
   setTimeout(() => input.focus(), 60);
 };
-window.openCommandPalette = openCommandPalette;
 
-export const closeCommandPalette = () => {
+const closeCommandPalette = () => {
   const backdrop = document.getElementById('commandPaletteBackdrop');
   if (backdrop) backdrop.classList.remove('active');
 };
-window.closeCommandPalette = closeCommandPalette;
 
-export const openShortcutsHelp = () => {
+const openShortcutsHelp = () => {
   closeCommandPalette();
   injectCommandPaletteHTML();
   const modal = document.getElementById('shortcutsHelpModal');
   if (modal) modal.classList.add('active');
 };
-window.openShortcutsHelp = openShortcutsHelp;
 
-export const closeShortcutsHelp = () => {
+const closeShortcutsHelp = () => {
   const modal = document.getElementById('shortcutsHelpModal');
   if (modal) modal.classList.remove('active');
 };
-window.closeShortcutsHelp = closeShortcutsHelp;
 
 const initGlobalKeyboardShortcuts = () => {
   window.addEventListener('keydown', (e) => {
@@ -1387,7 +1409,18 @@ const initGlobalKeyboardShortcuts = () => {
     if (e.key === 'Escape') {
       closeCommandPalette();
       closeShortcutsHelp();
+      const sidebar = document.querySelector('.sidebar');
+      if (sidebar && sidebar.classList.contains('open')) {
+        sidebar.classList.remove('open');
+        document.getElementById('sidebarBackdrop')?.classList.remove('active');
+      }
+      if (document.getElementById('stockDeepDiveModal')?.classList.contains('active')) {
+        disposeModalChart();
+      }
       document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
+      document.querySelectorAll('.autocomplete-dropdown, #autocompleteResults, #wlAutocompleteResults').forEach(drop => {
+        drop.style.display = 'none';
+      });
       return;
     }
 

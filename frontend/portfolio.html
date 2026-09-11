@@ -5,21 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Portafoglio - Stock Monitor</title>
     <link rel="icon" href="data:,">
-    <script>
-        (function () {
-            try {
-                var t = localStorage.getItem('app_theme');
-                if (t !== 'light' && t !== 'dark') {
-                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-                }
-                document.documentElement.setAttribute('data-theme', t);
-            } catch (e) {
-                document.documentElement.setAttribute('data-theme', 'dark');
-            }
-        })();
-    </script>
+    <script src="/static/js/theme-init.js?v=3.0.0"></script>
     <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
-    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.0"></script>
+    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.0" defer></script>
 </head>
 <body>
     <div class="app-container">
@@ -35,7 +23,7 @@
             <nav class="nav-links">
                 <a href="/static/index.html" class="nav-link"><span class="nav-icon">🏠</span><span class="nav-label">Dashboard</span></a>
                 <a href="/static/watchlist.html" class="nav-link"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
-                <a href="/static/portfolio.html" class="nav-link active"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
+                <a href="/static/portfolio.html" class="nav-link active" aria-current="page"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
                 <a href="/static/advice.html" class="nav-link"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
                 <a href="/static/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
@@ -52,7 +40,7 @@
                     <button class="btn btn-ghost" id="btnExport" title="Esporta portafoglio in CSV">📥 Esporta CSV</button>
                     <button class="btn btn-ghost" id="btnImport" title="Importa file CSV">📤 Importa CSV</button>
                     <button class="btn btn-primary" id="btnAddHolding">➕ Aggiungi Holding</button>
-                    <button class="theme-toggle-btn" id="btnThemeToggle" onclick="window.toggleTheme()" title="Cambia tema" aria-label="Cambia tema">
+                    <button class="theme-toggle-btn" id="btnThemeToggle" title="Cambia tema" aria-label="Cambia tema">
                         <span>🌙</span>
                     </button>
                 </div>
@@ -60,7 +48,7 @@
 
             <div class="content-wrapper" id="portfolioContent">
                 <!-- Banner Modifiche in sospeso -->
-                <div class="save-bar" id="saveBar">
+                <div class="save-bar" id="saveBar" role="status">
                     <div class="flex items-center gap-3">
                         <span class="text-lg">⚠️</span>
                         <div>
@@ -75,18 +63,18 @@
                 </div>
 
                 <!-- Summary Bar -->
-                <div class="card mb-4 flex justify-between items-center flex-wrap gap-4">
+                <section class="card mb-4 flex justify-between items-center flex-wrap gap-4">
                     <div>
                         <div class="text-muted text-xs uppercase font-bold tracking-wider flex items-center gap-1">
                             <span>Valore Attuale</span>
-                            <span class="has-tooltip"><i class="info-badge">i</i><span class="tooltip-box">Valore di mercato odierno di tutte le azioni possedute.</span></span>
+                            <span class="has-tooltip"><i class="info-badge" tabindex="0">i</i><span class="tooltip-box">Valore di mercato odierno di tutte le azioni possedute.</span></span>
                         </div>
                         <div class="text-2xl font-bold font-mono text-primary mt-1" id="totalValue">-- €</div>
                     </div>
                     <div>
                         <div class="text-muted text-xs uppercase font-bold tracking-wider flex items-center gap-1">
                             <span>Capitale Investito</span>
-                            <span class="has-tooltip"><i class="info-badge">i</i><span class="tooltip-box">Somma totale spesa all'acquisto delle posizioni.</span></span>
+                            <span class="has-tooltip"><i class="info-badge" tabindex="0">i</i><span class="tooltip-box">Somma totale spesa all'acquisto delle posizioni.</span></span>
                         </div>
                         <div class="text-2xl font-bold font-mono text-secondary mt-1" id="totalInvested">-- €</div>
                     </div>
@@ -112,55 +100,49 @@
                         <div class="text-2xl font-bold font-mono text-profit mt-1" id="totalDividends">-- €/anno</div>
                     </div>
                     <div>
-                        <div class="text-muted text-xs uppercase font-bold tracking-wider flex items-center gap-1">
-                            <span>Posizioni Attive</span>
-                        </div>
+                        <span class="text-muted text-xs uppercase font-bold tracking-wider flex items-center gap-1">Posizioni Attive</span>
                         <div class="text-2xl font-bold font-mono text-primary mt-1" id="totalCount">--</div>
                     </div>
-                </div>
+                </section>
 
                 <!-- Budget & Allocazione Card -->
-                <div class="card card-accent mb-4" id="budgetAllocationCard">
-                    <div class="flex justify-between items-center flex-wrap gap-3">
-                        <div class="flex items-center gap-3">
-                            <span class="text-xl">💶</span>
-                            <div>
-                                <div class="text-xs text-muted font-bold uppercase tracking-wider">Capitale da Investire (Budget Totale)</div>
-                                <div class="text-xl font-bold font-mono text-primary mt-0.5" id="userBudgetDisplay">-- €</div>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-4 flex-wrap text-sm">
-                            <span class="badge badge-budget" id="budgetDeployedBadge">Allocato: --%</span>
-                            <div class="text-xs text-secondary">
-                                <span>Liquidità Libera Residua: </span>
-                                <strong class="font-mono text-profit font-bold" id="userRemainingCash">-- €</strong>
-                            </div>
-                            <a href="/static/settings.html" class="btn btn-ghost btn-xs text-primary">⚙️ Modifica Budget</a>
+                <section class="card card-accent mb-4 flex justify-between items-center flex-wrap gap-3" id="budgetAllocationCard">
+                    <div class="flex items-center gap-3">
+                        <span class="text-xl">💶</span>
+                        <div>
+                            <div class="text-xs text-muted font-bold uppercase tracking-wider">Capitale da Investire (Budget Totale)</div>
+                            <div class="text-xl font-bold font-mono text-primary mt-0.5" id="userBudgetDisplay">-- €</div>
                         </div>
                     </div>
-                </div>
+                    <div class="flex items-center gap-4 flex-wrap text-sm">
+                        <span class="badge badge-budget" id="budgetDeployedBadge">Allocato: --%</span>
+                        <div class="text-xs text-secondary">
+                            <span>Liquidità Libera Residua: </span>
+                            <strong class="font-mono text-profit font-bold" id="userRemainingCash">-- €</strong>
+                        </div>
+                        <a href="/static/settings.html" class="btn btn-ghost btn-xs text-primary">⚙️ Modifica Budget</a>
+                    </div>
+                </section>
 
                 <div class="portfolio-main-grid mb-4">
                     <!-- Holdings Table -->
-                    <div class="card">
-                        <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-                            <div class="text-xs text-secondary">
-                                💡 <em>Modifica <strong>Quantità</strong> e <strong>Prezzo Acquisto</strong> direttamente nelle caselle e clicca <strong>"Salva Modifiche"</strong>. Clicca sui ticker per il deep-dive.</em>
-                            </div>
+                    <section class="card">
+                        <div class="text-xs text-secondary flex justify-between items-center mb-3 flex-wrap gap-2">
+                            💡 <em>Modifica <strong>Quantità</strong> e <strong>Prezzo Acquisto</strong> direttamente nelle caselle e clicca <strong>"Salva Modifiche"</strong>. Clicca sui ticker per il deep-dive.</em>
                         </div>
                         <div class="table-container">
                             <table>
                                 <thead>
                                     <tr>
-                                        <th>Ticker</th>
-                                        <th>Nome Titolo</th>
-                                        <th class="text-right w-110">Quantità</th>
-                                        <th class="text-right w-120">Prezzo Carico</th>
-                                        <th class="text-right">Prezzo Live</th>
-                                        <th class="text-right">Controvalore</th>
-                                        <th class="text-right">P&amp;L Netto (€)</th>
-                                        <th class="text-right">P&amp;L %</th>
-                                        <th class="text-center w-80">Azioni</th>
+                                        <th scope="col">Ticker</th>
+                                        <th scope="col">Nome Titolo</th>
+                                        <th scope="col" class="text-right w-110">Quantità</th>
+                                        <th scope="col" class="text-right w-120">Prezzo Carico</th>
+                                        <th scope="col" class="text-right">Prezzo Live</th>
+                                        <th scope="col" class="text-right">Controvalore</th>
+                                        <th scope="col" class="text-right">P&amp;L Netto (€)</th>
+                                        <th scope="col" class="text-right">P&amp;L %</th>
+                                        <th scope="col" class="text-center w-80">Azioni</th>
                                     </tr>
                                 </thead>
                                 <tbody id="portfolioTableBody">
@@ -168,27 +150,27 @@
                                 </tbody>
                             </table>
                         </div>
-                    </div>
+                    </section>
 
                     <!-- Allocation Card -->
-                    <div class="card card-fit">
+                    <section class="card card-fit">
                         <div class="flex justify-between items-center mb-3">
                             <h3 class="card-title">Allocazione</h3>
                             <div class="timeframe-group" id="allocTypeGroup">
-                                <button class="timeframe-btn active" data-type="stock">Titoli</button>
-                                <button class="timeframe-btn" data-type="market">Mercati</button>
+                                <button class="timeframe-btn active" aria-pressed="true" data-type="stock">Titoli</button>
+                                <button class="timeframe-btn" aria-pressed="false" data-type="market">Mercati</button>
                             </div>
                         </div>
                         <div class="flex justify-center mb-4">
                             <canvas id="allocationChart" width="190" height="190"></canvas>
                         </div>
                         <div id="allocationLegend" class="flex flex-col gap-2 text-xs"></div>
-                    </div>
+                    </section>
                 </div>
 
                 <!-- ⚖️ Smart Rebalancer -->
-                <div class="card mt-4 fade-in-up" id="rebalancerCard">
-                    <div class="card-header flex-wrap gap-2">
+                <section class="card mt-4 fade-in-up" id="rebalancerCard">
+                    <header class="card-header flex-wrap gap-2">
                         <div>
                             <h2 class="card-title">⚖️ Smart Portfolio Rebalancer</h2>
                             <p class="text-xs text-muted mt-1">Definisci le allocazioni target (es. 40% US Tech, 30% IT Dividend, 30% Liquidità) e ottieni gli ordini di ribilanciamento suggeriti.</p>
@@ -196,40 +178,40 @@
                         <div class="flex gap-2 items-center flex-wrap">
                             <div class="modern-stepper rebalance-cash">
                                 <button type="button" class="stepper-btn dec" data-step="500" title="Diminuisci (−500€)">−</button>
-                                <input type="number" id="rebalanceCashInput" min="0" step="100" placeholder="Liquidità (€)">
+                                <input type="number" id="rebalanceCashInput" min="0" step="100" placeholder="Liquidità (€)" aria-label="Liquidità da investire (€)">
                                 <button type="button" class="stepper-btn inc" data-step="500" title="Aumenta (+500€)">+</button>
                             </div>
                             <button class="btn btn-primary btn-sm" id="btnRebalancePreview">Calcola Ordini ➔</button>
                         </div>
-                    </div>
+                    </header>
 
                     <div class="rebalance-grid">
                         <!-- Target Allocations CRUD -->
                         <div>
                             <h4 class="text-sm font-bold mb-3 text-primary">🎯 Allocazioni Target</h4>
                             <div class="flex gap-2 mb-3 flex-wrap">
-                                <input type="text" id="targetName" placeholder="Nome (es. US Tech)" class="rebalance-name">
+                                <input type="text" id="targetName" placeholder="Nome (es. US Tech)" class="rebalance-name" aria-label="Nome allocazione target">
                                 <div class="modern-stepper rebalance-stepper">
                                     <button type="button" class="stepper-btn dec" data-step="5" title="Diminuisci (−5%)">−</button>
-                                    <input type="number" id="targetPct" placeholder="%" min="0" max="100" step="0.5">
+                                    <input type="number" id="targetPct" placeholder="%" min="0" max="100" step="0.5" aria-label="Percentuale target">
                                     <button type="button" class="stepper-btn inc" data-step="5" title="Aumenta (+5%)">+</button>
                                 </div>
-                                <select id="targetScopeType" class="rebalance-scope">
+                                <select id="targetScopeType" class="rebalance-scope" aria-label="Tipo di scope allocazione">
                                     <option value="MARKET">Mercato</option>
                                     <option value="TICKERS">Ticker</option>
                                     <option value="CASH">Liquidità</option>
                                 </select>
-                                <input type="text" id="targetScopeValue" placeholder="US / AAPL,MSFT" class="rebalance-value">
+                                <input type="text" id="targetScopeValue" placeholder="US / AAPL,MSFT" class="rebalance-value" aria-label="Valore scope (mercato o ticker)">
                                 <button class="btn btn-ghost btn-sm" id="btnAddTarget" title="Aggiungi">➕</button>
                             </div>
                             <div class="table-container table-bordered">
                                 <table>
                                     <thead>
                                         <tr>
-                                            <th>Bucket</th>
-                                            <th class="text-center">Scope</th>
-                                            <th class="text-right">Target %</th>
-                                            <th class="text-center w-80"></th>
+                                            <th scope="col">Bucket</th>
+                                            <th scope="col" class="text-center">Scope</th>
+                                            <th scope="col" class="text-right">Target %</th>
+                                            <th scope="col" class="text-center w-80"></th>
                                         </tr>
                                     </thead>
                                     <tbody id="targetsTableBody">
@@ -247,17 +229,17 @@
                             </div>
                         </div>
                     </div>
-                </div>
+                </section>
 
                 <!-- 💶 Calendario Dividendi -->
-                <div class="card mt-4" id="dividendsCard">
-                    <div class="card-header flex justify-between items-center flex-wrap gap-2 mb-3">
+                <section class="card mt-4" id="dividendsCard">
+                    <header class="card-header flex justify-between items-center flex-wrap gap-2 mb-3">
                         <div>
                             <h2 class="card-title">💶 Calendario Dividendi</h2>
                             <p class="text-xs text-muted mt-1">Stima del reddito cedolare annuo e mensile generato dalle posizioni in portafoglio.</p>
                         </div>
                         <button class="btn btn-ghost btn-sm" id="btnRefreshDividends" title="Ricalcola le stime dividendi">↻ Aggiorna</button>
-                    </div>
+                    </header>
 
                     <div class="dividend-summary mb-3">
                         <div class="callout p-3">
@@ -278,14 +260,14 @@
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Ticker</th>
-                                    <th>Nome</th>
-                                    <th class="text-right">Quota</th>
-                                    <th class="text-right">Dividendo/azione</th>
-                                    <th class="text-right">Yield</th>
-                                    <th class="text-right">Yield on Cost</th>
-                                    <th class="text-right">Reddito/anno (€)</th>
-                                    <th class="text-right">Reddito/mese (€)</th>
+                                    <th scope="col">Ticker</th>
+                                    <th scope="col">Nome</th>
+                                    <th scope="col" class="text-right">Quota</th>
+                                    <th scope="col" class="text-right">Dividendo/azione</th>
+                                    <th scope="col" class="text-right">Yield</th>
+                                    <th scope="col" class="text-right">Yield on Cost</th>
+                                    <th scope="col" class="text-right">Reddito/anno (€)</th>
+                                    <th scope="col" class="text-right">Reddito/mese (€)</th>
                                 </tr>
                             </thead>
                             <tbody id="dividendsTableBody">
@@ -297,11 +279,11 @@
                     <div id="dividendsEmpty" class="text-center text-muted py-6 text-xs" hidden>
                         Nessun dato sui dividendi disponibile. Aggiungi posizioni con titoli che distribuiscono dividendi oppure aggiorna i dati.
                     </div>
-                </div>
+                </section>
 
                 <!-- 📖 Trade Ledger -->
-                <div class="card mt-4 fade-in-up" id="tradeLedgerCard">
-                    <div class="card-header flex justify-between items-center flex-wrap gap-2 mb-3">
+                <section class="card mt-4 fade-in-up" id="tradeLedgerCard">
+                    <header class="card-header flex justify-between items-center flex-wrap gap-2 mb-3">
                         <div>
                             <h2 class="card-title">📖 Trade Ledger &amp; Storico Transazioni</h2>
                             <p class="text-xs text-muted mt-1">Traccia ogni acquisto, vendita e accredito dividendi calcolando automaticamente il P&amp;L Realizzato e le commissioni.</p>
@@ -309,31 +291,31 @@
                         <div class="flex gap-2 items-center flex-wrap">
                             <button class="btn btn-primary btn-sm" id="btnOpenTxModal">➕ Registra Transazione</button>
                         </div>
-                    </div>
+                    </header>
 
                     <!-- Filter pills -->
                     <div class="flex gap-2 mb-3 flex-wrap items-center">
                         <span class="text-xs text-muted">Filtra per:</span>
-                        <button class="btn btn-ghost btn-sm active tx-filter-btn" data-type="ALL">Tutte</button>
-                        <button class="btn btn-ghost btn-sm tx-filter-btn" data-type="BUY">🟢 Acquisti (BUY)</button>
-                        <button class="btn btn-ghost btn-sm tx-filter-btn" data-type="SELL">🔴 Vendite (SELL)</button>
-                        <button class="btn btn-ghost btn-sm tx-filter-btn" data-type="DIVIDEND">💰 Dividendi</button>
+                        <button class="btn btn-ghost btn-sm active tx-filter-btn" aria-pressed="true" data-type="ALL">Tutte</button>
+                        <button class="btn btn-ghost btn-sm tx-filter-btn" aria-pressed="false" data-type="BUY">🟢 Acquisti (BUY)</button>
+                        <button class="btn btn-ghost btn-sm tx-filter-btn" aria-pressed="false" data-type="SELL">🔴 Vendite (SELL)</button>
+                        <button class="btn btn-ghost btn-sm tx-filter-btn" aria-pressed="false" data-type="DIVIDEND">💰 Dividendi</button>
                     </div>
 
                     <div class="table-container">
                         <table>
                             <thead>
                                 <tr>
-                                    <th>Data</th>
-                                    <th>Tipo</th>
-                                    <th>Ticker</th>
-                                    <th>Nome Titolo</th>
-                                    <th class="text-right">Quantità</th>
-                                    <th class="text-right">Prezzo Eseguito</th>
-                                    <th class="text-right">Commissione</th>
-                                    <th class="text-right">P&amp;L Realizzato</th>
-                                    <th>Note</th>
-                                    <th class="text-center w-80"></th>
+                                    <th scope="col">Data</th>
+                                    <th scope="col">Tipo</th>
+                                    <th scope="col">Ticker</th>
+                                    <th scope="col">Nome Titolo</th>
+                                    <th scope="col" class="text-right">Quantità</th>
+                                    <th scope="col" class="text-right">Prezzo Eseguito</th>
+                                    <th scope="col" class="text-right">Commissione</th>
+                                    <th scope="col" class="text-right">P&amp;L Realizzato</th>
+                                    <th scope="col">Note</th>
+                                    <th scope="col" class="text-center w-80"></th>
                                 </tr>
                             </thead>
                             <tbody id="transactionsTableBody">
@@ -341,7 +323,7 @@
                             </tbody>
                         </table>
                     </div>
-                </div>
+                </section>
             </div>
         </main>
     </div>
@@ -408,7 +390,7 @@
     </div>
 
     <!-- Modal Add/Edit Single Holding -->
-    <div class="modal-overlay" id="holdingModal">
+    <div class="modal-overlay" id="holdingModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
         <div class="modal-content">
             <div class="modal-header">
                 <h2 class="modal-title" id="modalTitle">Aggiungi Titolo al Portafoglio</h2>
@@ -457,10 +439,10 @@
     </div>
 
     <!-- Modal Conferma Salvataggio Modifiche al Volo -->
-    <div class="modal-overlay" id="confirmSaveModal">
+    <div class="modal-overlay" id="confirmSaveModal" role="alertdialog" aria-modal="true" aria-labelledby="confirmSaveModalTitle">
         <div class="modal-content modal-md">
             <div class="modal-header">
-                <h2 class="modal-title">⚠️ Conferma Salvataggio Modifiche</h2>
+                <h2 class="modal-title" id="confirmSaveModalTitle">⚠️ Conferma Salvataggio Modifiche</h2>
                 <button class="modal-close" id="closeConfirmModal" aria-label="Chiudi">×</button>
             </div>
             <p class="text-sm text-secondary mb-3">Stai per aggiornare le seguenti posizioni nel database. Confermi l'operazione?</p>
@@ -477,10 +459,10 @@
     </div>
 
     <!-- Modal Import CSV -->
-    <div class="modal-overlay" id="importModal">
+    <div class="modal-overlay" id="importModal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
         <div class="modal-content">
             <div class="modal-header">
-                <h2 class="modal-title">📤 Importa Portafoglio da CSV</h2>
+                <h2 class="modal-title" id="importModalTitle">📤 Importa Portafoglio da CSV</h2>
                 <button class="modal-close" id="closeImportModal" aria-label="Chiudi">×</button>
             </div>
             <div class="form-group">
@@ -498,14 +480,6 @@
         </div>
     </div>
 
-    <script>
-        (function () {
-            var b = document.getElementById('btnThemeToggle');
-            if (b && b.firstElementChild) {
-                b.firstElementChild.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
-            }
-        })();
-    </script>
     <script type="module" src="/static/js/app.js?v=3.0.0"></script>
     <script type="module" src="/static/js/portfolio.js?v=3.0.0"></script>
 </body>

@@ -5,19 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Impostazioni - Stock Monitor</title>
     <link rel="icon" href="data:,">
-    <script>
-        (function () {
-            try {
-                var t = localStorage.getItem('app_theme');
-                if (t !== 'light' && t !== 'dark') {
-                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-                }
-                document.documentElement.setAttribute('data-theme', t);
-            } catch (e) {
-                document.documentElement.setAttribute('data-theme', 'dark');
-            }
-        })();
-    </script>
+    <script src="/static/js/theme-init.js?v=3.0.0"></script>
     <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
 </head>
 <body>
@@ -35,7 +23,7 @@
                 <a href="/static/watchlist.html" class="nav-link"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
                 <a href="/static/portfolio.html" class="nav-link"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
                 <a href="/static/advice.html" class="nav-link"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
-                <a href="/static/settings.html" class="nav-link active"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
+                <a href="/static/settings.html" class="nav-link active" aria-current="page"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
         </aside>
 
@@ -46,7 +34,7 @@
                     <h1 class="page-title">Impostazioni</h1>
                 </div>
                 <div class="topbar-actions">
-                    <button class="theme-toggle-btn" id="btnThemeToggle" onclick="window.toggleTheme()" title="Cambia tema" aria-label="Cambia tema">
+                    <button class="theme-toggle-btn" id="btnThemeToggle" title="Cambia tema" aria-label="Cambia tema">
                         <span>🌙</span>
                     </button>
                 </div>
@@ -76,11 +64,11 @@
                             <div class="flex flex-col gap-1">
                                 <span class="text-xs text-muted">Scorciatoie veloci:</span>
                                 <div class="flex gap-2 flex-wrap">
-                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=2500">2.500 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=5000">5.000 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=10000">10.000 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=25000">25.000 €</button>
-                                    <button type="button" class="btn btn-ghost btn-xs" onclick="document.getElementById('targetBudget').value=50000">50.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-budget="2500">2.500 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-budget="5000">5.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-budget="10000">10.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-budget="25000">25.000 €</button>
+                                    <button type="button" class="btn btn-ghost btn-xs" data-budget="50000">50.000 €</button>
                                 </div>
                             </div>
                         </div>
@@ -170,11 +158,11 @@
                             <table>
                                 <thead>
                                     <tr>
-                                        <th>Ticker</th>
-                                        <th>Direzione</th>
-                                        <th>Soglia %</th>
-                                        <th>Stato</th>
-                                        <th class="text-center w-110">Azioni</th>
+                                        <th scope="col">Ticker</th>
+                                        <th scope="col">Direzione</th>
+                                        <th scope="col">Soglia %</th>
+                                        <th scope="col">Stato</th>
+                                        <th scope="col" class="text-center w-110">Azioni</th>
                                     </tr>
                                 </thead>
                                 <tbody id="alertRulesBody"></tbody>
@@ -185,7 +173,7 @@
                     <!-- Sicurezza & Password -->
                     <div class="card mb-4">
                         <h2 class="card-title mb-4">🔒 Sicurezza &amp; Password</h2>
-                        <div id="passwordAlert" class="alert-error mb-4" style="display:none;"></div>
+                        <div id="passwordAlert" class="alert-error mb-4" style="display:none;" role="alert"></div>
                         <div class="password-change-grid">
                             <div class="form-group mb-0">
                                 <label for="currentPassword">Password Attuale</label>
@@ -232,11 +220,11 @@
                             <table>
                                 <thead>
                                     <tr>
-                                        <th>Nome Utente</th>
-                                        <th>Ruolo</th>
-                                        <th>Data Creazione</th>
-                                        <th>Ultimo Accesso</th>
-                                        <th class="text-center w-110">Azioni</th>
+                                        <th scope="col">Nome Utente</th>
+                                        <th scope="col">Ruolo</th>
+                                        <th scope="col">Data Creazione</th>
+                                        <th scope="col">Ultimo Accesso</th>
+                                        <th scope="col" class="text-center w-110">Azioni</th>
                                     </tr>
                                 </thead>
                                 <tbody id="usersTableBody">
@@ -285,14 +273,6 @@
         </main>
     </div>
 
-    <script>
-        (function () {
-            var b = document.getElementById('btnThemeToggle');
-            if (b && b.firstElementChild) {
-                b.firstElementChild.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
-            }
-        })();
-    </script>
     <script type="module" src="/static/js/app.js?v=3.0.0"></script>
     <script type="module" src="/static/js/settings.js?v=3.0.0"></script>
 </body>

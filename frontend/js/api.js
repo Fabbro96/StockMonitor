@@ -1,4 +1,13 @@
-export const API_BASE = '/api';
+const API_BASE = '/api';
+
+const handleUnauthorized = () => {
+  localStorage.removeItem('auth_token');
+  localStorage.removeItem('auth_username');
+  if (!window.location.pathname.includes('login.html')) {
+    const currentPath = window.location.pathname + window.location.search;
+    window.location.href = `/static/login.html?redirect=${encodeURIComponent(currentPath)}`;
+  }
+};
 
 const fetchApi = async (endpoint, options = {}) => {
   const url = `${API_BASE}${endpoint}`;
@@ -22,12 +31,7 @@ const fetchApi = async (endpoint, options = {}) => {
     
     // Auto-redirect to login on 401 Unauthorized if not already on login page
     if (response.status === 401) {
-      localStorage.removeItem('auth_token');
-      localStorage.removeItem('auth_username');
-      if (!window.location.pathname.includes('login.html')) {
-        const currentPath = window.location.pathname + window.location.search;
-        window.location.href = `/static/login.html?redirect=${encodeURIComponent(currentPath)}`;
-      }
+      handleUnauthorized();
       throw new Error('Sessione non valida o scaduta. Effettua il login.');
     }
 
@@ -48,7 +52,9 @@ const fetchApi = async (endpoint, options = {}) => {
     
     return data;
   } catch (error) {
-    console.error(`API Call failed: ${endpoint}`, error);
+    if (error?.name !== 'AbortError') {
+      console.error(`API Call failed: ${endpoint}`, error);
+    }
     throw error;
   }
 };
@@ -87,7 +93,7 @@ export const api = {
   deleteUser: (id) => fetchApi(`/auth/users/${id}`, { method: 'DELETE' }),
 
   // Stocks & Deep-Dive
-  searchStocks: (query) => fetchApi(`/stocks/search?q=${encodeURIComponent(query)}`),
+  searchStocks: (query, options = {}) => fetchApi(`/stocks/search?q=${encodeURIComponent(query)}`, options),
   getStockDetails: (ticker) => fetchApi(`/stocks/${encodeURIComponent(ticker)}/details`),
   getStockCandles: (ticker, timeframe = '1m') => fetchApi(`/stocks/${encodeURIComponent(ticker)}/candles?timeframe=${timeframe}`),
   updateStockMarket: (ticker, market) => fetchApi(`/stocks/${encodeURIComponent(ticker)}`, {
@@ -149,8 +155,7 @@ export const api = {
     });
     
     if (response.status === 401) {
-      localStorage.removeItem('auth_token');
-      window.location.href = `/static/login.html?redirect=${encodeURIComponent(window.location.pathname)}`;
+      handleUnauthorized();
       return null;
     }
     

@@ -144,11 +144,11 @@ const initChart = () => {
     }
     resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
-        if (entry.contentRect.width > 0 && chart) {
-          chart.applyOptions({
-            width: entry.contentRect.width,
-            height: chartContainer.clientHeight || 340
-          });
+        const width = entry.contentRect.width;
+        if (width > 0 && chart) {
+          // Legge l'altezza PRIMA di applyOptions per evitare read-after-write layout thrash
+          const height = chartContainer.clientHeight || 340;
+          chart.applyOptions({ width, height });
         }
       }
     });
@@ -243,10 +243,9 @@ const renderHeatmap = (items) => {
     container.innerHTML = `
       <div class="text-muted text-xs py-6 text-center span-full">
         Nessun titolo attivo per la heatmap. 
-        <button class="btn btn-primary btn-sm mt-2" id="btnHeatmapSeedDemo">🚀 Inizializza Dati Demo</button>
+        <button class="btn btn-primary btn-sm mt-2" id="btnHeatmapSeedDemo" data-action="seed-demo">🚀 Inizializza Dati Demo</button>
       </div>
     `;
-    container.querySelector('#btnHeatmapSeedDemo')?.addEventListener('click', triggerSeedDemo);
     return;
   }
 
@@ -383,12 +382,11 @@ const clearSkeletons = () => {
           Nessun titolo nel portafoglio.
           <div class="mt-2 flex justify-center gap-2">
             <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
-            <button class="btn btn-ghost btn-sm" id="btnTableSeedDemoFallback">🚀 Prova Demo</button>
+            <button class="btn btn-ghost btn-sm" id="btnTableSeedDemoFallback" data-action="seed-demo">🚀 Prova Demo</button>
           </div>
         </td>
       </tr>
     `;
-    tbody.querySelector('#btnTableSeedDemoFallback')?.addEventListener('click', triggerSeedDemo);
   }
 };
 
@@ -400,6 +398,8 @@ const loadDashboardData = async (isSilentRefresh = false) => {
     
     const [dashData, portfolioRes, heatmapRes, adviceRes] = await Promise.all([
       api.getDashboard().catch(() => ({})),
+      // getDashboard restituisce solo il summary aggregato (niente righe holdings):
+      // la tabella qui sotto richiede la lista completa, quindi la call resta necessaria.
       api.getPortfolio().catch(() => []),
       api.getHeatmap().catch(() => []),
       api.getLatestAdvice().catch(() => [])
@@ -473,12 +473,11 @@ const loadDashboardData = async (isSilentRefresh = false) => {
               Nessun titolo nel portafoglio. 
               <div class="mt-2 flex justify-center gap-2">
                 <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
-                <button class="btn btn-ghost btn-sm" id="btnTableSeedDemo">🚀 Prova Demo</button>
+                <button class="btn btn-ghost btn-sm" id="btnTableSeedDemo" data-action="seed-demo">🚀 Prova Demo</button>
               </div>
             </td>
           </tr>
         `;
-        tbody.querySelector('#btnTableSeedDemo')?.addEventListener('click', triggerSeedDemo);
       } else {
         tbody.innerHTML = portfolio.slice(0, 6).map(item => {
           const pnl = item.pnl_absolute ?? 0;
@@ -568,7 +567,18 @@ const loadDashboardData = async (isSilentRefresh = false) => {
 const initDashboard = () => {
   initChart();
   loadDashboardData();
-  
+
+  // Empty-state seed buttons are re-rendered on every load: ONE delegated
+  // listener on the stable container instead of re-binding per render.
+  const dashboardContent = document.getElementById('dashboardContent');
+  if (dashboardContent) {
+    dashboardContent.addEventListener('click', (e) => {
+      if (e.target.closest('[data-action="seed-demo"]')) {
+        triggerSeedDemo();
+      }
+    });
+  }
+
   // Listen for theme change
   window.addEventListener('themeChanged', () => {
     updateChartTheme();
@@ -580,13 +590,21 @@ const initDashboard = () => {
     tfGroup.querySelectorAll('.timeframe-btn').forEach(btn => {
       const d = parseInt(btn.dataset.days);
       if (d === currentChartDays) {
-        tfGroup.querySelectorAll('.timeframe-btn').forEach(b => b.classList.remove('active'));
+        tfGroup.querySelectorAll('.timeframe-btn').forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-pressed', 'false');
+        });
         btn.classList.add('active');
+        btn.setAttribute('aria-pressed', 'true');
       }
 
       btn.addEventListener('click', () => {
-        tfGroup.querySelectorAll('.timeframe-btn').forEach(b => b.classList.remove('active'));
+        tfGroup.querySelectorAll('.timeframe-btn').forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-pressed', 'false');
+        });
         btn.classList.add('active');
+        btn.setAttribute('aria-pressed', 'true');
         currentChartDays = parseInt(btn.dataset.days) || 30;
         localStorage.setItem('dashboard_timeframe', currentChartDays);
         loadPerformanceChart(currentChartDays);
@@ -599,8 +617,12 @@ const initDashboard = () => {
   if (chartTypeGroup) {
     chartTypeGroup.querySelectorAll('.chart-type-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        chartTypeGroup.querySelectorAll('.chart-type-btn').forEach(b => b.classList.remove('active'));
+        chartTypeGroup.querySelectorAll('.chart-type-btn').forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-pressed', 'false');
+        });
         btn.classList.add('active');
+        btn.setAttribute('aria-pressed', 'true');
         currentChartType = btn.dataset.type;
         applyChartData();
       });
@@ -612,8 +634,12 @@ const initDashboard = () => {
   if (benchChips) {
     benchChips.querySelectorAll('.bench-chip').forEach(chip => {
       chip.addEventListener('click', async () => {
-        benchChips.querySelectorAll('.bench-chip').forEach(c => c.classList.remove('active'));
+        benchChips.querySelectorAll('.bench-chip').forEach(c => {
+          c.classList.remove('active');
+          c.setAttribute('aria-pressed', 'false');
+        });
         chip.classList.add('active');
+        chip.setAttribute('aria-pressed', 'true');
         activeBenchmark = chip.dataset.bench;
 
         if (activeBenchmark === 'none') {
@@ -647,11 +673,36 @@ const initDashboard = () => {
 
   // Auto-refresh ogni 180s (solo dati leggeri: il ciclo silente salta
   // performance e risk-metrics, restano su load manuale/cambio timeframe)
-  setInterval(() => {
-    if (!document.hidden) {
-      loadDashboardData(true);
+  let refreshTimer = null;
+  let refreshing = false;
+  refreshTimer = setInterval(async () => {
+    if (document.hidden || refreshing) return;
+    refreshing = true;
+    try {
+      await loadDashboardData(true);
+    } finally {
+      refreshing = false;
     }
   }, 180000);
+
+  // Cleanup su pagehide: stop polling, ResizeObserver e chart.
+  // Skip se la pagina entra in bfcache (persisted): verrà ripristinata intatta.
+  const teardown = (event) => {
+    if (event && event.persisted) return;
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+    if (resizeObserver) {
+      try { resizeObserver.disconnect(); } catch (err) {}
+      resizeObserver = null;
+    }
+    if (chart) {
+      try { chart.remove(); } catch (err) {}
+      chart = null;
+    }
+  };
+  window.addEventListener('pagehide', teardown);
 };
 
 if (document.readyState === 'loading') {

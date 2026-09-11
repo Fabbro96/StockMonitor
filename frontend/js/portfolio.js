@@ -157,13 +157,12 @@ const renderTable = () => {
         <td colspan="9" class="text-center text-muted py-8">
           Nessun titolo in portafoglio. 
           <div class="mt-3 flex justify-center gap-2">
-            <button class="btn btn-primary" onclick="window.openAddHoldingModal()">➕ Aggiungi Holding</button>
-            <button class="btn btn-ghost" id="btnEmptySeedDemo">🚀 Inizializza Demo</button>
+            <button class="btn btn-primary" data-action="open-add-holding">➕ Aggiungi Holding</button>
+            <button class="btn btn-ghost" id="btnEmptySeedDemo" data-action="seed-demo">🚀 Inizializza Demo</button>
           </div>
         </td>
       </tr>
     `;
-    tbody.querySelector('#btnEmptySeedDemo')?.addEventListener('click', triggerSeedDemo);
     return;
   }
 
@@ -244,10 +243,6 @@ const renderTable = () => {
       </tr>
     `;
   }).join('');
-
-  tbody.querySelectorAll('.input-qty, .input-price').forEach(input => {
-    input.addEventListener('input', handleInlineEdit);
-  });
 };
 
 const handleInlineEdit = (e) => {
@@ -305,12 +300,17 @@ const handleInlineEdit = (e) => {
   updateSaveBar();
 };
 
-export const loadPortfolio = async () => {
+const loadPortfolio = async () => {
   try {
     renderSkeletons();
-    summaryData = await api.getPortfolioSummary().catch(() => ({}));
-    portfolioData = await api.getPortfolio().catch(() => []);
-    const userSettings = await api.getSettings().catch(() => ({}));
+    const [summaryResult, portfolioResult, settingsResult] = await Promise.all([
+      api.getPortfolioSummary().catch(() => ({})),
+      api.getPortfolio().catch(() => []),
+      api.getSettings().catch(() => ({}))
+    ]);
+    summaryData = summaryResult;
+    portfolioData = portfolioResult;
+    const userSettings = settingsResult;
 
     document.getElementById('totalValue').textContent = formatCurrency(summaryData.total_value || 0);
     document.getElementById('totalInvested').textContent = formatCurrency(summaryData.total_invested || 0);
@@ -358,7 +358,7 @@ export const loadPortfolio = async () => {
   }
 };
 
-export const loadRealizedPnL = async () => {
+const loadRealizedPnL = async () => {
   try {
     const res = await api.getRealizedPnL();
     const el = document.getElementById('totalRealizedPnL');
@@ -374,7 +374,7 @@ export const loadRealizedPnL = async () => {
 
 let currentTxFilter = 'ALL';
 
-export const loadTransactions = async (type = currentTxFilter) => {
+const loadTransactions = async (type = currentTxFilter) => {
   currentTxFilter = type;
   const tbody = document.getElementById('transactionsTableBody');
   if (!tbody) return;
@@ -389,7 +389,7 @@ export const loadTransactions = async (type = currentTxFilter) => {
           <td colspan="10" class="text-center text-muted py-6">
             Nessuna transazione registrata ${type !== 'ALL' ? `con filtro <strong>${escapeHtml(type)}</strong>` : ''}.
             <div class="mt-2">
-              <button class="btn btn-primary btn-sm" onclick="window.openTxModal()">➕ Registra la prima esecuzione</button>
+              <button class="btn btn-primary btn-sm" data-action="open-tx-modal">➕ Registra la prima esecuzione</button>
             </div>
           </td>
         </tr>
@@ -732,7 +732,6 @@ const openAddModal = (defaultTicker = '') => {
   }
   holdingModal.classList.add('active');
 };
-window.openAddHoldingModal = openAddModal;
 
 window.openTxModal = (ticker = '') => {
   if (!txModal) return;
@@ -752,6 +751,46 @@ const closeHoldingModal = () => holdingModal?.classList.remove('active');
 const closeConfirmModal = () => confirmSaveModal?.classList.remove('active');
 const closeImportModal = () => importModal?.classList.remove('active');
 const closeTxModal = () => txModal?.classList.remove('active');
+
+// Autocomplete riutilizzabile (ricerca ticker con debounce)
+const setupAutocomplete = (inputEl, resultsEl, onSelect) => {
+  if (!inputEl || !resultsEl) return;
+  let timeout = null;
+
+  inputEl.addEventListener('input', (e) => {
+    clearTimeout(timeout);
+    const q = e.target.value.trim();
+    if (q.length < 2) {
+      resultsEl.style.display = 'none';
+      return;
+    }
+    timeout = setTimeout(async () => {
+      try {
+        const results = await api.searchStocks(q);
+        if (results && results.length > 0) {
+          resultsEl.innerHTML = results.map(r => `
+            <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
+              <strong class="text-primary font-mono">${escapeHtml(r.ticker)}</strong> — <span class="text-secondary">${escapeHtml(r.name)}</span>
+            </div>
+          `).join('');
+          resultsEl.style.display = 'block';
+        } else {
+          resultsEl.style.display = 'none';
+        }
+      } catch (e) {
+        resultsEl.style.display = 'none';
+      }
+    }, 250);
+  });
+
+  resultsEl.addEventListener('click', (e) => {
+    const option = e.target.closest('.autocomplete-item[data-ticker]');
+    if (!option) return;
+    if (onSelect) onSelect(option.dataset.ticker);
+    else inputEl.value = option.dataset.ticker;
+    resultsEl.style.display = 'none';
+  });
+};
 
 const initPortfolio = () => {
   loadPortfolio();
@@ -785,6 +824,16 @@ const initPortfolio = () => {
 
   // Azioni delegate su tabelle (evita handler inline con id interpolati)
   document.getElementById('portfolioTableBody')?.addEventListener('click', (e) => {
+    const addHoldingBtn = e.target.closest('[data-action="open-add-holding"]');
+    if (addHoldingBtn) {
+      openAddModal();
+      return;
+    }
+    const seedBtn = e.target.closest('[data-action="seed-demo"]');
+    if (seedBtn) {
+      triggerSeedDemo();
+      return;
+    }
     const btn = e.target.closest('[data-action="delete-holding"]');
     if (btn) {
       const id = parseInt(btn.dataset.id, 10);
@@ -797,7 +846,18 @@ const initPortfolio = () => {
     }
   });
 
+  // Inline edit delegato (qty/prezzo): un solo listener, niente riattacco per render
+  document.getElementById('portfolioTableBody')?.addEventListener('input', (e) => {
+    if (!e.target.closest('.input-qty, .input-price')) return;
+    handleInlineEdit(e);
+  });
+
   document.getElementById('transactionsTableBody')?.addEventListener('click', (e) => {
+    const openTxBtn = e.target.closest('[data-action="open-tx-modal"]');
+    if (openTxBtn) {
+      window.openTxModal();
+      return;
+    }
     const btn = e.target.closest('[data-action="delete-transaction"]');
     if (!btn) return;
     const id = parseInt(btn.dataset.id, 10);
@@ -821,13 +881,21 @@ const initPortfolio = () => {
   if (allocGroup) {
     allocGroup.querySelectorAll('.timeframe-btn').forEach(btn => {
       if (btn.dataset.type === currentAllocView) {
-        allocGroup.querySelectorAll('.timeframe-btn').forEach(b => b.classList.remove('active'));
+        allocGroup.querySelectorAll('.timeframe-btn').forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-pressed', 'false');
+        });
         btn.classList.add('active');
+        btn.setAttribute('aria-pressed', 'true');
       }
 
       btn.addEventListener('click', () => {
-        allocGroup.querySelectorAll('.timeframe-btn').forEach(b => b.classList.remove('active'));
+        allocGroup.querySelectorAll('.timeframe-btn').forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-pressed', 'false');
+        });
         btn.classList.add('active');
+        btn.setAttribute('aria-pressed', 'true');
         currentAllocView = btn.dataset.type;
         localStorage.setItem('portfolio_alloc_view', currentAllocView);
         updateAllocationChart();
@@ -923,44 +991,10 @@ const initPortfolio = () => {
   });
 
   // Autocomplete
-  let timeout = null;
   const tickerInput = document.getElementById('tickerInput');
-  const resultsDiv = document.getElementById('autocompleteResults');
-
-  if (tickerInput && resultsDiv) {
-    tickerInput.addEventListener('input', (e) => {
-      clearTimeout(timeout);
-      const q = e.target.value.trim();
-      if (q.length < 2) {
-        resultsDiv.style.display = 'none';
-        return;
-      }
-      timeout = setTimeout(async () => {
-        try {
-          const results = await api.searchStocks(q);
-          if (results && results.length > 0) {
-            resultsDiv.innerHTML = results.map(r => `
-              <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
-                <strong class="text-primary font-mono">${escapeHtml(r.ticker)}</strong> — <span class="text-secondary">${escapeHtml(r.name)}</span>
-              </div>
-            `).join('');
-            resultsDiv.style.display = 'block';
-          } else {
-            resultsDiv.style.display = 'none';
-          }
-        } catch (e) {
-          resultsDiv.style.display = 'none';
-        }
-      }, 250);
-    });
-
-    resultsDiv.addEventListener('click', (e) => {
-      const option = e.target.closest('.autocomplete-item[data-ticker]');
-      if (!option) return;
-      tickerInput.value = option.dataset.ticker;
-      resultsDiv.style.display = 'none';
-    });
-  }
+  setupAutocomplete(tickerInput, document.getElementById('autocompleteResults'), (ticker) => {
+    if (tickerInput) tickerInput.value = ticker;
+  });
 
   // Export CSV
   document.getElementById('btnExport')?.addEventListener('click', async () => {
@@ -1031,51 +1065,21 @@ const initPortfolio = () => {
 
   document.querySelectorAll('.tx-filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.tx-filter-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tx-filter-btn').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-pressed', 'false');
+      });
       btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
       loadTransactions(btn.dataset.type);
     });
   });
 
   // Tx Autocomplete
-  let txTimeout = null;
   const txTickerInput = document.getElementById('txTickerInput');
-  const txResultsDiv = document.getElementById('txAutocompleteResults');
-
-  if (txTickerInput && txResultsDiv) {
-    txTickerInput.addEventListener('input', (e) => {
-      clearTimeout(txTimeout);
-      const q = e.target.value.trim();
-      if (q.length < 2) {
-        txResultsDiv.style.display = 'none';
-        return;
-      }
-      txTimeout = setTimeout(async () => {
-        try {
-          const results = await api.searchStocks(q);
-          if (results && results.length > 0) {
-            txResultsDiv.innerHTML = results.map(r => `
-              <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
-                <strong class="text-primary font-mono">${escapeHtml(r.ticker)}</strong> — <span class="text-secondary">${escapeHtml(r.name)}</span>
-              </div>
-            `).join('');
-            txResultsDiv.style.display = 'block';
-          } else {
-            txResultsDiv.style.display = 'none';
-          }
-        } catch (e) {
-          txResultsDiv.style.display = 'none';
-        }
-      }, 250);
-    });
-
-    txResultsDiv.addEventListener('click', (e) => {
-      const option = e.target.closest('.autocomplete-item[data-ticker]');
-      if (!option) return;
-      txTickerInput.value = option.dataset.ticker;
-      txResultsDiv.style.display = 'none';
-    });
-  }
+  setupAutocomplete(txTickerInput, document.getElementById('txAutocompleteResults'), (ticker) => {
+    if (txTickerInput) txTickerInput.value = ticker;
+  });
 
   // Submit Transaction Form
   document.getElementById('txForm')?.addEventListener('submit', async (e) => {

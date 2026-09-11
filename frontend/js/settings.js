@@ -80,27 +80,29 @@ const loadSettings = async () => {
   try {
     showLoading('settingsContent');
 
-    // 1. Get Me & check admin status
-    try {
-      currentUser = await api.getMe();
-      if (currentUser && currentUser.is_admin) {
-        const adminSection = document.getElementById('adminUsersSection');
-        if (adminSection) adminSection.style.display = 'block';
-        loadUsers();
-      }
-    } catch (e) {
-      console.warn('Impossibile verificare i permessi utente:', e);
-    }
+    // 1. Get Me & Get Settings in parallelo
+    let usersPromise = null;
+    const [me, settings] = await Promise.all([
+      api.getMe().catch((e) => {
+        console.warn('Impossibile verificare i permessi utente:', e);
+        return undefined;
+      }),
+      api.getSettings().catch(() => ({
+        strategy: 'mixed',
+        budget: 10000,
+        markets: ['IT', 'US', 'EU'],
+        reportFreq: 2,
+        reportTimes: ['09:00', '18:00'],
+        apiStatus: { telegram: false, gemini: true, gemini_model: 'gemini-3.7-flash', reddit: false }
+      }))
+    ]);
 
-    // 2. Get Settings
-    const settings = await api.getSettings().catch(() => ({ 
-      strategy: 'mixed', 
-      budget: 10000, 
-      markets: ['IT', 'US', 'EU'], 
-      reportFreq: 2, 
-      reportTimes: ['09:00', '18:00'], 
-      apiStatus: { telegram: false, gemini: true, gemini_model: 'gemini-3.7-flash', reddit: false } 
-    }));
+    if (me !== undefined) currentUser = me;
+    if (currentUser && currentUser.is_admin) {
+      const adminSection = document.getElementById('adminUsersSection');
+      if (adminSection) adminSection.style.display = 'block';
+      usersPromise = loadUsers();
+    }
     
     // Strategy
     document.getElementById('strategyType').value = settings.strategy || 'mixed';
@@ -141,6 +143,9 @@ const loadSettings = async () => {
     // Alerts
     alertRules = await api.getAlertRules().catch(() => []);
     renderAlertRules();
+
+    // Attende eventuale caricamento utenti prima di nascondere l'overlay
+    if (usersPromise) await usersPromise;
 
   } catch(e) {
     showToast('Errore nel caricamento delle impostazioni', 'error');
@@ -271,6 +276,14 @@ const initSettings = () => {
     } catch(e) {
       showToast('Errore invio messaggio: verifica token e chat_id in .env', 'error');
     }
+  });
+
+  // Budget preset buttons (data-budget="N")
+  document.getElementById('settingsForm')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-budget]');
+    if (!btn) return;
+    const budgetInput = document.getElementById('targetBudget');
+    if (budgetInput) budgetInput.value = btn.dataset.budget;
   });
 
   // Save Settings

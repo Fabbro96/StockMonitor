@@ -5,21 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Consigli IA - Stock Monitor</title>
     <link rel="icon" href="data:,">
-    <script>
-        (function () {
-            try {
-                var t = localStorage.getItem('app_theme');
-                if (t !== 'light' && t !== 'dark') {
-                    t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-                }
-                document.documentElement.setAttribute('data-theme', t);
-            } catch (e) {
-                document.documentElement.setAttribute('data-theme', 'dark');
-            }
-        })();
-    </script>
+    <script src="/static/js/theme-init.js?v=3.0.0"></script>
     <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
-    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.0"></script>
+    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.0" defer></script>
 </head>
 <body>
     <div class="app-container">
@@ -36,7 +24,7 @@
                 <a href="/static/index.html" class="nav-link"><span class="nav-icon">🏠</span><span class="nav-label">Dashboard</span></a>
                 <a href="/static/watchlist.html" class="nav-link"><span class="nav-icon">⭐</span><span class="nav-label">Watchlist</span></a>
                 <a href="/static/portfolio.html" class="nav-link"><span class="nav-icon">💼</span><span class="nav-label">Portafoglio</span></a>
-                <a href="/static/advice.html" class="nav-link active"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
+                <a href="/static/advice.html" class="nav-link active" aria-current="page"><span class="nav-icon">🧠</span><span class="nav-label">Consigli</span></a>
                 <a href="/static/settings.html" class="nav-link"><span class="nav-icon">⚙️</span><span class="nav-label">Impostazioni</span></a>
             </nav>
         </aside>
@@ -51,15 +39,15 @@
                     <div class="market-status">
                         <div class="market-pill" title="Borsa Italiana: Lun-Ven 09:00 - 17:30">
                             <span>🇮🇹 Milano:</span>
-                            <span id="marketStatusIT" class="badge badge-hold">Controllo...</span>
+                            <span id="marketStatusIT" class="badge badge-hold" role="status">Controllo...</span>
                         </div>
                         <div class="market-pill" title="Wall Street: Lun-Ven 15:30 - 22:00 (Ora Italiana)">
                             <span>🇺🇸 Wall St:</span>
-                            <span id="marketStatusUS" class="badge badge-hold">Controllo...</span>
+                            <span id="marketStatusUS" class="badge badge-hold" role="status">Controllo...</span>
                         </div>
                     </div>
                     <button class="btn btn-primary" id="btnGenerate">Genera Analisi Macro Ora</button>
-                    <button class="theme-toggle-btn" id="btnThemeToggle" onclick="window.toggleTheme()" title="Cambia tema" aria-label="Cambia tema">
+                    <button class="theme-toggle-btn" id="btnThemeToggle" title="Cambia tema" aria-label="Cambia tema">
                         <span>🌙</span>
                     </button>
                 </div>
@@ -67,31 +55,31 @@
 
             <div class="content-wrapper" id="adviceContent">
                 <!-- Single Stock AI Analyst Card -->
-                <div class="card card-accent mb-4">
-                    <div class="card-header">
-                        <div>
+                <section class="card card-accent mb-4">
+                    <header class="card-header">
+                        <hgroup>
                             <h3 class="card-title">⚡ Analisi Istantanea su Singolo Titolo (Gemini 3.7 Flash)</h3>
                             <p class="text-xs text-secondary mt-1">Interroga l'IA per un report approfondito con Target Price, RSI, SMA e catalizzatori</p>
-                        </div>
-                    </div>
+                        </hgroup>
+                    </header>
                     <div class="flex gap-2 items-center flex-wrap">
-                        <input type="text" id="aiSingleTicker" class="input-upper" placeholder="Inserisci ticker (es. NVDA, AAPL, ENEL.MI, RACE.MI)...">
+                        <input type="text" id="aiSingleTicker" class="input-upper" placeholder="Inserisci ticker (es. NVDA, AAPL, ENEL.MI, RACE.MI)..." aria-label="Ticker da analizzare">
                         <button class="btn btn-primary" id="btnAnalyzeSingle">Analizza Titolo con IA ➔</button>
                     </div>
                     <div id="singleStockAiResult" class="mt-4" style="display: none;"></div>
-                </div>
+                </section>
 
                 <!-- Market Summary Card -->
-                <div class="card mb-4">
-                    <div class="card-header">
+                <section class="card mb-4">
+                    <header class="card-header">
                         <h3 class="card-title">🌐 Riassunto Globale del Mercato</h3>
                         <span class="text-xs text-muted">Ultimi 7 Giorni • Gemini 3.7 Flash</span>
-                    </div>
+                    </header>
                     <p id="marketSummaryText" class="text-secondary leading-relaxed mb-0">Caricamento in corso...</p>
-                </div>
+                </section>
 
                 <!-- Legenda Termini Finanziari -->
-                <div class="card card-note mb-4">
+                <section class="card card-note mb-4">
                     <div class="flex items-center gap-2 mb-2">
                         <span class="text-base">💡</span>
                         <h4 class="font-bold text-sm">Come interpretare le analisi macro</h4>
@@ -110,18 +98,18 @@
                             Orizzonte temporale della strategia: <em>Breve Termine</em> (giorni) o <em>Medio/Lungo Termine</em> (settimane/mesi).
                         </div>
                     </div>
-                </div>
+                </section>
 
                 <!-- Filters -->
-                <div class="card mb-4">
+                <section class="card mb-4">
                     <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
                         <h4 class="text-sm font-bold text-primary">🔍 Filtra Analisi di Mercato</h4>
                         <button class="btn btn-ghost btn-sm" id="btnResetFilters">↺ Mostra Tutta la Settimana</button>
                     </div>
-                    <div class="flex gap-4 items-end flex-wrap">
+                    <div class="flex gap-4 items-end flex-wrap" role="group" aria-label="Filtri analisi di mercato">
                         <div class="form-group mb-0">
                             <label class="block text-xs font-semibold text-secondary mb-1">📅 Filtra per Giorno</label>
-                            <div class="timeframe-group">
+                            <div class="timeframe-group" role="group" aria-label="Filtra per giorno">
                                 <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterToday" data-day="today">Oggi</button>
                                 <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterYesterday" data-day="yesterday">Ieri</button>
                                 <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterPickDay" data-day="custom">Scegli giorno 📅</button>
@@ -150,7 +138,7 @@
                             <input type="text" id="filterSearch" placeholder="Es. ENEL, AAPL, NVDA, LDO...">
                         </div>
                     </div>
-                </div>
+                </section>
 
                 <!-- Advice List -->
                 <div id="adviceList" class="flex flex-col gap-4"></div>
@@ -180,14 +168,6 @@
         </div>
     </div>
 
-    <script>
-        (function () {
-            var b = document.getElementById('btnThemeToggle');
-            if (b && b.firstElementChild) {
-                b.firstElementChild.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
-            }
-        })();
-    </script>
     <script type="module" src="/static/js/app.js?v=3.0.0"></script>
     <script type="module" src="/static/js/advice.js?v=3.0.0"></script>
 </body>

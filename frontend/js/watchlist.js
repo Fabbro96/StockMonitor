@@ -1,5 +1,5 @@
 import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showToast, showLoading, hideLoading, escapeHtml, openMarketEditor } from './app.js?v=3.0.0';
+import { formatCurrency, formatPercent, showToast, escapeHtml, openMarketEditor } from './app.js?v=3.0.0';
 
 let watchlistData = [];
 
@@ -39,6 +39,14 @@ const renderWatchlist = () => {
     const sign = isUp ? '+' : '';
     const flag = item.market === 'IT' ? '🇮🇹' : (item.market === 'EU' ? '🇪🇺' : '🇺🇸');
     const pct = Math.max(0, Math.min(100, item.fifty_two_week_pct || 50));
+
+    // Numerici API: coercizione + guardie per non rompere il render con stringhe/null
+    const rsiNum = Number(item.rsi);
+    const rsiText = item.rsi && Number.isFinite(rsiNum) ? rsiNum : '--';
+    const peNum = Number(item.pe_ratio);
+    const peText = item.pe_ratio && Number.isFinite(peNum) ? peNum.toFixed(1) : '--';
+    const dyNum = Number(item.dividend_yield);
+    const dyText = item.dividend_yield && Number.isFinite(dyNum) ? `${dyNum.toFixed(2)}%` : '--';
 
     // Alert Badge
     let alertHtml = '<span class="text-xs text-muted">Nessuno</span>';
@@ -80,21 +88,21 @@ const renderWatchlist = () => {
           </div>
         </td>
         <td class="text-center">
-          <span class="badge ${escapeHtml(item.rsi_badge || 'badge-hold')}" title="RSI a 14 periodi">${item.rsi || '--'} (${escapeHtml(item.rsi_status || 'Neutro')})</span>
+          <span class="badge ${escapeHtml(item.rsi_badge || 'badge-hold')}" title="RSI a 14 periodi">${rsiText} (${escapeHtml(item.rsi_status || 'Neutro')})</span>
         </td>
         <td class="text-center">
-          <button class="btn btn-ghost btn-sm btn-alert" data-action="edit-alert" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" data-above="${item.alert_above ?? ''}" data-below="${item.alert_below ?? ''}" title="Modifica Alert">
+          <button class="btn btn-ghost btn-sm btn-alert" data-action="edit-alert" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" data-above="${escapeHtml(item.alert_above ?? '')}" data-below="${escapeHtml(item.alert_below ?? '')}" title="Modifica Alert">
             ${alertHtml}
           </button>
         </td>
-        <td class="text-right font-mono text-xs">${item.pe_ratio ? item.pe_ratio.toFixed(1) : '--'}</td>
-        <td class="text-right font-mono text-xs text-profit">${item.dividend_yield ? `${item.dividend_yield.toFixed(2)}%` : '--'}</td>
+        <td class="text-right font-mono text-xs">${peText}</td>
+        <td class="text-right font-mono text-xs text-profit">${dyText}</td>
         <td class="text-center">
           <div class="flex justify-center gap-1.5 flex-wrap">
             <button class="btn btn-ghost btn-sm" data-action="open-stock" data-ticker="${escapeHtml(item.ticker)}" title="Apri Scheda Completa" aria-label="Analisi e scheda completa per ${escapeHtml(item.ticker)}">
               🔍
             </button>
-            <button class="btn btn-ghost btn-sm" data-action="edit-alert" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" data-above="${item.alert_above ?? ''}" data-below="${item.alert_below ?? ''}" title="Imposta Alert Prezzo" aria-label="Imposta alert di prezzo per ${escapeHtml(item.ticker)}">
+            <button class="btn btn-ghost btn-sm" data-action="edit-alert" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" data-above="${escapeHtml(item.alert_above ?? '')}" data-below="${escapeHtml(item.alert_below ?? '')}" title="Imposta Alert Prezzo" aria-label="Imposta alert di prezzo per ${escapeHtml(item.ticker)}">
               🔔
             </button>
             <button class="btn btn-primary btn-sm" data-action="add-holding" data-ticker="${escapeHtml(item.ticker)}" title="Aggiungi alle Holding" aria-label="Aggiungi ${escapeHtml(item.ticker)} al portafoglio">
@@ -127,7 +135,7 @@ const updateStats = () => {
   if (alertsEl) alertsEl.textContent = activeAlerts;
 };
 
-export const loadWatchlist = async () => {
+const loadWatchlist = async () => {
   try {
     renderSkeletons();
     watchlistData = await api.getWatchlist().catch(() => []);

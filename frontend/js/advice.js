@@ -163,6 +163,8 @@ const renderAdviceCard = (advice) => {
 };
 
 const loadAdvice = async (page = 1, append = false) => {
+  const loadMoreBtn = document.getElementById('btnLoadMore');
+  if (append && loadMoreBtn) loadMoreBtn.disabled = true;
   try {
     if (!append) showLoading('adviceContent');
     
@@ -198,17 +200,18 @@ const loadAdvice = async (page = 1, append = false) => {
 
     if (filtered.length === 0 && !append) {
       listEl.innerHTML = '<div class="card text-center text-muted py-8">Nessuna analisi strategica trovata per i criteri selezionati. Usa il pulsante "Genera Analisi Macro Ora" o seleziona un\'altra data.</div>';
-      document.getElementById('btnLoadMore').style.display = 'none';
+      if (loadMoreBtn) loadMoreBtn.style.display = 'none';
       return;
     }
 
-    listEl.innerHTML += filtered.map(renderAdviceCard).join('');
-    document.getElementById('btnLoadMore').style.display = adviceList.length === 10 ? 'block' : 'none';
+    listEl.insertAdjacentHTML('beforeend', filtered.map(renderAdviceCard).join(''));
+    if (loadMoreBtn) loadMoreBtn.style.display = adviceList.length === 10 ? 'block' : 'none';
 
   } catch (error) {
     showToast('Errore nel caricamento dei consigli', 'error');
   } finally {
     hideLoading('adviceContent');
+    if (append && loadMoreBtn) loadMoreBtn.disabled = false;
   }
 };
 
@@ -288,6 +291,10 @@ const runSingleStockAnalysis = async () => {
     const result = await api.analyzeStockOnDemand(ticker);
     const actionBadgeClass = result.action === 'ACCUMULO' || result.action === 'BUY' ? 'badge-buy' : (result.action === 'PRESA_PROFITTO' || result.action === 'SELL' ? 'badge-sell' : 'badge-hold');
 
+    // Coercizione numerica sicura: l'output LLM non è validato e finisce in innerHTML.
+    const upsideRaw = Number(result.upside_potential_pct);
+    const upsidePct = Number.isFinite(upsideRaw) ? upsideRaw : 0;
+
     resContainer.innerHTML = `
       <div class="card callout-accent p-4">
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
@@ -304,7 +311,7 @@ const runSingleStockAnalysis = async () => {
         <div class="split-grid mb-3">
           <div class="callout p-2">
             <div class="text-xs text-muted">🎯 Target Price Stimato</div>
-            <div class="text-lg font-bold text-primary font-mono">${formatCurrency(result.target_price)} <span class="text-xs text-profit">(+${result.upside_potential_pct || 0}%)</span></div>
+            <div class="text-lg font-bold text-primary font-mono">${formatCurrency(result.target_price)} <span class="text-xs text-profit">(+${escapeHtml(upsidePct)}%)</span></div>
           </div>
           <div class="callout p-2">
             <div class="text-xs text-muted">🛡️ Stop Loss Prudenziale</div>
@@ -352,12 +359,12 @@ const initAdvice = () => {
     if (!isNaN(id) && window.toggleFollow) window.toggleFollow(id);
   });
 
-  document.getElementById('btnAnalyzeSingle').addEventListener('click', runSingleStockAnalysis);
-  document.getElementById('aiSingleTicker').addEventListener('keydown', (e) => {
+  document.getElementById('btnAnalyzeSingle')?.addEventListener('click', runSingleStockAnalysis);
+  document.getElementById('aiSingleTicker')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') runSingleStockAnalysis();
   });
 
-  document.getElementById('btnLoadMore').addEventListener('click', () => {
+  document.getElementById('btnLoadMore')?.addEventListener('click', () => {
     currentPage++;
     loadAdvice(currentPage, true);
   });
@@ -388,7 +395,7 @@ const initAdvice = () => {
       dayButtons[activeType].classList.add('active');
     }
     if (dayButtons.pick) {
-      dayButtons.pick.innerHTML = customLabel ? `📅 ${customLabel}` : 'Scegli giorno 📅';
+      dayButtons.pick.innerHTML = customLabel ? `📅 ${escapeHtml(customLabel)}` : 'Scegli giorno 📅';
     }
   };
 
@@ -462,14 +469,14 @@ const initAdvice = () => {
     if (e.target === datePickerModal) closeDatePicker();
   });
 
-  document.getElementById('filterMarket').addEventListener('change', applyFilters);
-  document.getElementById('filterAction').addEventListener('change', applyFilters);
-  document.getElementById('filterSearch').addEventListener('input', () => {
+  document.getElementById('filterMarket')?.addEventListener('change', applyFilters);
+  document.getElementById('filterAction')?.addEventListener('change', applyFilters);
+  document.getElementById('filterSearch')?.addEventListener('input', () => {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(applyFilters, 500);
   });
 
-  document.getElementById('btnResetFilters').addEventListener('click', () => {
+  document.getElementById('btnResetFilters')?.addEventListener('click', () => {
     document.getElementById('filterDate').value = '';
     setDayButtonState(null);
     document.getElementById('filterMarket').value = '';
@@ -480,7 +487,7 @@ const initAdvice = () => {
     loadAdvice(1);
   });
 
-  document.getElementById('btnGenerate').addEventListener('click', async () => {
+  document.getElementById('btnGenerate')?.addEventListener('click', async () => {
     try {
       showLoading('adviceContent');
       await api.generateAdvice(true);

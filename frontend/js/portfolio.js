@@ -6,6 +6,14 @@ let summaryData = {};
 let modifiedHoldings = new Map();
 let currentAllocView = localStorage.getItem('portfolio_alloc_view') || 'stock'; // 'stock' or 'market'
 
+// Helper: bandiera mercato (IT→🇮🇹, EU→🇪🇺, resto→🇺🇸). Niente default USA per l'Europa.
+const marketFlag = (market) => {
+  const m = (market || '').toUpperCase();
+  if (m === 'IT') return '🇮🇹';
+  if (m === 'EU') return '🇪🇺';
+  return '🇺🇸';
+};
+
 const getPieColors = () => getTheme() === 'light'
   ? ['#2563eb', '#0f8a4d', '#d1242f', '#b45309', '#6d28d9', '#0e7490', '#be185d', '#4f46e5', '#0f766e']
   : ['#5b9dff', '#4cc38a', '#f26a76', '#e3a008', '#a78bfa', '#22d3ee', '#f472b6', '#818cf8', '#2dd4bf'];
@@ -171,7 +179,7 @@ const renderTable = () => {
     const invested = displayQty * displayPrice;
     const pnlAbs = totalValue - invested;
     const pnlPct = invested > 0 ? (pnlAbs / invested) * 100 : 0;
-    const flag = item.market === 'IT' ? '🇮🇹' : '🇺🇸';
+    const flag = marketFlag(item.market);
 
     return `
       <tr class="${isModified ? 'row-modified' : ''}" data-id="${item.id}">
@@ -666,7 +674,7 @@ const renderDividends = (data) => {
   }
 
   tbody.innerHTML = holdings.map(h => {
-    const flag = h.market === 'IT' ? '🇮🇹' : '🇺🇸';
+    const flag = marketFlag(h.market);
     return `
       <tr>
         <td>
@@ -994,7 +1002,13 @@ const initPortfolio = () => {
     try {
       const result = await api.importPortfolio(fileInput.files[0]);
       closeImportModal();
-      showToast(`Importate: ${result.imported || 0} nuove, Aggiornate: ${result.updated || 0}`, 'success');
+      const importErrors = result?.errors || [];
+      if (importErrors.length > 0) {
+        const first = String(importErrors[0] || '').slice(0, 160);
+        showToast(`Importazione con errori (${importErrors.length}): ${first}`, 'error');
+      } else {
+        showToast(`Importate: ${result.imported || 0} nuove, Aggiornate: ${result.updated || 0}`, 'success');
+      }
       loadPortfolio();
     } catch (err) {
       showToast(err.message || 'Errore durante l\'importazione del file CSV', 'error');

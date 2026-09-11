@@ -20,6 +20,11 @@ TRADING_DAYS_PER_YEAR = 252
 # Cache risultati costosi: (result, timestamp)
 _RISK_CACHE: dict[str, tuple[dict, float]] = {}
 _RISK_CACHE_TTL = 300.0  # 5 minuti
+# Cache serie giornaliera portafoglio: il backfill Yahoo (fino a N candele "1y"
+# per ticker con storico scarso) costava ~2.4s a OGNI chiamata con Yahoo ko.
+# Lo storico reale resta su PriceHistory; qui si cachia solo il risultato.
+_SERIES_CACHE: dict[str, tuple[list[dict], float]] = {}
+_SERIES_CACHE_TTL = 120.0  # 2 minuti
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +46,12 @@ async def build_portfolio_daily_series(
     `portfolio_rows`: righe già calcolate da build_portfolio_rows per la stessa
     richiesta; se fornite evitano un ricalcolo completo del portafoglio.
     """
+    cache_key = f"series:{user_id}:{days}"
+    now_ts = time.time()
+    cached = _SERIES_CACHE.get(cache_key)
+    if cached and now_ts - cached[1] < _SERIES_CACHE_TTL:
+        return cached[0]
+
     portfolio = portfolio_rows if portfolio_rows is not None else await build_portfolio_rows(db, user_id=user_id)
     if not portfolio:
         return []
@@ -107,6 +118,7 @@ async def build_portfolio_daily_series(
             series.append({"date": day_str, "value": round(total, 2)})
         current += timedelta(days=1)
 
+    _SERIES_CACHE[cache_key] = (series, now_ts)
     return series
 
 
@@ -262,21 +274,29 @@ async def compute_benchmark_comparison(
     benchmarks_out = {}
     for ticker, res in zip(benchmark_tickers, results):
         meta = BENCHMARKS.get(ticker, {"name": ticker, "flag": "📊"})
-        if isinstance(res, list) and res:
-            filtered = [
-                p for p in res
-                if (start_date is None or p["time"] >= start_date)
-                and (end_date is None or p["time"] <= end_date)
-            ]
-            if not filtered:
-                filtered = res[-days:] if len(res) > days else res
-            benchmarks_out[ticker] = {
-                "name": meta["name"],
-                "flag": meta["flag"],
-                "data": normalize_growth([{"date": p["time"], "value": p["close"]} for p in filtered])
-            }
-        else:
-            benchmarks_out[ticker] = {"name": meta["name"], "flag": meta["flag"], "data": []}
+        # Contratto garantito: ogni benchmark richiesto ha SEMPRE "data" come
+        # lista (vuota se senza dati), mai None/oggetti/eccezioni.
+        data: list = []
+        try:
+            if isinstance(res, list) and res:
+                filtered = [
+                    p for p in res
+                    if isinstance(p, dict)
+                    and (start_date is None or p.get("time") is not None and p["time"] >= start_date)
+                    and (end_date is None or p.get("time") is not None and p["time"] <= end_date)
+                    and p.get("close")
+                ]
+                if not filtered:
+                    filtered = res[-days:] if len(res) > days else res
+                grown = normalize_growth([
+                    {"date": p["time"], "value": p["close"]}
+                    for p in filtered if isinstance(p, dict) and p.get("time") and p.get("close")
+                ])
+                data = grown if isinstance(grown, list) else []
+        except Exception:
+            logger.debug(f"Benchmark {ticker}: fallback a serie vuota.")
+            data = []
+        benchmarks_out[ticker] = {"name": meta["name"], "flag": meta["flag"], "data": data}
 
     return {
         "start_date": start_date,

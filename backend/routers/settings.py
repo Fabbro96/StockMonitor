@@ -11,6 +11,7 @@ from backend.models.stock import Stock
 from backend.models.user import User
 from backend.services.auth import get_current_user
 from backend.services.market_data import MarketDataService
+from backend.utils.helpers import detect_market_currency
 from backend.services.telegram_bot import TelegramService
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -182,13 +183,12 @@ async def create_alert(
         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
         stock = result.scalars().first()
         if not stock:
-            market = "IT" if ticker.endswith(".MI") else "US"
+            suffix_market, suffix_currency = detect_market_currency(ticker)
             info = await MarketDataService.resolve_stock_info(ticker)
             name = info.get("name") or ticker
-            if info.get("market"):
-                market = info["market"]
+            market = info.get("market") or suffix_market
             stock = Stock(ticker=ticker, name=name, market=market,
-                          currency="USD" if market == "US" else "EUR")
+                          currency=info.get("currency") or suffix_currency)
             db.add(stock)
             await db.commit()
             await db.refresh(stock)

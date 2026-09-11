@@ -115,11 +115,12 @@ async def add_to_watchlist(
     result = await db.execute(select(Stock).where(Stock.ticker == ticker))
     stock = result.scalars().first()
     if not stock:
-        market = "IT" if ticker.endswith(".MI") else "US"
+        # Il suffisso è autoritario: il deep dive arricchisce solo il nome,
+        # mai declassato a US (classify_new_stock logga l'eventuale mismatch).
         deep = await MarketDataService.fetch_stock_deep_dive(ticker)
         name = deep.get("name") or ticker
-        market = deep.get("market") or market
-        stock = Stock(ticker=ticker, name=name, market=market, currency="USD" if market == "US" else "EUR")
+        market, currency = MarketDataService.classify_new_stock(ticker, deep)
+        stock = Stock(ticker=ticker, name=name, market=market, currency=currency)
         db.add(stock)
         try:
             await db.commit()

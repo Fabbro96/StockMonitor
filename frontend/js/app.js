@@ -830,7 +830,7 @@ export const openStockModal = async (ticker) => {
     marketBadge.textContent = data.market || 'US';
     marketBadge.className = `badge ${data.market === 'IT' ? 'badge-buy' : 'badge-cyan'}`;
 
-    document.getElementById('smFlag').textContent = data.market === 'IT' ? '🇮🇹' : '🇺🇸';
+    document.getElementById('smFlag').textContent = data.market === 'IT' ? '🇮🇹' : (data.market === 'EU' ? '🇪🇺' : '🇺🇸');
 
     // Check if in portfolio
     const held = portfolio.find(p => p.ticker === currentModalTicker);

@@ -15,6 +15,7 @@ import numpy as np
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models.stock import Stock, PriceHistory
+from backend.utils.helpers import detect_market_currency as _detect_suffix
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,9 @@ _INDICES_CACHE: tuple[list[dict], float] = ([], 0.0)  # single-slot cache (max 1
 _DEEP_DIVE_CACHE: OrderedDict[str, tuple[dict, float]] = OrderedDict()
 CACHE_TTL = 60.0 # 1 minute
 DEEP_CACHE_TTL = 180.0 # 3 minutes
+# TTL breve per i deep-dive STALE (fallback offline): evita di rifare N deep-dive
+# a ogni load quando Yahoo è ko, mantenendo i dati sintetici freschi e brevi.
+DEEP_CACHE_STALE_TTL = 90.0 # 90 secondi
 
 # Budget wall-clock del batch prezzi. Il default (~4.5s) resta per i path
 # user-facing (dashboard/watchlist/alerting); il job orario di background usa
@@ -167,6 +171,40 @@ class MarketDataService:
         {"ticker": "GC=F", "name": "Oro", "flag": "🥇", "type": "commodity"},
         {"ticker": "CL=F", "name": "Petrolio WTI", "flag": "🛢️", "type": "commodity"}
     ]
+
+    @staticmethod
+    def detect_market_currency(ticker: str) -> tuple[str, str]:
+        """Classificazione (market, currency) dal suffisso del ticker.
+
+        Wrapper del helper centrale (`backend.utils.helpers`): il suffisso
+        noto è autoritario e non deve mai essere declassato a US da Yahoo.
+        """
+        return _detect_suffix(ticker)
+
+    @staticmethod
+    def classify_new_stock(ticker: str, info: dict | None = None) -> tuple[str, str]:
+        """(market, currency) da persistere per uno stock appena creato.
+
+        Yahoo/`info` può solo ARRICCHIRE: se il ticker ha un suffisso noto
+        (es. `.MI`, `.AS`) vince sempre il suffisso (un eventuale US di Yahoo
+        viene ignorato con warning); solo per i ticker senza suffisso noto
+        (default US) si accettano market/currency da `info`.
+        """
+        suffix_market, suffix_currency = _detect_suffix(ticker)
+        info = info or {}
+        if suffix_market != "US":
+            y_mkt = str(info.get("market") or "").strip().upper()
+            y_cur = str(info.get("currency") or "").strip().upper()
+            if (y_mkt and y_mkt != suffix_market) or (y_cur and y_cur != suffix_currency):
+                logger.warning(
+                    "Market/currency Yahoo (%s/%s) ignorati per %s: suffisso noto -> %s/%s",
+                    y_mkt or "?", y_cur or "?", (ticker or "").strip().upper(),
+                    suffix_market, suffix_currency,
+                )
+            return suffix_market, suffix_currency
+        mkt = str(info.get("market") or "US").strip().upper() or "US"
+        cur = str(info.get("currency") or suffix_currency or "USD").strip().upper() or "USD"
+        return mkt, cur
 
     @staticmethod
     def is_market_open(market: str) -> bool:
@@ -286,13 +324,15 @@ class MarketDataService:
         if not t_clean:
             return {"name": "", "market": "US", "currency": "USD", "sector": "Other"}
 
+        suffix_market, suffix_currency = _detect_suffix(t_clean)
+
         if t_clean in KNOWN_STOCKS:
             ref = KNOWN_STOCKS[t_clean]
-            mkt = ref.get("market") or ("IT" if t_clean.endswith(".MI") else "US")
+            mkt = ref.get("market") or suffix_market
             return {
                 "name": ref.get("name", t_clean),
                 "market": mkt,
-                "currency": "EUR" if (mkt == "IT" or t_clean.endswith(".MI")) else "USD",
+                "currency": ref.get("currency") or suffix_currency,
                 "sector": ref.get("sector", "Technology")
             }
 
@@ -313,32 +353,40 @@ class MarketDataService:
                 except Exception:
                     pass
 
-                mkt = "IT" if t_clean.endswith(".MI") else ("EU" if any(t_clean.endswith(s) for s in [".PA", ".DE", ".MC", ".AS"]) else "US")
-                curr = currency or ("EUR" if mkt in ["IT", "EU"] else "USD")
+                # Il suffisso noto è autoritario: Yahoo arricchisce solo
+                # nome/settore (e la valuta dei ticker senza suffisso).
+                if suffix_market != "US":
+                    y_cur = str(currency or "").strip().upper()
+                    if y_cur and y_cur != suffix_currency:
+                        logger.warning(
+                            "Valuta Yahoo (%s) ignorata per %s: suffisso noto -> %s",
+                            y_cur, t_clean, suffix_currency,
+                        )
+                    curr = suffix_currency
+                else:
+                    curr = str(currency or suffix_currency or "USD").strip().upper() or "USD"
                 return {
                     "name": name or t_clean,
-                    "market": mkt,
+                    "market": suffix_market,
                     "currency": curr,
                     "sector": sector or "General"
                 }
             except Exception as e:
                 logger.debug(f"Yahoo resolve info failed for {t_clean}: {e}")
-                mkt = "IT" if t_clean.endswith(".MI") else "US"
                 return {
                     "name": t_clean,
-                    "market": mkt,
-                    "currency": "EUR" if mkt == "IT" else "USD",
+                    "market": suffix_market,
+                    "currency": suffix_currency,
                     "sector": "General"
                 }
 
         try:
             return await run_blocking_yf(_sync_resolve, timeout=2.5)
         except Exception:
-            mkt = "IT" if t_clean.endswith(".MI") else "US"
             return {
                 "name": t_clean,
-                "market": mkt,
-                "currency": "EUR" if mkt == "IT" else "USD",
+                "market": suffix_market,
+                "currency": suffix_currency,
                 "sector": "General"
             }
 
@@ -554,6 +602,7 @@ class MarketDataService:
         """Scheletro di fallback del deep dive, esplicitamente marcato come stale."""
         ticker_up = ticker.strip().upper()
         ref = KNOWN_STOCKS.get(ticker_up, {})
+        _, suffix_currency = _detect_suffix(ticker_up)
         fb = MarketDataService._generate_fallback_price(ticker_up)
         return {
             "ticker": ticker_up,
@@ -561,7 +610,7 @@ class MarketDataService:
             "current_price": fb['close'],
             "change_abs": fb['change_abs'],
             "change_percent": fb['change_percent'],
-            "currency": ref.get('currency', 'EUR' if ticker_up.endswith('.MI') else 'USD'),
+            "currency": ref.get('currency') or suffix_currency,
             "stale": True,
             "technical": {"rsi_14": 52.0, "rsi_status": "Neutro", "rsi_badge": "badge-hold", "trend": "Neutro"}
         }
@@ -572,7 +621,10 @@ class MarketDataService:
         ticker_up = ticker.strip().upper()
         if ticker_up in _DEEP_DIVE_CACHE:
             cached_data, cached_time = _DEEP_DIVE_CACHE[ticker_up]
-            if now_ts - cached_time < DEEP_CACHE_TTL:
+            # Gli stale (fallback offline) usano un TTL breve dedicato: restano
+            # serviti da cache 90s invece di rifare N deep-dive a ogni load.
+            ttl = DEEP_CACHE_STALE_TTL if cached_data.get("stale") else DEEP_CACHE_TTL
+            if now_ts - cached_time < ttl:
                 return cached_data
 
         def _sync_deep_dive():
@@ -711,12 +763,23 @@ class MarketDataService:
                 else:
                     div_yield = ref.get('div')
 
+                suffix_market, suffix_currency = _detect_suffix(ticker_up)
+                yahoo_currency = str(info.get('currency') or "").strip().upper()
+                if suffix_market != "US":
+                    if yahoo_currency and yahoo_currency != suffix_currency:
+                        logger.debug(
+                            "Valuta Yahoo (%s) ignorata nel deep dive per %s: suffisso noto -> %s",
+                            yahoo_currency, ticker_up, suffix_currency,
+                        )
+                    deep_currency = ref.get('currency') or suffix_currency
+                else:
+                    deep_currency = ref.get('currency') or yahoo_currency or suffix_currency
                 return {
                     "ticker": ticker_up,
                     "stale": used_fallback,
                     "name": info.get('shortName') or info.get('longName') or ref.get('name', ticker_up),
-                    "market": ref.get('market', "IT" if ticker_up.endswith('.MI') else ("EU" if any(ticker_up.endswith(s) for s in ['.DE', '.AS', '.PA']) else "US")),
-                    "currency": ref.get('currency', info.get('currency', 'EUR' if ticker_up.endswith('.MI') else 'USD')),
+                    "market": ref.get('market') or suffix_market,
+                    "currency": deep_currency,
                     "current_price": round(current_price, 2),
                     "previous_close": round(prev_close, 2),
                     "change_abs": round(change_abs, 2),
@@ -755,7 +818,10 @@ class MarketDataService:
         except Exception:
             logger.debug(f"Timeout/errore deep dive per {ticker_up}, uso fallback stale.")
             data = MarketDataService._deep_dive_fallback(ticker_up)
-        if data and data.get('current_price', 0) > 0 and not data.get('stale'):
+        if data and data.get('current_price', 0) > 0:
+            # Cache condivisa: anche gli stale (TTL breve in lettura) così
+            # watchlist/risk non rifanno N deep-dive a ogni chiamata con Yahoo ko.
+            # Il payload resta marcato stale=True per il frontend.
             _cache_put(_DEEP_DIVE_CACHE, ticker_up, (data, now_ts))
         return data
 
@@ -1007,9 +1073,9 @@ class MarketDataService:
 
                 if name:
                     return [{
-                        "ticker": query.upper(),
+                        "ticker": query.strip().upper(),
                         "name": name,
-                        "market": "IT" if query.upper().endswith(".MI") else "US"
+                        "market": _detect_suffix(query)[0]
                     }]
                 return []
             except Exception:

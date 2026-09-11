@@ -9,6 +9,7 @@ from backend.models.settings import AlertRule
 from backend.models.advice import Advice
 
 from backend.services.market_data import MarketDataService
+from backend.utils.helpers import detect_market_currency
 from backend.services.portfolio_service import build_portfolio_summary, build_portfolio_rows
 from backend.services.analytics import build_portfolio_daily_series
 
@@ -102,11 +103,12 @@ async def get_market_heatmap(db: AsyncSession = Depends(get_db)):
     heatmap_items = []
     for stock in stocks:
         price_data = prices_map.get(stock.ticker) or MarketDataService._generate_fallback_price(stock.ticker)
+        suffix_market, suffix_currency = detect_market_currency(stock.ticker)
         heatmap_items.append({
             "ticker": stock.ticker,
             "name": stock.name or stock.ticker,
-            "market": stock.market or ("IT" if stock.ticker.endswith(".MI") else "US"),
-            "currency": stock.currency or ("EUR" if stock.ticker.endswith(".MI") else "USD"),
+            "market": stock.market or suffix_market,
+            "currency": stock.currency or suffix_currency,
             "current_price": price_data.get("close", 0.0),
             "change_percent": price_data.get("change_percent", 0.0),
             "change_abs": price_data.get("change_abs", 0.0),

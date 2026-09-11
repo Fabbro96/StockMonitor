@@ -1,5 +1,6 @@
 import io
 import csv
+import logging
 from datetime import datetime, date, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response, Query
@@ -26,6 +27,8 @@ from backend.services.analytics import (
 )
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
+
+logger = logging.getLogger(__name__)
 
 
 async def _ensure_stocks(db: AsyncSession, specs: dict[str, dict]) -> dict[str, Stock]:
@@ -260,13 +263,13 @@ async def add_holding(
         result = await db.execute(select(Stock).where(Stock.ticker == ticker))
         stock = result.scalars().first()
         if not stock:
-            # Auto-create stock (risoluzione nome asincrona e non bloccante)
-            market = "IT" if ticker.endswith(".MI") else "US"
+            # Auto-create stock (risoluzione nome asincrona e non bloccante).
+            # Il suffisso è autoritario: Yahoo arricchisce solo il nome, mai
+            # declassato a US (classify_new_stock logga l'eventuale mismatch).
             info = await MarketDataService.resolve_stock_info(ticker)
             name = info.get("name") or ticker
-            if info.get("market"):
-                market = info["market"]
-            stock = Stock(ticker=ticker, name=name, market=market, currency="USD" if market == "US" else "EUR")
+            market, currency = MarketDataService.classify_new_stock(ticker, info)
+            stock = Stock(ticker=ticker, name=name, market=market, currency=currency)
             db.add(stock)
             try:
                 await db.commit()
@@ -504,14 +507,22 @@ async def import_holdings(
             "purchase_date": purchase_date,
         })
 
+    if not parsed_rows and text.strip():
+        # File con contenuto ma zero righe valide (header sconosciuti, spazzatura):
+        # non restare silenti, segnala in errors invece di 200 vuoto.
+        errors.append(
+            "Nessuna riga valida trovata nel file: attese colonne "
+            "'ticker, quantity, avg_purchase_price' (separatore , o ;)."
+        )
+
     if parsed_rows:
         # Prefetch: UNA query per gli stock esistenti e UNA per le holdings dell'utente
         # (creazione con gestione della race su UNIQUE stocks.ticker)
         specs = {
             r["ticker"]: {
                 "name": r["name"],
-                "market": "IT" if r["ticker"].endswith(".MI") else "US",
-                "currency": "EUR" if r["ticker"].endswith(".MI") else "USD",
+                "market": MarketDataService.detect_market_currency(r["ticker"])[0],
+                "currency": MarketDataService.detect_market_currency(r["ticker"])[1],
             }
             for r in parsed_rows
         }
@@ -723,11 +734,12 @@ async def create_transaction(
     stock = res.scalars().first()
     if not stock:
         info = await MarketDataService.resolve_stock_info(ticker)
+        market, currency = MarketDataService.classify_new_stock(ticker, info)
         stock = Stock(
             ticker=ticker,
             name=info.get("name", ticker),
-            market=info.get("market", "IT" if ticker.endswith(".MI") else "US"),
-            currency=info.get("currency", "EUR" if ticker.endswith(".MI") else "USD")
+            market=market,
+            currency=currency
         )
         db.add(stock)
         try:

@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from backend.database import get_db
 from backend.models.stock import Stock, PriceHistory
 from backend.services.market_data import MarketDataService
+from backend.utils.helpers import detect_market_currency
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -62,18 +63,23 @@ async def add_stock(stock: StockCreate, db: AsyncSession = Depends(get_db)):
         await db.refresh(existing)
         return existing
 
+    suffix_market, suffix_currency = detect_market_currency(ticker)
     if not name or not market:
         info = await MarketDataService.resolve_stock_info(ticker)
         if not name:
             name = info.get('name', ticker)
         if not market:
-            market = info.get('market') or ('IT' if ticker.endswith('.MI') else 'US')
+            market = info.get('market') or suffix_market
+        currency = info.get('currency') or suffix_currency
+    else:
+        # market passato esplicitamente: EUR per IT/EU, altrimenti USD.
+        currency = "EUR" if (market or suffix_market) in ("IT", "EU") else "USD"
 
     new_stock = Stock(
         ticker=ticker,
         name=name or ticker,
-        market=market or ("IT" if ticker.endswith(".MI") else "US"),
-        currency="EUR" if (market == "IT" or ticker.endswith(".MI")) else "USD",
+        market=market or suffix_market,
+        currency=currency or suffix_currency,
         is_active=True
     )
     

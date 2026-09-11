@@ -37,7 +37,7 @@ const renderWatchlist = () => {
   tbody.innerHTML = filtered.map(item => {
     const isUp = item.change_percent >= 0;
     const sign = isUp ? '+' : '';
-    const flag = item.market === 'IT' ? '🇮🇹' : '🇺🇸';
+    const flag = item.market === 'IT' ? '🇮🇹' : (item.market === 'EU' ? '🇪🇺' : '🇺🇸');
     const pct = Math.max(0, Math.min(100, item.fifty_two_week_pct || 50));
 
     // Alert Badge

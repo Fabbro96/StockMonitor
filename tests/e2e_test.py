@@ -1042,6 +1042,205 @@ async def test_alerting_stale_uses_db():
           bool(sl_alerts) and sl_alerts[0][2] == 50.0, str(sl_alerts[:2]))
 
 
+async def test_market_suffix_classification(c: httpx.AsyncClient, h: dict):
+    print("\n[21] Classificazione mercato/valuta da suffisso (Yahoo in fallimento)")
+    from types import SimpleNamespace
+    from backend.services import market_data as md
+    from backend.utils.helpers import detect_market_currency
+
+    # 21.1 Helper centrale: mappa suffissi -> (market, currency)
+    check("detect ENEL.MI -> (IT,EUR)", detect_market_currency("ENEL.MI") == ("IT", "EUR"))
+    check("detect ASML.AS -> (EU,EUR)", detect_market_currency("ASML.AS") == ("EU", "EUR"))
+    for sfx in [".DE", ".PA", ".MC", ".LS", ".BR", ".VI"]:
+        check(f"detect TIT{sfx} -> (EU,EUR)", detect_market_currency(f"TIT{sfx}") == ("EU", "EUR"))
+    check("detect AAPL -> (US,USD)", detect_market_currency("AAPL") == ("US", "USD"))
+    check("detect ZZZQ123 -> (US,USD) default accettato",
+          detect_market_currency("ZZZQ123") == ("US", "USD"))
+    check("detect EURUSD=X -> (FX,USD)", detect_market_currency("EURUSD=X") == ("FX", "USD"))
+    check("detect BTC-USD -> (CRYPTO,USD)", detect_market_currency("BTC-USD") == ("CRYPTO", "USD"))
+    check("detect case/whitespace-insensitive", detect_market_currency("  enel.mi ") == ("IT", "EUR"))
+
+    # 21.2 Yahoo in fallimento totale (429/rate-limit simulato)
+    orig_ticker = md.yf.Ticker
+    orig_download = md.yf.download
+
+    def _yahoo_down(*args, **kwargs):
+        raise RuntimeError("Yahoo down (mock e2e)")
+
+    md.yf.Ticker = _yahoo_down
+    md.yf.download = _yahoo_down
+    try:
+        info = await md.MarketDataService.resolve_stock_info("ENEL.MI")
+        check("resolve ENEL.MI senza Yahoo -> IT/EUR",
+              info.get("market") == "IT" and info.get("currency") == "EUR", str(info))
+        info = await md.MarketDataService.resolve_stock_info("ASML.AS")
+        check("resolve ASML.AS senza Yahoo -> EU/EUR",
+              info.get("market") == "EU" and info.get("currency") == "EUR", str(info))
+        info = await md.MarketDataService.resolve_stock_info("AAPL")
+        check("resolve AAPL senza Yahoo -> US/USD",
+              info.get("market") == "US" and info.get("currency") == "USD", str(info))
+        info = await md.MarketDataService.resolve_stock_info("ZZZQ123")
+        check("resolve ZZZQ123 senza Yahoo -> US/USD (default accettato)",
+              info.get("market") == "US" and info.get("currency") == "USD", str(info))
+
+        # 21.3 Yahoo che declassa un suffisso noto a US: il suffisso vince,
+        # ma nome/settore Yahoo arricchiscono comunque.
+        class _FakeUSTicker:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            @property
+            def fast_info(self):
+                return SimpleNamespace(currency="USD")
+
+            @property
+            def info(self):
+                return {"shortName": "Enel Fake US", "currency": "USD", "sector": "Utilities"}
+
+        md.yf.Ticker = _FakeUSTicker
+        # NB: FAKEIT.MI non è in KNOWN_STOCKS -> passa davvero per il path Yahoo.
+        info = await md.MarketDataService.resolve_stock_info("FAKEIT.MI")
+        check("resolve FAKEIT.MI con Yahoo=US -> resta IT/EUR",
+              info.get("market") == "IT" and info.get("currency") == "EUR", str(info))
+        check("...ma il nome Yahoo arricchisce", info.get("name") == "Enel Fake US", str(info))
+
+        # 21.4 Path di creazione via API con Yahoo down (utente dedicato isolato)
+        md.yf.Ticker = _yahoo_down
+        r = await c.post("/api/auth/users", headers=h,
+                         json={"username": "suffix_user", "password": "Suffix123!", "is_admin": False})
+        check("creazione utente suffix -> 200", r.status_code == 200, str(r.status_code))
+        r = await c.post("/api/auth/login", json={"username": "suffix_user", "password": "Suffix123!"})
+        check("login utente suffix -> 200", r.status_code == 200, str(r.status_code))
+        uh = {"Authorization": f"Bearer {r.json().get('access_token', '')}"}
+
+        for ticker, mkt, cur in [("E2ESUFIT.MI", "IT", "EUR"), ("E2ESUFEU.AS", "EU", "EUR"),
+                                 ("E2ESUFUS", "US", "USD"), ("ZZZQ123", "US", "USD")]:
+            r = await c.post("/api/portfolio/holdings", headers=uh,
+                             json={"ticker": ticker, "quantity": 10, "avg_purchase_price": 5.0})
+            check(f"POST holding {ticker} senza Yahoo -> 200", r.status_code == 200, str(r.status_code))
+            rows = (await c.get("/api/portfolio/", headers=uh)).json()
+            row = next((x for x in rows if x["ticker"] == ticker), None)
+            check(f"holding {ticker} classificata {mkt}/{cur}",
+                  bool(row) and row.get("market") == mkt and row.get("currency") == cur, str(row))
+
+        # Prezzo stale documentato per il ticker ignoto (default US/USD accettato)
+        rows = (await c.get("/api/portfolio/", headers=uh)).json()
+        zrow = next((x for x in rows if x["ticker"] == "ZZZQ123"), None)
+        check("ZZZQ123 ignoto -> prezzo stale ma valorizzato (default accettato)",
+              bool(zrow) and zrow.get("price_stale") is True and float(zrow.get("current_price", 0)) > 0,
+              str(zrow))
+
+        # Persistenza reale sulla tabella stocks (non solo fallback di visualizzazione)
+        conn = sqlite3.connect(TEST_DB, timeout=10)
+        try:
+            persisted = {
+                t: conn.execute("SELECT market, currency FROM stocks WHERE ticker=?", (t,)).fetchone()
+                for t in ["E2ESUFIT.MI", "E2ESUFEU.AS", "E2ESUFUS", "ZZZQ123"]
+            }
+        finally:
+            conn.close()
+        for ticker, mkt, cur in [("E2ESUFIT.MI", "IT", "EUR"), ("E2ESUFEU.AS", "EU", "EUR"),
+                                 ("E2ESUFUS", "US", "USD"), ("ZZZQ123", "US", "USD")]:
+            check(f"stocks.{ticker} persistito {mkt}/{cur}",
+                  persisted[ticker] is not None and persisted[ticker][0] == mkt and persisted[ticker][1] == cur,
+                  str(persisted[ticker]))
+
+        # 21.5 Watchlist con Yahoo down
+        for ticker in ["E2EWLIT.MI", "E2EWLEU.DE"]:
+            r = await c.post("/api/watchlist/", headers=uh, json={"ticker": ticker})
+            check(f"POST watchlist {ticker} senza Yahoo -> 200", r.status_code == 200, str(r.status_code))
+        wl = (await c.get("/api/watchlist/", headers=uh)).json()
+        for ticker, mkt, cur in [("E2EWLIT.MI", "IT", "EUR"), ("E2EWLEU.DE", "EU", "EUR")]:
+            item = next((x for x in wl if x["ticker"] == ticker), None)
+            check(f"watchlist {ticker} classificata {mkt}/{cur}",
+                  bool(item) and item.get("market") == mkt and item.get("currency") == cur, str(item))
+    finally:
+        md.yf.Ticker = orig_ticker
+        md.yf.download = orig_download
+
+
+async def test_perf_caches_and_contracts(c: httpx.AsyncClient, h: dict):
+    print("\n[22] Cache perf (serie 120s / deep-stale 90s) + contratti B1/B3")
+    from backend.services import analytics as analytics_module
+    from backend.services import market_data as md
+
+    me = (await c.get("/api/auth/me", headers=h)).json()
+    uid = me.get("id")
+
+    # --- B3: CSV malformato -> 200 ma errors NON vuoto, niente import silente ---
+    bad_csv = "asdfgh jkl\n@@@### $$$\n"
+    r = await c.post("/api/portfolio/import", headers=h,
+                     files={"file": ("bad.csv", bad_csv, "text/csv")})
+    check("POST import CSV malformato -> 200", r.status_code == 200, str(r.status_code))
+    body = r.json()
+    check("import malformato: errors non vuoto",
+          isinstance(body.get("errors"), list) and len(body["errors"]) > 0, str(body))
+    check("import malformato: imported == 0", body.get("imported", -1) == 0, str(body))
+
+    # CSV valido invariato (il fix B3 non rompe il caso buono)
+    good_csv = "ticker,quantity,avg_purchase_price\nE2EIMPOK.MI,7,5.5\n"
+    r = await c.post("/api/portfolio/import", headers=h,
+                     files={"file": ("ok.csv", good_csv, "text/csv")})
+    check("POST import CSV valido -> 200 con >=1 importato",
+          r.status_code == 200 and r.json().get("imported", 0) >= 1, str(r.status_code))
+
+    # --- B1a: benchmark con Yahoo down -> ogni benchmark ha data lista ---
+    orig_ticker = md.yf.Ticker
+    orig_download = md.yf.download
+
+    def _yahoo_down(*args, **kwargs):
+        raise RuntimeError("Yahoo down (mock e2e)")
+
+    md.yf.Ticker = _yahoo_down
+    md.yf.download = _yahoo_down
+    try:
+        r = await c.get("/api/portfolio/benchmarks?days=30", headers=h)
+        check("GET benchmarks con Yahoo down -> 200", r.status_code == 200, str(r.status_code))
+        benches = r.json().get("benchmarks", {})
+        for t in ["^GSPC", "FTSEMIB.MI"]:
+            check(f"benchmark {t} presente con data lista",
+                  t in benches and isinstance(benches[t].get("data"), list),
+                  str(type(benches.get(t, {}).get("data"))))
+    finally:
+        md.yf.Ticker = orig_ticker
+        md.yf.download = orig_download
+
+    # --- Cache serie 120s: due performance consecutive identiche + chiave popolata ---
+    analytics_module._SERIES_CACHE.pop(f"series:{uid}:30", None)
+    r1 = await c.get("/api/dashboard/performance?days=30", headers=h)
+    r2 = await c.get("/api/dashboard/performance?days=30", headers=h)
+    check("performance doppia -> 200/200", r1.status_code == 200 and r2.status_code == 200)
+    check("performance seconda chiamata identica (cache 120s)", r1.json() == r2.json())
+    check("chiave serie in _SERIES_CACHE", f"series:{uid}:30" in analytics_module._SERIES_CACHE)
+
+    # --- Cache risk 300s: due chiamate identiche + chiave popolata ---
+    analytics_module._RISK_CACHE.pop(f"risk:{uid}:180", None)
+    m1 = await c.get("/api/portfolio/risk-metrics?days=180", headers=h)
+    m2 = await c.get("/api/portfolio/risk-metrics?days=180", headers=h)
+    check("risk doppia -> 200/200", m1.status_code == 200 and m2.status_code == 200)
+    check("risk seconda chiamata identica (cache 300s)", m1.json() == m2.json())
+    check("chiave risk in _RISK_CACHE", f"risk:{uid}:180" in analytics_module._RISK_CACHE)
+
+    # --- Cache deep-dive stale 90s: watchlist con Yahoo down resta in cache ---
+    md.yf.Ticker = _yahoo_down
+    md.yf.download = _yahoo_down
+    try:
+        md._DEEP_DIVE_CACHE.pop("E2ECACHEWL.MI", None)
+        r = await c.post("/api/watchlist/", headers=h, json={"ticker": "E2ECACHEWL.MI"})
+        check("POST watchlist E2ECACHEWL.MI senza Yahoo -> 200", r.status_code == 200, str(r.status_code))
+        wid = r.json().get("id")
+        r = await c.get("/api/watchlist/", headers=h)
+        check("GET watchlist senza Yahoo -> 200", r.status_code == 200)
+        entry = md._DEEP_DIVE_CACHE.get("E2ECACHEWL.MI")
+        check("deep-dive stale in cache (TTL 90s)",
+              entry is not None and bool(entry[0].get("stale")) is True, str(bool(entry)))
+        if wid:
+            await c.delete(f"/api/watchlist/{wid}", headers=h)
+    finally:
+        md.yf.Ticker = orig_ticker
+        md.yf.download = orig_download
+
+
 # ===========================================================================
 # MAIN RUNNER
 # ===========================================================================
@@ -1068,6 +1267,7 @@ async def run_all():
             await test_watchlist(c, h)
             await test_portfolio_crud(c, h)
             await test_trade_ledger_and_dividends(c, h)
+            await test_market_suffix_classification(c, h)
             await test_risk_metrics(c, h)
             await test_benchmarks_and_performance(c, h)
             await test_rebalancer(c, h)
@@ -1082,6 +1282,7 @@ async def run_all():
             await test_cache_headers(c)
             await test_fetch_batch_single_ticker_multiindex()
             await test_alerting_stale_uses_db()
+            await test_perf_caches_and_contracts(c, h)
             await test_concurrency(c, h)
             await test_sqlite_integrity()
 

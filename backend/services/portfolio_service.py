@@ -103,8 +103,9 @@ async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None, usd
         if prev_close:
             daily_pnl = round((current_price - prev_close) * h.quantity, 2)
 
-        currency = stock.currency or ("EUR" if stock.ticker.endswith(".MI") else "USD")
-        market = stock.market or ("IT" if stock.ticker.endswith(".MI") else "US")
+        _fallback_market, _fallback_currency = MarketDataService.detect_market_currency(stock.ticker)
+        currency = stock.currency or _fallback_currency
+        market = stock.market or _fallback_market
         fx_rate = usd_to_eur if currency == "USD" else 1.0
 
         portfolio.append({

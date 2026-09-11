@@ -12,6 +12,23 @@ let benchSeriesMap = {};
 let activeBenchmark = 'none';
 let performanceRawData = [];
 
+// Helper: bandiera mercato (IT→🇮🇹, EU→🇪🇺, resto→🇺🇸). Niente default USA per l'Europa.
+const marketFlag = (market) => {
+  const m = (market || '').toUpperCase();
+  if (m === 'IT') return '🇮🇹';
+  if (m === 'EU') return '🇪🇺';
+  return '🇺🇸';
+};
+
+// Helper B1: estrae un array di punti {date, value} da un nodo benchmark che
+// può essere array diretto oppure oggetto {name, flag, data:[...]} (shape API),
+// mai crash su .map con rete stale/forme inattese.
+const toPointArray = (node) => {
+  if (Array.isArray(node)) return node;
+  if (node && Array.isArray(node.data)) return node.data;
+  return [];
+};
+
 const renderSkeletons = () => {
   const statGrid = document.querySelector('.stat-grid');
   if (statGrid) {
@@ -245,7 +262,7 @@ const renderHeatmap = (items) => {
 
     const isUp = chg >= 0;
     const sign = isUp ? '+' : '';
-    const flag = item.market === 'IT' ? '🇮🇹' : '🇺🇸';
+    const flag = marketFlag(item.market);
 
     return `
       <div class="heatmap-tile ${tileClass}" data-stock="${escapeHtml(item.ticker)}">
@@ -436,9 +453,12 @@ const loadDashboardData = async (isSilentRefresh = false) => {
       if (tgDescEl) tgDescEl.textContent = 'Nessuna posizione in utile';
     }
 
-    // 2. Chart & Risk
-    await loadPerformanceChart(currentChartDays).catch(err => console.debug('Chart error:', err));
-    loadRiskMetrics().catch(err => console.debug('Risk error:', err));
+    // 2. Chart & Risk (solo su load manuale/cambio timeframe: il refresh
+    //    automatico silente li salta per non pesare sul server ogni ciclo)
+    if (!isSilentRefresh) {
+      await loadPerformanceChart(currentChartDays).catch(err => console.debug('Chart error:', err));
+      loadRiskMetrics().catch(err => console.debug('Risk error:', err));
+    }
 
     // 3. Heatmap
     renderHeatmap(heatmap);
@@ -465,7 +485,7 @@ const loadDashboardData = async (isSilentRefresh = false) => {
           const pnlPct = item.pnl_percent ?? 0;
           const curPrice = item.current_price ?? item.avg_purchase_price ?? 0;
           const totalVal = item.total_value ?? (item.quantity * curPrice);
-          const flag = item.market === 'IT' ? '🇮🇹' : '🇺🇸';
+          const flag = marketFlag(item.market);
 
           return `
             <tr>
@@ -603,7 +623,7 @@ const initDashboard = () => {
           try {
             const benchData = await api.getBenchmarks(currentChartDays);
             if (activeBenchmark === '^GSPC' || activeBenchmark === 'both') {
-              const spData = benchData?.benchmarks?.['^GSPC'] || [];
+              const spData = toPointArray(benchData?.benchmarks?.['^GSPC']);
               benchSeriesMap['^GSPC']?.applyOptions({ visible: true });
               benchSeriesMap['^GSPC']?.setData(spData.map(p => ({ time: p.date, value: p.value })));
             } else {
@@ -611,7 +631,7 @@ const initDashboard = () => {
             }
 
             if (activeBenchmark === 'FTSEMIB.MI' || activeBenchmark === 'both') {
-              const mibData = benchData?.benchmarks?.['FTSEMIB.MI'] || [];
+              const mibData = toPointArray(benchData?.benchmarks?.['FTSEMIB.MI']);
               benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: true });
               benchSeriesMap['FTSEMIB.MI']?.setData(mibData.map(p => ({ time: p.date, value: p.value })));
             } else {
@@ -625,12 +645,13 @@ const initDashboard = () => {
     });
   }
 
-  // Auto-refresh ogni 60s
+  // Auto-refresh ogni 180s (solo dati leggeri: il ciclo silente salta
+  // performance e risk-metrics, restano su load manuale/cambio timeframe)
   setInterval(() => {
     if (!document.hidden) {
       loadDashboardData(true);
     }
-  }, 60000);
+  }, 180000);
 };
 
 if (document.readyState === 'loading') {

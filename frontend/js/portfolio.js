@@ -1,5 +1,5 @@
-import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getTheme, escapeHtml, openMarketEditor } from './app.js?v=3.0.0';
+import { api } from './api.js?v=3.0.1';
+import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getTheme, escapeHtml, openMarketEditor, setTableEmptyState, clearTableEmptyState } from './app.js?v=3.0.1';
 
 let portfolioData = [];
 let summaryData = {};
@@ -57,10 +57,14 @@ const drawPieChart = (data) => {
   const colors = getPieColors();
 
   if (!data || data.length === 0) {
-    ctx.fillStyle = getTheme() === 'light' ? 'rgba(37, 99, 235, 0.10)' : 'rgba(91, 157, 255, 0.14)';
+    // Anello tratteggiato invece del disco pieno: placeholder discreto, non un blob.
+    ctx.strokeStyle = getTheme() === 'light' ? 'rgba(21, 24, 30, 0.18)' : 'rgba(232, 234, 238, 0.22)';
+    ctx.lineWidth = 8;
+    ctx.setLineDash([6, 6]);
     ctx.beginPath();
-    ctx.arc(centerX, centerY, outerRadius, 0, 2 * Math.PI);
-    ctx.fill();
+    ctx.arc(centerX, centerY, (outerRadius + innerRadius) / 2, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
     const legend = document.getElementById('allocationLegend');
     if (legend) legend.innerHTML = '<div class="text-muted text-center text-xs">Nessun dato</div>';
@@ -155,22 +159,22 @@ const triggerSeedDemo = async () => {
 const renderTable = () => {
   const tbody = document.getElementById('portfolioTableBody');
   if (!tbody) return;
-  
+  const tableContainer = tbody.closest('.table-container');
+
   if (portfolioData.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="9" class="text-center text-muted py-8">
-          Nessun titolo in portafoglio. 
-          <div class="mt-3 flex justify-center gap-2">
-            <button class="btn btn-primary" data-action="open-add-holding">➕ Aggiungi Holding</button>
-            <button class="btn btn-ghost" id="btnEmptySeedDemo" data-action="seed-demo">🚀 Inizializza Demo</button>
-          </div>
-        </td>
-      </tr>
-    `;
+    // Fuori dalla tabella: su mobile il messaggio/CTA in una cella colspan
+    // restava centrato sulla larghezza reale (fino a 1100px) e spariva a destra.
+    setTableEmptyState(tableContainer, `
+      Nessun titolo in portafoglio.
+      <div class="table-empty-actions">
+        <button class="btn btn-primary" data-action="open-add-holding">➕ Aggiungi Holding</button>
+        <button class="btn btn-ghost" id="btnEmptySeedDemo" data-action="seed-demo">🚀 Inizializza Demo</button>
+      </div>
+    `);
     return;
   }
 
+  clearTableEmptyState(tableContainer);
   tbody.innerHTML = portfolioData.map(item => {
     const isModified = modifiedHoldings.has(item.id);
     const mod = modifiedHoldings.get(item.id);
@@ -365,10 +369,16 @@ const loadPortfolio = async () => {
 
   } catch (error) {
     showToast(error?.message || 'Errore nel caricamento del portafoglio', 'error');
-    // In caso di errore mantiene a schermo i dati precedenti (se presenti)
+    // In caso di errore mantiene a schermo i dati precedenti (se presenti).
     if (portfolioData.length > 0) {
       renderTable();
       updateAllocationChart();
+    } else {
+      // Primo load fallito (nessun dato da conservare): niente skeleton appesi,
+      // stessa parità della dashboard con "Dati non disponibili.".
+      const tbody = document.getElementById('portfolioTableBody');
+      const tableContainer = tbody ? tbody.closest('.table-container') : null;
+      setTableEmptyState(tableContainer, 'Dati non disponibili.');
     }
   }
 };
@@ -398,20 +408,18 @@ const loadTransactions = async (type = currentTxFilter) => {
     const params = type !== 'ALL' ? { type } : {};
     const txs = await api.getTransactions(params);
 
+    const tableContainer = tbody.closest('.table-container');
     if (!txs || txs.length === 0) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="10" class="text-center text-muted py-6">
-            Nessuna transazione registrata ${type !== 'ALL' ? `con filtro <strong>${escapeHtml(type)}</strong>` : ''}.
-            <div class="mt-2">
-              <button class="btn btn-primary btn-sm" data-action="open-tx-modal">➕ Registra la prima esecuzione</button>
-            </div>
-          </td>
-        </tr>
-      `;
+      setTableEmptyState(tableContainer, `
+        Nessuna transazione registrata ${type !== 'ALL' ? `con filtro <strong>${escapeHtml(type)}</strong>` : ''}.
+        <div class="table-empty-actions">
+          <button class="btn btn-primary btn-sm" data-action="open-tx-modal">➕ Registra la prima esecuzione</button>
+        </div>
+      `);
       return;
     }
 
+    clearTableEmptyState(tableContainer);
     tbody.innerHTML = txs.map(tx => {
       const isBuy = tx.type === 'BUY';
       const isSell = tx.type === 'SELL';
@@ -451,7 +459,7 @@ const loadTransactions = async (type = currentTxFilter) => {
       `;
     }).join('');
   } catch (e) {
-    tbody.innerHTML = `<tr><td colspan="10" class="text-center text-loss py-4">Errore nel caricamento del Trade Ledger</td></tr>`;
+    setTableEmptyState(tbody.closest('.table-container'), '<span class="text-loss">Errore nel caricamento del Trade Ledger</span>');
   }
 };
 
@@ -499,11 +507,13 @@ const renderRebalanceTargets = (targets) => {
   const tbody = document.getElementById('targetsTableBody');
   if (!tbody) return;
 
+  const tableContainer = tbody.closest('.table-container');
   if (!targets || targets.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3 text-xs">Nessuna allocazione target definita.</td></tr>';
+    setTableEmptyState(tableContainer, 'Nessuna allocazione target definita.');
     return;
   }
 
+  clearTableEmptyState(tableContainer);
   tbody.innerHTML = targets.map(t => `
     <tr data-target-id="${t.id}">
       <td class="font-bold text-primary">${escapeHtml(t.name)}</td>
@@ -681,6 +691,11 @@ const renderDividends = (data) => {
   if (emptyEl) emptyEl.hidden = holdings.length > 0;
   if (!tbody) return;
 
+  // Senza dati la tabella (solo intestazioni) non aggiunge nulla: la si nasconde
+  // e resta il messaggio #dividendsEmpty, già ancorato alla card.
+  const dividendsTableContainer = tbody.closest('.table-container');
+  if (dividendsTableContainer) dividendsTableContainer.hidden = holdings.length === 0;
+
   if (holdings.length === 0) {
     tbody.innerHTML = emptyEl
       ? ''
@@ -724,6 +739,8 @@ const loadDividends = async () => {
   } catch (e) {
     if (tbody) {
       tbody.innerHTML = '<tr><td colspan="8" class="text-center text-loss py-4">Errore nel caricamento dei dividendi</td></tr>';
+      const dividendsTableContainer = tbody.closest('.table-container');
+      if (dividendsTableContainer) dividendsTableContainer.hidden = false;
     }
     if (emptyEl) emptyEl.hidden = true;
     showToast(e.message || 'Errore nel caricamento dei dividendi', 'error');
@@ -841,8 +858,9 @@ const initPortfolio = () => {
   // Dividendi: refresh manuale
   document.getElementById('btnRefreshDividends')?.addEventListener('click', loadDividends);
 
-  // Azioni delegate su tabelle (evita handler inline con id interpolati)
-  document.getElementById('portfolioTableBody')?.addEventListener('click', (e) => {
+  // Azioni delegate sul contenitore (non sul tbody): copre anche i pulsanti dello
+  // stato vuoto, che ora vivono fuori dalla tabella per non finire fuori schermo.
+  document.getElementById('portfolioContent')?.addEventListener('click', (e) => {
     const addHoldingBtn = e.target.closest('[data-action="open-add-holding"]');
     if (addHoldingBtn) {
       openAddModal();
@@ -871,7 +889,7 @@ const initPortfolio = () => {
     handleInlineEdit(e);
   });
 
-  document.getElementById('transactionsTableBody')?.addEventListener('click', (e) => {
+  document.getElementById('portfolioContent')?.addEventListener('click', (e) => {
     const openTxBtn = e.target.closest('[data-action="open-tx-modal"]');
     if (openTxBtn) {
       openTxModal();

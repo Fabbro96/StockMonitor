@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Consigli IA - Stock Monitor</title>
     <link rel="icon" href="data:,">
-    <script src="/static/js/theme-init.js?v=3.0.0"></script>
-    <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
-    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.0" defer></script>
+    <script src="/static/js/theme-init.js?v=3.0.1"></script>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0.1">
+    <script src="/static/vendor/lightweight-charts.standalone.production.js?v=3.0.1" defer></script>
 </head>
 <body>
     <div class="app-container">
@@ -110,9 +110,9 @@
                         <div class="form-group mb-0">
                             <label class="block text-xs font-semibold text-secondary mb-1">📅 Filtra per Giorno</label>
                             <div class="timeframe-group" role="group" aria-label="Filtra per giorno">
-                                <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterToday" data-day="today">Oggi</button>
-                                <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterYesterday" data-day="yesterday">Ieri</button>
-                                <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterPickDay" data-day="custom">Scegli giorno 📅</button>
+                                <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterToday" data-day="today" aria-pressed="false">Oggi</button>
+                                <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterYesterday" data-day="yesterday" aria-pressed="false">Ieri</button>
+                                <button type="button" class="btn btn-xs btn-ghost filter-day-btn" id="btnFilterPickDay" data-day="custom" aria-pressed="false">Scegli giorno 📅</button>
                             </div>
                             <input type="hidden" id="filterDate" value="">
                         </div>
@@ -168,7 +168,7 @@
         </div>
     </div>
 
-    <script type="module" src="/static/js/app.js?v=3.0.0"></script>
-    <script type="module" src="/static/js/advice.js?v=3.0.0"></script>
+    <script type="module" src="/static/js/app.js?v=3.0.1"></script>
+    <script type="module" src="/static/js/advice.js?v=3.0.1"></script>
 </body>
 </html>

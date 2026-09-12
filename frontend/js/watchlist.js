@@ -1,5 +1,5 @@
-import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showToast, escapeHtml, openMarketEditor } from './app.js?v=3.0.0';
+import { api } from './api.js?v=3.0.1';
+import { formatCurrency, formatPercent, showToast, escapeHtml, openMarketEditor, setTableEmptyState, clearTableEmptyState } from './app.js?v=3.0.1';
 
 let watchlistData = [];
 
@@ -30,17 +30,18 @@ const renderWatchlist = () => {
     ? watchlistData.filter(item => String(item.ticker || '').toUpperCase().includes(query) || String(item.name || '').toUpperCase().includes(query))
     : watchlistData;
 
+  const tableContainer = tbody.closest('.table-container');
   if (filtered.length === 0) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="9" class="text-center text-muted py-8">
-          ${watchlistData.length === 0 ? 'Nessun titolo nel radar. Clicca su <strong>"➕ Aggiungi Titolo al Radar"</strong> per iniziare.' : 'Nessun risultato corrispondente al filtro.'}
-        </td>
-      </tr>
-    `;
+    setTableEmptyState(tableContainer, watchlistData.length === 0
+      ? `Nessun titolo nel radar.
+         <div class="table-empty-actions">
+           <button class="btn btn-primary btn-sm" data-action="open-add-watchlist">➕ Aggiungi Titolo al Radar</button>
+         </div>`
+      : 'Nessun risultato corrispondente al filtro.');
     return;
   }
 
+  clearTableEmptyState(tableContainer);
   tbody.innerHTML = filtered.map(item => {
     const isUp = item.change_percent >= 0;
     const sign = isUp ? '+' : '';
@@ -52,6 +53,10 @@ const renderWatchlist = () => {
     // 0 è un valore valido (es. yield 0%), quindi si distingue solo null/undefined/''.
     const rsiNum = toFiniteNumberOrNull(item.rsi);
     const rsiText = rsiNum !== null ? rsiNum : '--';
+    // "Neutro (Neutral)" rendeva la colonna RSI ~230px e faceva sbordare la tabella
+    // anche a 1440px: in cella resta la forma breve, il testo completo va nel title.
+    const rsiStatusFull = String(item.rsi_status || 'Neutro');
+    const rsiStatusShort = rsiStatusFull.split('(')[0].trim() || rsiStatusFull;
     const peNum = toFiniteNumberOrNull(item.pe_ratio);
     const peText = peNum !== null ? peNum.toFixed(1) : '--';
     const dyNum = toFiniteNumberOrNull(item.dividend_yield);
@@ -97,7 +102,7 @@ const renderWatchlist = () => {
           </div>
         </td>
         <td class="text-center">
-          <span class="badge ${escapeHtml(item.rsi_badge || 'badge-hold')}" title="RSI a 14 periodi">${rsiText} (${escapeHtml(item.rsi_status || 'Neutro')})</span>
+          <span class="badge ${escapeHtml(item.rsi_badge || 'badge-hold')}" title="RSI a 14 periodi: ${escapeHtml(String(rsiText))} — ${escapeHtml(rsiStatusFull)}">${escapeHtml(String(rsiText))} · ${escapeHtml(rsiStatusShort)}</span>
         </td>
         <td class="text-center">
           <button class="btn btn-ghost btn-sm btn-alert" data-action="edit-alert" data-id="${item.id}" data-ticker="${escapeHtml(item.ticker)}" data-above="${escapeHtml(item.alert_above ?? '')}" data-below="${escapeHtml(item.alert_below ?? '')}" title="Modifica Alert">
@@ -208,16 +213,19 @@ const initWatchlist = () => {
   document.getElementById('closeEditAlertModal')?.addEventListener('click', closeEditAlertModal);
   document.getElementById('cancelEditAlert')?.addEventListener('click', closeEditAlertModal);
 
-  // Delegated row actions (avoids inline handlers with interpolated tickers)
-  const tableBody = document.getElementById('watchlistTableBody');
-  if (tableBody) {
-    tableBody.addEventListener('click', (e) => {
+  // Delegated row actions (avoids inline handlers with interpolated tickers).
+  // Sul contenitore (non sul tbody) così copre anche lo stato vuoto fuori tabella.
+  const watchlistContent = document.getElementById('watchlistContent');
+  if (watchlistContent) {
+    watchlistContent.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
       const action = btn.dataset.action;
       const ticker = btn.dataset.ticker || '';
 
-      if (action === 'open-stock') {
+      if (action === 'open-add-watchlist') {
+        openAddModal();
+      } else if (action === 'open-stock') {
         if (window.openStockModal) window.openStockModal(ticker);
       } else if (action === 'add-holding') {
         window.location.href = `/static/portfolio.html?add=${encodeURIComponent(ticker)}`;

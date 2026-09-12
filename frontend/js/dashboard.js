@@ -1,5 +1,5 @@
-import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getChartThemeColors, CHART_FONT_FAMILY, escapeHtml } from './app.js?v=3.0.0';
+import { api } from './api.js?v=3.0.1';
+import { formatCurrency, formatPercent, showLoading, hideLoading, showToast, getChartThemeColors, CHART_FONT_FAMILY, escapeHtml, setTableEmptyState, clearTableEmptyState, setTableFootnote } from './app.js?v=3.0.1';
 
 let chart = null;
 let lineSeries = null;
@@ -30,6 +30,24 @@ const toPointArray = (node) => {
   if (Array.isArray(node)) return node;
   if (node && Array.isArray(node.data)) return node.data;
   return [];
+};
+
+// P2.4: il chart senza dati era un rettangolo vuoto. Messaggio sovrapposto, rimosso
+// appena arrivano punti (nessuna modifica alle serie lightweight-charts).
+const setChartEmptyMessage = (show) => {
+  const container = document.getElementById('portfolioChart');
+  if (!container) return;
+  let msg = container.querySelector('.chart-empty-msg');
+  if (!show) {
+    if (msg) msg.remove();
+    return;
+  }
+  if (!msg) {
+    msg = document.createElement('div');
+    msg.className = 'chart-empty-msg';
+    msg.textContent = 'Nessun dato storico disponibile per il periodo selezionato.';
+    container.appendChild(msg);
+  }
 };
 
 const renderSkeletons = () => {
@@ -76,7 +94,10 @@ const initChart = () => {
       background: { type: 'solid', color: 'transparent' },
       textColor: themeColors.textColor,
       fontFamily: CHART_FONT_FAMILY,
-      fontSize: 12
+      fontSize: 12,
+      // Logo TradingView di default sopra le barre volume: disattivato (vedi app.js,
+      // la licenza Apache-2.0 del vendor non richiede il glifo).
+      attributionLogo: false
     },
     grid: {
       vertLines: { color: themeColors.gridColor },
@@ -269,18 +290,19 @@ const renderHeatmap = (items) => {
     const sign = isUp ? '+' : '';
     const flag = marketFlag(item.market);
 
+    // <button>: la tile è un controllo navigabile da tastiera (Enter/Spazio).
     return `
-      <div class="heatmap-tile ${tileClass}" data-stock="${escapeHtml(item.ticker)}">
+      <button type="button" class="heatmap-tile ${tileClass}" data-stock="${escapeHtml(item.ticker)}" title="Apri scheda tecnica di ${escapeHtml(item.ticker)}">
         <div class="flex justify-between items-center mb-1">
           <span class="font-bold text-primary font-mono text-sm">${escapeHtml(item.ticker)}</span>
           <span class="text-xs">${flag}</span>
         </div>
         <div class="text-xs text-secondary mb-1 tile-name">${escapeHtml(item.name || item.ticker)}</div>
-        <div class="flex justify-between items-end">
-          <span class="text-xs font-mono font-bold">${formatCurrency(item.current_price, item.currency)}</span>
-          <span class="text-xs font-mono font-bold ${isUp ? 'text-profit' : 'text-loss'}">${sign}${chg.toFixed(2)}%</span>
+        <div class="heatmap-tile-foot">
+          <span class="heatmap-tile-price">${formatCurrency(item.current_price, item.currency)}</span>
+          <span class="heatmap-tile-change ${isUp ? 'text-profit' : 'text-loss'}">${sign}${chg.toFixed(2)}%</span>
         </div>
-      </div>
+      </button>
     `;
   }).join('');
 };
@@ -308,10 +330,13 @@ const loadPerformanceChart = async (days = 30, silent = false) => {
     if (requestId !== performanceRequestId) return true;
     if (performance && performance.data && performance.data.length > 0) {
       performanceRawData = performance.data;
+      setChartEmptyMessage(false);
       applyChartData();
       // H4b: il write assoluto appena fatto clobbererebbe la vista % del
       // benchmark attivo; la riapplica (token-guarded) dopo di esso.
       if (activeBenchmark !== 'none') refreshBenchmarks();
+    } else {
+      setChartEmptyMessage(true);
     }
     return true;
   } catch (e) {
@@ -493,24 +518,17 @@ const clearSkeletons = (failed = {}) => {
 
   const tbody = document.getElementById('holdingsTableBody');
   if (tbody && (tbody.querySelector('.skeleton') || tbody.textContent.includes('Caricamento'))) {
+    const tableContainer = tbody.closest('.table-container');
     if (failed.portfolio) {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="7" class="text-center text-muted py-6">Dati non disponibili.</td>
-        </tr>
-      `;
+      setTableEmptyState(tableContainer, 'Dati non disponibili.');
     } else {
-      tbody.innerHTML = `
-        <tr>
-          <td colspan="7" class="text-center text-muted py-6">
-            Nessun titolo nel portafoglio.
-            <div class="mt-2 flex justify-center gap-2">
-              <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
-              <button class="btn btn-ghost btn-sm" id="btnTableSeedDemoFallback" data-action="seed-demo">🚀 Prova Demo</button>
-            </div>
-          </td>
-        </tr>
-      `;
+      setTableEmptyState(tableContainer, `
+        Nessun titolo nel portafoglio.
+        <div class="table-empty-actions">
+          <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
+          <button class="btn btn-ghost btn-sm" id="btnTableSeedDemoFallback" data-action="seed-demo">🚀 Prova Demo</button>
+        </div>
+      `);
     }
   }
 };
@@ -603,19 +621,23 @@ const loadDashboardData = async (isSilentRefresh = false) => {
     // 4. Holdings Table
     const tbody = document.getElementById('holdingsTableBody');
     if (tbody && portfolio !== null) {
+      const tableContainer = tbody.closest('.table-container');
       if (portfolio.length === 0) {
-        tbody.innerHTML = `
-          <tr>
-            <td colspan="7" class="text-center text-muted py-6">
-              Nessun titolo nel portafoglio. 
-              <div class="mt-2 flex justify-center gap-2">
-                <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
-                <button class="btn btn-ghost btn-sm" id="btnTableSeedDemo" data-action="seed-demo">🚀 Prova Demo</button>
-              </div>
-            </td>
-          </tr>
-        `;
+        // Stato vuoto fuori dalla tabella: dentro una cella colspan su mobile
+        // il messaggio e i pulsanti finivano oltre il bordo destro.
+        setTableEmptyState(tableContainer, `
+          Nessun titolo nel portafoglio.
+          <div class="table-empty-actions">
+            <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
+            <button class="btn btn-ghost btn-sm" id="btnTableSeedDemo" data-action="seed-demo">🚀 Prova Demo</button>
+          </div>
+        `);
+        setTableFootnote(tableContainer, '');
       } else {
+        clearTableEmptyState(tableContainer);
+        setTableFootnote(tableContainer, portfolio.length > 6
+          ? `<span>Mostrate ${Math.min(6, portfolio.length)} di ${portfolio.length} posizioni</span><a href="/static/portfolio.html" class="stock-ticker-link">Vedi tutte ➔</a>`
+          : '');
         tbody.innerHTML = portfolio.slice(0, 6).map(item => {
           const pnl = item.pnl_absolute ?? 0;
           const pnlPct = item.pnl_percent ?? 0;

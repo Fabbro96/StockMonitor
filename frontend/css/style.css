@@ -48,10 +48,13 @@ body { background-color: var(--bg-color); color: var(--text-primary); font-famil
 .nav-icon { width: 18px; text-align: center; flex-shrink: 0; }
 
 .sidebar.collapsed { width: 62px; }
+
+/* Etichette, nome utente e titolo restano nel DOM, solo nascosti alla vista: con
+   la sidebar compressa i link e l'utente conservano un nome accessibile.
+   Niente display:none, che li rimuoverebbe dall'albero di accessibilità. */
 .sidebar.collapsed .nav-label,
 .sidebar.collapsed .app-title-text,
-.sidebar.collapsed .sidebar-username,
-.sidebar.collapsed .sidebar-user { display: none; }
+.sidebar.collapsed .sidebar-username { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .sidebar.collapsed .sidebar-header { justify-content: center; padding: 0; }
 .sidebar.collapsed .app-title { display: none; }
 .sidebar.collapsed .nav-link { justify-content: center; padding: 10px 0; }
@@ -68,7 +71,9 @@ body { background-color: var(--bg-color); color: var(--text-primary); font-famil
 
 .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; overflow-y: auto; background-color: var(--bg-color); }
 
-.topbar { position: sticky; top: 0; z-index: 50; min-height: var(--topbar-height); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 22px; background-color: var(--surface-color); border-bottom: 1px solid var(--border-color); }
+/* flex-shrink: 0 — senza, l'altezza del contenuto comprime topbar (azioni che fuoriescono
+   sul contenuto su mobile) e ticker tape (collassato a 1px) quando la pagina scrolla. */
+.topbar { position: sticky; top: 0; z-index: 50; flex-shrink: 0; min-height: var(--topbar-height); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 22px; background-color: var(--surface-color); border-bottom: 1px solid var(--border-color); }
 
 .topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -85,7 +90,7 @@ body { background-color: var(--bg-color); color: var(--text-primary); font-famil
    Ticker marquee
    ========================================================================== */
 
-.ticker-tape-container { height: 36px; display: flex; align-items: center; overflow: hidden; background-color: var(--surface-color); border-bottom: 1px solid var(--border-color); user-select: none; }
+.ticker-tape-container { height: 36px; min-height: 36px; flex-shrink: 0; display: flex; align-items: center; overflow: hidden; background-color: var(--surface-color); border-bottom: 1px solid var(--border-color); user-select: none; }
 
 .ticker-tape-track { display: flex; align-items: center; gap: 10px; white-space: nowrap; animation: marquee 55s linear infinite; will-change: transform; }
 
@@ -94,6 +99,10 @@ body { background-color: var(--bg-color); color: var(--text-primary); font-famil
 @keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 
 .ticker-item { display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border-radius: var(--radius-pill); border: 1px solid var(--border-subtle); background-color: var(--surface-hover); font-size: 0.8rem; cursor: pointer; transition: var(--transition); }
+
+/* Ticker e heatmap sono <button>: reset dei default browser mantenendo il look attuale */
+button.ticker-item { font-family: inherit; color: inherit; }
+button.ticker-item:focus-visible { outline-offset: -2px; }
 
 .ticker-item:hover, .heatmap-tile:hover { border-color: var(--primary-color); }
 .ticker-name { font-weight: 600; }
@@ -131,6 +140,14 @@ body { background-color: var(--bg-color); color: var(--text-primary); font-famil
 .dashboard-main-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
 .portfolio-main-grid { display: grid; grid-template-columns: 1fr 310px; gap: 14px; }
 .rebalance-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 14px; }
+
+/* min-width:0: senza, le tabelle larghe (es. holdings 9 colonne) impongono il proprio
+   min-content alla traccia grid, spingendo fuori schermo la card Allocazione e creando
+   overflow orizzontale su .main-content. Con min-width:0 la tabella scrolla nel suo
+   .table-container e la pagina resta entro il viewport. */
+.portfolio-main-grid > *,
+.dashboard-main-grid > *,
+.rebalance-grid > * { min-width: 0; }
 .risk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .metric-grid, .dividend-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .split-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -144,7 +161,6 @@ body { background-color: var(--bg-color); color: var(--text-primary); font-famil
 
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 14px; border: 1px solid transparent; border-radius: var(--radius-input); background: none; color: var(--text-primary); font-family: inherit; font-size: 0.86rem; font-weight: 600; line-height: 1.3; text-decoration: none; white-space: nowrap; cursor: pointer; transition: var(--transition); }
 
-.btn:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn:active:not(:disabled) { transform: scale(0.98); }
 
 .btn-primary { background-color: var(--primary-solid); border-color: var(--primary-solid); color: #fff; }
@@ -157,6 +173,13 @@ body { background-color: var(--bg-color); color: var(--text-primary); font-famil
 .btn-warning { background-color: var(--warning-color); border-color: var(--warning-color); color: #fff; }
 [data-theme="dark"] .btn-success { color: #0b1f14; }
 [data-theme="dark"] .btn-warning { color: #241a03; }
+
+/* Disabilitato: superfici neutre leggibili invece di opacity 0.55 (testo illeggibile) */
+.btn:disabled,
+.btn-ghost:disabled,
+.btn-primary:disabled,
+.btn-success:disabled,
+.btn-warning:disabled { opacity: 1; cursor: not-allowed; background-color: var(--surface-active); border-color: var(--border-color); color: var(--text-muted); }
 
 .btn-sm { padding: 4px 10px; font-size: 0.78rem; }
 .btn-xs { padding: 2px 8px; font-size: 0.74rem; }
@@ -236,6 +259,16 @@ tbody tr:last-child td { border-bottom: none; }
 
 .row-modified { background-color: var(--warning-bg) !important; box-shadow: inset 3px 0 0 var(--warning-color); }
 
+/* Empty/footnote states rendered OUTSIDE the <table>: un messaggio in una cella
+   colspan resta centrato sulla larghezza reale della tabella (fino a ~1100px) e
+   su mobile finisce fuori schermo. Questi blocchi sono ancorati alla card. */
+.table-empty { padding: 26px 16px; text-align: center; color: var(--text-muted); font-size: 0.85rem; }
+.table-empty .table-empty-actions { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.table-note { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 4px 0; color: var(--text-muted); font-size: 0.78rem; }
+
+/* Messaggio "nessun dato" sopra il chart vuoto */
+.chart-empty-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; color: var(--text-muted); font-size: 0.85rem; text-align: center; pointer-events: none; }
+
 /* ==========================================================================
    Forms & inputs
    ========================================================================== */
@@ -303,10 +336,14 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 
 .info-badge { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background-color: var(--surface-hover); color: var(--text-muted); font-size: 10px; font-style: normal; font-weight: 700; }
 
-.tooltip-box { position: absolute; bottom: calc(100% + 6px); left: 50%; z-index: 500; width: 230px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-input); background-color: var(--surface-color); box-shadow: var(--shadow-md); color: var(--text-primary); font-size: 0.76rem; font-weight: 400; line-height: 1.4; text-align: left; transform: translateX(-50%); opacity: 0; visibility: hidden; transition: opacity 0.15s ease; pointer-events: none; }
+/* display:none quando nascosto: un tooltip da 230px solo con opacity/visibility
+   contribuiva comunque allo scroll orizzontale della pagina (~80px a 390) */
+.tooltip-box { position: absolute; bottom: calc(100% + 6px); left: 50%; z-index: 500; display: none; width: 230px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: var(--radius-input); background-color: var(--surface-color); box-shadow: var(--shadow-md); color: var(--text-primary); font-size: 0.76rem; font-weight: 400; line-height: 1.4; text-align: left; transform: translateX(-50%); pointer-events: none; }
 
 .has-tooltip:hover .tooltip-box,
-.has-tooltip:focus-within .tooltip-box { opacity: 1; visibility: visible; }
+.has-tooltip:focus-within .tooltip-box { display: block; animation: tooltipIn 0.15s ease; }
+
+@keyframes tooltipIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* ==========================================================================
    Range bar, heatmap, allocation
@@ -325,6 +362,11 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .heatmap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 
 .heatmap-tile { display: flex; flex-direction: column; justify-content: space-between; gap: 4px; min-height: 80px; padding: 10px; border: 1px solid var(--border-color); border-radius: 8px; background-color: var(--surface-color); cursor: pointer; transition: var(--transition); }
+
+button.heatmap-tile { width: 100%; font: inherit; color: inherit; text-align: left; }
+.heatmap-tile-foot { display: flex; justify-content: space-between; align-items: flex-end; gap: 6px; margin-top: 2px; }
+.heatmap-tile-foot .heatmap-tile-price { font-family: var(--font-mono); font-weight: 700; font-size: 0.75rem; }
+.heatmap-tile-foot .heatmap-tile-change { font-family: var(--font-mono); font-weight: 700; font-size: 0.75rem; }
 
 .tile-neutral { background-color: var(--surface-color); }
 .tile-gain-low { background-color: rgba(15, 138, 77, 0.06); border-color: rgba(15, 138, 77, 0.18); }
@@ -397,8 +439,11 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 
 .change-item:last-child { border-bottom: none; }
 
-/* Save bar (portfolio inline edits) */
-.save-bar { display: none; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--warning-border); border-left: 3px solid var(--warning-color); border-radius: var(--radius-card); background-color: var(--surface-color); animation: slideDown 0.2s ease-out; }
+/* Save bar (portfolio inline edits)
+   Sticky sotto la topbar: prima si infilava a metà dietro la topbar sticky durante lo
+   scroll (sembrava tagliata). --topbar-actual-height è aggiornata da app.js perché su
+   mobile la topbar può essere più alta di --topbar-height quando le azioni vanno a capo. */
+.save-bar { display: none; position: sticky; top: var(--topbar-actual-height, var(--topbar-height)); z-index: 40; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; padding: 12px 16px; border: 1px solid var(--warning-border); border-left: 3px solid var(--warning-color); border-radius: var(--radius-card); background-color: var(--surface-color); box-shadow: var(--shadow-sm); animation: slideDown 0.2s ease-out; }
 
 @keyframes slideDown { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 
@@ -417,6 +462,10 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .toast-error { border-left-color: var(--danger-color); }
 .toast-info { border-left-color: var(--primary-color); }
 .toast-action { margin-left: auto; }
+
+.toast-close { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; flex-shrink: 0; padding: 0; border: none; border-radius: 4px; background: none; color: var(--text-muted); font-family: inherit; font-size: 1rem; line-height: 1; cursor: pointer; transition: var(--transition); }
+.toast-action + .toast-close { margin-left: 0; }
+.toast-close:hover { background-color: var(--surface-hover); color: var(--text-primary); }
 
 .loader-overlay { position: absolute; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center; border-radius: var(--radius-card); background-color: var(--surface-color); opacity: 0.85; }
 
@@ -622,7 +671,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
 .tile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .badge-budget { background-color: var(--primary-glow); color: var(--primary-color); font-weight: 700; }
 .btn-alert { padding: 2px 6px; }
-.chart-canvas { width: 100%; height: 340px; }
+.chart-canvas { position: relative; width: 100%; height: 340px; }
 
 /* ==========================================================================
    Responsive
@@ -642,8 +691,7 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
   .sidebar.collapsed { width: 260px; }
   .sidebar.collapsed .nav-label,
   .sidebar.collapsed .app-title-text,
-  .sidebar.collapsed .sidebar-username { display: inline; }
-  .sidebar.collapsed .sidebar-user { display: flex; }
+  .sidebar.collapsed .sidebar-username { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; }
   .sidebar.collapsed .sidebar-header { justify-content: space-between; padding: 0 12px 0 16px; }
   .sidebar.collapsed .app-title { display: flex; }
   .sidebar.collapsed .nav-link { justify-content: flex-start; padding: 9px 10px; }
@@ -677,8 +725,10 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
   .metric-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
   .split-grid { grid-template-columns: 1fr; }
 
-  .heatmap-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+  /* Tile più larghe e prezzo/variazione impilati: a 104px i due valori si sovrapponevano */
+  .heatmap-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
   .heatmap-tile { min-height: 70px; padding: 8px; }
+  .heatmap-tile-foot { flex-direction: column; align-items: flex-start; gap: 1px; }
 
   .form-grid-2,
   .password-change-grid,
@@ -696,11 +746,15 @@ input[type="number"] { font-variant-numeric: tabular-nums; }
   td { font-size: 0.82rem; }
 
   .search-text { display: none; }
+  .topbar-search-btn .kbd-badge { display: none; }
   .market-status { gap: 8px; }
   .market-status .status-label { display: none; }
 
   .modern-stepper { min-width: 96px; padding: 2px; }
   .stepper-btn { width: 28px; height: 28px; font-size: 1rem; }
+
+  /* Tooltip ancorato a destra: sui badge a fine riga cresce verso sinistra e resta in viewport */
+  .tooltip-box { left: auto; right: 0; transform: none; }
 
   .cmd-palette-backdrop { padding: 6vh 10px 0; }
   .cmd-palette-body { max-height: 60vh; }

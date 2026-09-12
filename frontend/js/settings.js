@@ -1,5 +1,5 @@
-import { api } from './api.js?v=3.0.0';
-import { showLoading, hideLoading, showToast, formatDate, escapeHtml } from './app.js?v=3.0.0';
+import { api } from './api.js?v=3.0.1';
+import { showLoading, hideLoading, showToast, formatDate, escapeHtml, setTableEmptyState, clearTableEmptyState } from './app.js?v=3.0.1';
 
 let alertRules = [];
 let currentUser = null;
@@ -7,11 +7,13 @@ let currentUser = null;
 const renderAlertRules = () => {
   const tbody = document.getElementById('alertRulesBody');
   if (!tbody) return;
+  const tableContainer = tbody.closest('.table-container');
   if (alertRules.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Nessuna regola di alert configurata.</td></tr>';
+    setTableEmptyState(tableContainer, 'Nessuna regola di alert configurata.');
     return;
   }
-  
+
+  clearTableEmptyState(tableContainer);
   tbody.innerHTML = alertRules.map(rule => `
     <tr>
         <td><span class="font-bold text-primary">${escapeHtml(rule.ticker)}</span></td>
@@ -29,11 +31,13 @@ const renderUsersTable = (users) => {
   const tbody = document.getElementById('usersTableBody');
   if (!tbody) return;
 
+  const tableContainer = tbody.closest('.table-container');
   if (!users || users.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3">Nessun utente registrato oltre all\'amministratore.</td></tr>';
+    setTableEmptyState(tableContainer, 'Nessun utente registrato oltre all\'amministratore.');
     return;
   }
 
+  clearTableEmptyState(tableContainer);
   tbody.innerHTML = users.map(u => `
     <tr>
       <td>
@@ -71,7 +75,8 @@ const renderTimeInputs = (count, values = []) => {
   let html = '';
   for (let i = 0; i < count; i++) {
     const val = values[i] ?? (i === 0 ? '09:00' : '18:00');
-    html += `<input type="time" name="reportTime" value="${escapeHtml(val)}" class="input-time" required>`;
+    const label = i === 0 ? 'Orario di invio report (primo invio)' : `Orario di invio report ${i + 1}`;
+    html += `<input type="time" name="reportTime" value="${escapeHtml(val)}" class="input-time" aria-label="${escapeHtml(label)}" required>`;
   }
   container.innerHTML = html;
 };

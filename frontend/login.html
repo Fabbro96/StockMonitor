@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Accedi - Stock Monitor</title>
     <link rel="icon" href="data:,">
-    <script src="/static/js/theme-init.js?v=3.0.0"></script>
-    <link rel="stylesheet" href="/static/css/style.css?v=3.0.0">
+    <script src="/static/js/theme-init.js?v=3.0.1"></script>
+    <link rel="stylesheet" href="/static/css/style.css?v=3.0.1">
 </head>
 <body>
     <main class="login-wrapper">
@@ -45,7 +45,7 @@
                             autocomplete="current-password"
                             placeholder="••••••••"
                         >
-                        <button type="button" class="password-toggle" id="togglePassword" aria-label="Mostra/Nascondi password">👁️</button>
+                        <button type="button" class="password-toggle" id="togglePassword" aria-label="Mostra password" aria-pressed="false">👁️</button>
                     </div>
                 </div>
 
@@ -63,7 +63,7 @@
     </main>
 
     <script type="module">
-        import { api } from '/static/js/api.js?v=3.0.0';
+        import { api } from '/static/js/api.js?v=3.0.1';
 
         // Anti open-redirect: accetta solo path relativi same-origin.
         // I control char TAB/LF/CR vengono rimossi dal parser URL in fase di
@@ -108,13 +108,11 @@
         const toggleBtn = document.getElementById('togglePassword');
         const passInput = document.getElementById('password');
         toggleBtn.addEventListener('click', () => {
-            if (passInput.type === 'password') {
-                passInput.type = 'text';
-                toggleBtn.textContent = '🙈';
-            } else {
-                passInput.type = 'password';
-                toggleBtn.textContent = '👁️';
-            }
+            const showPassword = passInput.type === 'password';
+            passInput.type = showPassword ? 'text' : 'password';
+            toggleBtn.textContent = showPassword ? '🙈' : '👁️';
+            toggleBtn.setAttribute('aria-pressed', showPassword ? 'true' : 'false');
+            toggleBtn.setAttribute('aria-label', showPassword ? 'Nascondi password' : 'Mostra password');
         });
 
         // Form submit

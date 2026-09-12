@@ -1,5 +1,5 @@
-import { api } from './api.js?v=3.0.0';
-import { formatCurrency, formatDateTime, showLoading, hideLoading, showToast, escapeHtml } from './app.js?v=3.0.0';
+import { api } from './api.js?v=3.0.1';
+import { formatCurrency, formatDateTime, showLoading, hideLoading, showToast, escapeHtml } from './app.js?v=3.0.1';
 
 let currentPage = 1;
 let currentFilters = { market: '', action: '', date: '', q: '' };
@@ -406,10 +406,13 @@ const initAdvice = () => {
   };
 
   const setDayButtonState = (activeType, customLabel = null) => {
-    Object.values(dayButtons).forEach(btn => btn?.classList.remove('active'));
-    if (activeType && dayButtons[activeType]) {
-      dayButtons[activeType].classList.add('active');
-    }
+    // Stato selezionato esposto anche alle tecnologie assistive, non solo colore.
+    Object.entries(dayButtons).forEach(([key, btn]) => {
+      if (!btn) return;
+      const isActive = key === activeType;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
     if (dayButtons.pick) {
       dayButtons.pick.innerHTML = customLabel ? `📅 ${escapeHtml(customLabel)}` : 'Scegli giorno 📅';
     }

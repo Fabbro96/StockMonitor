@@ -1,4 +1,4 @@
-import { api } from './api.js?v=3.0.0';
+import { api } from './api.js?v=3.0.1';
 
 export const formatCurrency = (val, currency = 'EUR') => {
   if (val === null || val === undefined || isNaN(val)) return '-';
@@ -67,43 +67,73 @@ export const showToast = (message, type = 'info', actionText = null, onAction = 
     container.className = 'toast-container';
     document.body.appendChild(container);
   }
+  // Annunci polite per screen reader (il container può esistere da un render precedente).
+  if (!container.hasAttribute('aria-live')) container.setAttribute('aria-live', 'polite');
+  if (!container.hasAttribute('aria-atomic')) container.setAttribute('aria-atomic', 'false');
 
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  
-  let actionHtml = '';
-  if (actionText && typeof onAction === 'function') {
-    actionHtml = `<button class="btn btn-ghost btn-sm toast-action">${escapeHtml(actionText)}</button>`;
-  }
 
-  toast.innerHTML = `<span>${escapeHtml(message)}</span>${actionHtml}`;
-  container.appendChild(toast);
+  const messageEl = document.createElement('span');
+  messageEl.textContent = message;
+  toast.appendChild(messageEl);
 
-  if (actionText && onAction) {
-    toast.querySelector('.toast-action')?.addEventListener('click', () => {
-      onAction();
-      toast.remove();
-    });
-  }
-
-  setTimeout(() => toast.classList.add('show'), 10);
-
+  let dismissed = false;
   let autoTimer = null;
   let removeTimer = null;
   const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
     clearTimeout(autoTimer);
     clearTimeout(removeTimer);
     toast.classList.remove('show');
     removeTimer = setTimeout(() => toast.remove(), 300);
   };
 
-  autoTimer = setTimeout(dismiss, 4000);
+  const hasAction = Boolean(actionText && typeof onAction === 'function');
+  if (hasAction) {
+    const actionBtn = document.createElement('button');
+    actionBtn.type = 'button';
+    actionBtn.className = 'btn btn-ghost btn-sm toast-action';
+    actionBtn.textContent = actionText;
+    actionBtn.addEventListener('click', () => {
+      onAction();
+      dismiss();
+    });
+    toast.appendChild(actionBtn);
+  }
 
-  // L'hover sospende la chiusura; al mouseleave viene riprogrammata per non lasciare il toast appeso.
-  toast.addEventListener('mouseenter', () => clearTimeout(autoTimer));
-  toast.addEventListener('mouseleave', () => {
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'toast-close';
+  closeBtn.setAttribute('aria-label', 'Chiudi notifica');
+  closeBtn.textContent = '×';
+  closeBtn.addEventListener('click', dismiss);
+  toast.appendChild(closeBtn);
+
+  container.appendChild(toast);
+
+  setTimeout(() => toast.classList.add('show'), 10);
+
+  const scheduleDismiss = (ms) => {
     clearTimeout(autoTimer);
-    autoTimer = setTimeout(dismiss, 2500);
+    autoTimer = setTimeout(dismiss, ms);
+  };
+
+  // I toast con azione (undo) restano molto più a lungo di quelli informativi
+  // (4s non bastavano per annullare un'eliminazione), ma con un fallback lungo
+  // per non accumularsi all'infinito visto che la mutazione è già applicata.
+  scheduleDismiss(hasAction ? 15000 : 4000);
+
+  // Hover o focus sospendono la chiusura; al rilascio viene riprogrammata.
+  const resumeDelay = hasAction ? 5000 : 2500;
+  toast.addEventListener('mouseenter', () => clearTimeout(autoTimer));
+  toast.addEventListener('mouseleave', () => { if (!dismissed) scheduleDismiss(resumeDelay); });
+  toast.addEventListener('focusin', () => clearTimeout(autoTimer));
+  toast.addEventListener('focusout', (e) => {
+    if (dismissed) return;
+    if (e.relatedTarget && toast.contains(e.relatedTarget)) return; // focus ancora nel toast
+    scheduleDismiss(resumeDelay);
   });
 };
 
@@ -132,6 +162,53 @@ export const hideLoading = (elementId = null) => {
       if (overlay) overlay.classList.remove('active');
     }
   }
+};
+
+// ==========================================
+// Stati vuoti/footer di tabella fuori dal <table>.
+// Un messaggio dentro una cella colspan resta centrato sulla larghezza REALE della
+// tabella (fino a ~1100px): su mobile finisce fuori dallo schermo. Questi helper
+// inseriscono un blocco gemello al .table-container, ancorato alla card.
+// ==========================================
+const findAfter = (el, className) => {
+  let node = el.nextElementSibling;
+  for (let i = 0; i < 2 && node; i++, node = node.nextElementSibling) {
+    if (node.classList.contains(className)) return node;
+  }
+  return null;
+};
+
+const getOrCreateAfter = (el, className) => {
+  const existing = findAfter(el, className);
+  if (existing) return existing;
+  const node = document.createElement('div');
+  node.className = className;
+  el.insertAdjacentElement('afterend', node);
+  return node;
+};
+
+export const setTableEmptyState = (tableContainer, html) => {
+  if (!tableContainer) return;
+  const empty = getOrCreateAfter(tableContainer, 'table-empty');
+  empty.innerHTML = html;
+  empty.hidden = false;
+  tableContainer.hidden = true;
+};
+
+export const clearTableEmptyState = (tableContainer) => {
+  if (!tableContainer) return;
+  tableContainer.hidden = false;
+  [tableContainer.nextElementSibling, tableContainer.nextElementSibling?.nextElementSibling]
+    .forEach(node => {
+      if (node && node.classList.contains('table-empty')) node.hidden = true;
+    });
+};
+
+export const setTableFootnote = (tableContainer, html) => {
+  if (!tableContainer) return;
+  const note = getOrCreateAfter(tableContainer, 'table-note');
+  note.innerHTML = html || '';
+  note.hidden = !html;
 };
 
 // ==========================================
@@ -267,24 +344,28 @@ const initTickerMarquee = async () => {
     const indices = await api.getIndices().catch(() => []);
     if (!indices || indices.length === 0) return;
 
-    const renderItems = (items) => items.map(idx => {
+    // <button> (non <div>): il ticker è un controllo reale, quindi deve essere
+    // raggiungibile con Tab e attivabile con Enter/Spazio. La seconda copia serve solo
+    // al loop visivo: la si nasconde alle tecnologie assistive per non raddoppiare i tab stop.
+    const renderItems = (items, decorative = false) => items.map(idx => {
       const isUp = idx.change_percent >= 0;
       const changeClass = isUp ? 'up' : 'down';
       const sign = isUp ? '+' : '';
+      const hiddenAttrs = decorative ? ' aria-hidden="true" tabindex="-1"' : '';
       return `
-        <div class="ticker-item" data-stock="${escapeHtml(idx.ticker)}">
+        <button type="button" class="ticker-item" data-stock="${escapeHtml(idx.ticker)}" title="Apri scheda tecnica"${hiddenAttrs}>
           <span>${escapeHtml(idx.flag || '📊')}</span>
           <span class="ticker-name">${escapeHtml(idx.name)}</span>
           <span class="ticker-price">${escapeHtml(idx.price)}</span>
           <span class="ticker-change ${changeClass}">${sign}${escapeHtml(idx.change_percent)}%</span>
-        </div>
+        </button>
       `;
     }).join('');
 
     tapeContainer.innerHTML = `
       <div class="ticker-tape-track">
         ${renderItems(indices)}
-        ${renderItems(indices)}
+        ${renderItems(indices, true)}
       </div>
     `;
   } catch (e) {
@@ -405,6 +486,21 @@ const disposeModalChart = () => {
   modalBreakevenLine = null;
 };
 
+// Attiva una tab della scheda titolo mantenendo coerenti classe visiva,
+// aria-selected e roving tabindex (pattern ARIA tablist).
+const setActiveStockModalTab = (modalEl, tabBtn) => {
+  if (!modalEl || !tabBtn) return;
+  modalEl.querySelectorAll('.modal-tab-btn').forEach(b => {
+    const isActive = b === tabBtn;
+    b.classList.toggle('active', isActive);
+    b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    b.setAttribute('tabindex', isActive ? '0' : '-1');
+  });
+  modalEl.querySelectorAll('.modal-tab-panel').forEach(p => { p.style.display = 'none'; });
+  const targetPanel = document.getElementById(tabBtn.dataset.tab);
+  if (targetPanel) targetPanel.style.display = 'block';
+};
+
 const injectStockModalHTML = () => {
   if (document.getElementById('stockDeepDiveModal')) return;
 
@@ -438,28 +534,28 @@ const injectStockModalHTML = () => {
       </div>
 
       <!-- Modal Tabs -->
-      <div class="modal-tabs">
-        <button class="modal-tab-btn active" data-tab="tab-chart">📈 Grafico & Dati</button>
-        <button class="modal-tab-btn" data-tab="tab-technicals">⚡ Indicatori Tecnici</button>
-        <button class="modal-tab-btn" data-tab="tab-fundamentals">📊 Fondamentali</button>
-        <button class="modal-tab-btn" data-tab="tab-ai">🤖 Analisi AI Gemini</button>
+      <div class="modal-tabs" role="tablist" aria-label="Sezioni scheda titolo">
+        <button class="modal-tab-btn active" id="smTabChart" role="tab" aria-selected="true" aria-controls="tab-chart" tabindex="0" data-tab="tab-chart">📈 Grafico & Dati</button>
+        <button class="modal-tab-btn" id="smTabTechnicals" role="tab" aria-selected="false" aria-controls="tab-technicals" tabindex="-1" data-tab="tab-technicals">⚡ Indicatori Tecnici</button>
+        <button class="modal-tab-btn" id="smTabFundamentals" role="tab" aria-selected="false" aria-controls="tab-fundamentals" tabindex="-1" data-tab="tab-fundamentals">📊 Fondamentali</button>
+        <button class="modal-tab-btn" id="smTabAi" role="tab" aria-selected="false" aria-controls="tab-ai" tabindex="-1" data-tab="tab-ai">🤖 Analisi AI Gemini</button>
       </div>
 
       <!-- Tab Content: Chart -->
-      <div id="tab-chart" class="modal-tab-panel">
+      <div id="tab-chart" class="modal-tab-panel" role="tabpanel" aria-labelledby="smTabChart">
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
           <div class="flex items-center gap-2 flex-wrap">
-            <div class="timeframe-group" id="modalTimeframeGroup">
-              <button class="timeframe-btn" data-tf="1d">1G</button>
-              <button class="timeframe-btn" data-tf="1w">1S</button>
-              <button class="timeframe-btn active" data-tf="1m">1M</button>
-              <button class="timeframe-btn" data-tf="6m">6M</button>
-              <button class="timeframe-btn" data-tf="1y">1A</button>
-              <button class="timeframe-btn" data-tf="5y">5A</button>
+            <div class="timeframe-group" id="modalTimeframeGroup" role="group" aria-label="Intervallo temporale del grafico">
+              <button class="timeframe-btn" data-tf="1d" aria-pressed="false">1G</button>
+              <button class="timeframe-btn" data-tf="1w" aria-pressed="false">1S</button>
+              <button class="timeframe-btn active" data-tf="1m" aria-pressed="true">1M</button>
+              <button class="timeframe-btn" data-tf="6m" aria-pressed="false">6M</button>
+              <button class="timeframe-btn" data-tf="1y" aria-pressed="false">1A</button>
+              <button class="timeframe-btn" data-tf="5y" aria-pressed="false">5A</button>
             </div>
-            <div class="flex gap-2" id="modalChartTypeGroup">
-              <button class="chart-type-btn active" data-type="area">📈 Area</button>
-              <button class="chart-type-btn" data-type="candle">📊 Candele</button>
+            <div class="flex gap-2" id="modalChartTypeGroup" role="group" aria-label="Tipo di grafico">
+              <button class="chart-type-btn active" data-type="area" aria-pressed="true">📈 Area</button>
+              <button class="chart-type-btn" data-type="candle" aria-pressed="false">📊 Candele</button>
             </div>
           </div>
           <div class="flex gap-2 flex-wrap">
@@ -475,7 +571,7 @@ const injectStockModalHTML = () => {
       </div>
 
       <!-- Tab Content: Technicals -->
-      <div id="tab-technicals" class="modal-tab-panel" style="display: none;">
+      <div id="tab-technicals" class="modal-tab-panel" role="tabpanel" aria-labelledby="smTabTechnicals" style="display: none;">
         <div class="metric-grid mb-4">
           <div class="card card-subtle p-3">
             <div class="text-xs text-muted mb-1">RSI (14 Periodi)</div>
@@ -515,7 +611,7 @@ const injectStockModalHTML = () => {
       </div>
 
       <!-- Tab Content: Fundamentals -->
-      <div id="tab-fundamentals" class="modal-tab-panel" style="display: none;">
+      <div id="tab-fundamentals" class="modal-tab-panel" role="tabpanel" aria-labelledby="smTabFundamentals" style="display: none;">
         <div class="metric-grid mb-4">
           <div class="card card-subtle p-3">
             <div class="text-xs text-muted">Capitalizzazione</div>
@@ -548,7 +644,7 @@ const injectStockModalHTML = () => {
       </div>
 
       <!-- Tab Content: AI Analysis -->
-      <div id="tab-ai" class="modal-tab-panel" style="display: none;">
+      <div id="tab-ai" class="modal-tab-panel" role="tabpanel" aria-labelledby="smTabAi" style="display: none;">
         <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
           <div class="text-sm font-bold text-primary flex items-center gap-1.5">
             <span>🧠 Analisi Istantanea Gemini 3.7 Flash</span>
@@ -572,19 +668,34 @@ const injectStockModalHTML = () => {
   });
 
   modalEl.querySelectorAll('.modal-tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      modalEl.querySelectorAll('.modal-tab-btn').forEach(b => b.classList.remove('active'));
-      modalEl.querySelectorAll('.modal-tab-panel').forEach(p => p.style.display = 'none');
-      btn.classList.add('active');
-      const targetPanel = document.getElementById(btn.dataset.tab);
-      if (targetPanel) targetPanel.style.display = 'block';
-    });
+    btn.addEventListener('click', () => setActiveStockModalTab(modalEl, btn));
+  });
+
+  // Frecce sinistra/destra (+ Home/End) per navigare le tab come da pattern ARIA.
+  const tablist = modalEl.querySelector('.modal-tabs');
+  tablist?.addEventListener('keydown', (e) => {
+    const tabs = Array.from(modalEl.querySelectorAll('.modal-tab-btn'));
+    const currentIndex = tabs.indexOf(document.activeElement);
+    if (currentIndex === -1) return;
+    let nextIndex = null;
+    if (e.key === 'ArrowRight') nextIndex = (currentIndex + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') nextIndex = 0;
+    else if (e.key === 'End') nextIndex = tabs.length - 1;
+    if (nextIndex === null) return;
+    e.preventDefault();
+    setActiveStockModalTab(modalEl, tabs[nextIndex]);
+    tabs[nextIndex].focus();
   });
 
   modalEl.querySelectorAll('.timeframe-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      modalEl.querySelectorAll('.timeframe-btn').forEach(b => b.classList.remove('active'));
+      modalEl.querySelectorAll('.timeframe-btn').forEach(b => {
+        b.classList.remove('active');
+        b.setAttribute('aria-pressed', 'false');
+      });
       btn.classList.add('active');
+      btn.setAttribute('aria-pressed', 'true');
       currentModalTimeframe = btn.dataset.tf;
       // Nuova generazione: invalida eventuali risposte in volo di timeframe precedenti.
       loadModalChart(currentModalTicker, currentModalTimeframe, ++modalLoadGeneration);
@@ -596,8 +707,12 @@ const injectStockModalHTML = () => {
   if (chartTypeGroup) {
     chartTypeGroup.querySelectorAll('.chart-type-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        chartTypeGroup.querySelectorAll('.chart-type-btn').forEach(b => b.classList.remove('active'));
+        chartTypeGroup.querySelectorAll('.chart-type-btn').forEach(b => {
+          b.classList.remove('active');
+          b.setAttribute('aria-pressed', 'false');
+        });
         btn.classList.add('active');
+        btn.setAttribute('aria-pressed', 'true');
         currentModalChartType = btn.dataset.type;
         applyModalChartData();
       });
@@ -655,7 +770,11 @@ const initModalChart = () => {
       background: { type: 'solid', color: 'transparent' },
       textColor: themeColors.textColor,
       fontFamily: CHART_FONT_FAMILY,
-      fontSize: 11
+      fontSize: 11,
+      // Il logo TradingView di default copre le barre volume in basso a sinistra e
+      // sembra un artefatto di rendering. La licenza Apache-2.0 del vendor (con
+      // LICENSE conservata in frontend/vendor) non richiede il glifo: disattivato.
+      attributionLogo: false
     },
     grid: {
       vertLines: { color: themeColors.gridColor },
@@ -829,13 +948,7 @@ const openStockModal = async (ticker) => {
   const modal = document.getElementById('stockDeepDiveModal');
   modal.classList.add('active');
 
-  modal.querySelectorAll('.modal-tab-btn').forEach((b, idx) => {
-    if (idx === 0) b.classList.add('active');
-    else b.classList.remove('active');
-  });
-  modal.querySelectorAll('.modal-tab-panel').forEach((p, idx) => {
-    p.style.display = idx === 0 ? 'block' : 'none';
-  });
+  setActiveStockModalTab(modal, modal.querySelector('.modal-tab-btn'));
 
   document.getElementById('smTicker').textContent = currentModalTicker;
   document.getElementById('smName').textContent = 'Caricamento dati...';
@@ -1061,7 +1174,7 @@ const initSidebar = () => {
     footer.className = 'sidebar-footer';
     footer.innerHTML = `
       <div class="sidebar-user">
-        <span>👤</span>
+        <span aria-hidden="true">👤</span>
         <span class="sidebar-username">${escapeHtml(username)}</span>
       </div>
       <button id="btnLogout" class="icon-btn" title="Disconnetti" aria-label="Disconnetti">🚪</button>
@@ -1475,15 +1588,186 @@ const initGlobalKeyboardShortcuts = () => {
   });
 };
 
+// ==========================================
+// Altezza reale della topbar (per elementi sticky sotto di essa, es. .save-bar)
+// ==========================================
+const initTopbarHeightVar = () => {
+  const topbar = document.querySelector('.topbar');
+  if (!topbar) return;
+  const apply = () => {
+    const height = Math.round(topbar.getBoundingClientRect().height);
+    if (height > 0) document.documentElement.style.setProperty('--topbar-actual-height', `${height}px`);
+  };
+  apply();
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(apply);
+    ro.observe(topbar);
+  } else {
+    window.addEventListener('resize', apply);
+  }
+};
+
+// ==========================================
+// Modal focus management: focus iniziale, trap del Tab, ritorno al trigger
+// Copre le modali statiche e quelle iniettate (stock, market editor, palette, scorciatoie)
+// ==========================================
+const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const MODAL_ACTIVE_SELECTOR = '.modal-overlay.active, .cmd-palette-backdrop.active';
+const modalFocusStack = [];
+
+// Esclude ciò che non è realmente raggiungibile con Tab: i tabindex="-1" (container
+// a11y del dialog, tab inattive del modal titolo) non devono entrare nel ciclo di trap.
+const getVisibleFocusables = (root) =>
+  Array.from(root.querySelectorAll(FOCUSABLE_SELECTOR)).filter(el => {
+    if (el.tabIndex < 0) return false;
+    if (el.closest('[hidden]')) return false;
+    return el.offsetParent !== null || el.getClientRects().length > 0;
+  });
+
+const getModalContainer = (modalEl) =>
+  modalEl.querySelector('.modal-content, .cmd-palette-card') || modalEl;
+
+const focusElement = (el) => {
+  if (!el) return;
+  try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) {} }
+};
+
+const focusModalContainer = (modalEl) => {
+  const container = getModalContainer(modalEl);
+  if (container && !container.hasAttribute('tabindex')) container.setAttribute('tabindex', '-1');
+  focusElement(container);
+};
+
+const focusIntoModal = (modalEl) => {
+  const doFocus = () => {
+    if (!modalEl.isConnected || !modalEl.classList.contains('active')) return;
+    // Forza il ricalcolo di style/layout: la modale è stata resa visibile un istante fa
+    // e senza flush il focus su un elemento ancora "hidden" fallisce in silenzio.
+    void modalEl.offsetHeight;
+    const first = getVisibleFocusables(modalEl)[0];
+    // Focus iniziale sul primo elemento realmente raggiungibile. Mai sul container
+    // (tabindex=-1): da lì Shift+Tab scapperebbe sull'elemento dietro l'overlay.
+    if (first) focusElement(first);
+    else focusModalContainer(modalEl);
+  };
+  doFocus();
+  // La modale viene resa visibile con una transizione: subito dopo il click il focus
+  // può fallire in silenzio. Riprova finché un elemento della lista non ha il focus.
+  let attempts = 0;
+  const retry = () => {
+    if (attempts >= 4 || !modalEl.isConnected || !modalEl.classList.contains('active')) return;
+    const focusables = getVisibleFocusables(modalEl);
+    if (focusables.length === 0) return;
+    if (focusables.indexOf(document.activeElement) !== -1) return;
+    attempts++;
+    doFocus();
+    setTimeout(retry, 60);
+  };
+  setTimeout(retry, 60);
+};
+
+const restoreFocusTo = (el) => {
+  if (el && el.isConnected && typeof el.focus === 'function') {
+    try { el.focus({ preventScroll: true }); } catch (e) { try { el.focus(); } catch (e2) {} }
+  }
+};
+
+const handleModalTabKey = (e) => {
+  if (e.key !== 'Tab' || modalFocusStack.length === 0) return;
+  const top = modalFocusStack[modalFocusStack.length - 1];
+  if (!top.el.isConnected) return;
+  // Ricalcola a ogni keydown: la lista può cambiare mentre la modale è aperta.
+  const focusables = getVisibleFocusables(top.el);
+  if (focusables.length === 0) {
+    // Nulla di focalizzabile: resta sul container, mai sul contenuto dietro l'overlay.
+    e.preventDefault();
+    focusModalContainer(top.el);
+    return;
+  }
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  const inside = top.el.contains(active);
+  const inList = focusables.indexOf(active) !== -1;
+
+  // Fuori dalla modale, sul container (tabindex=-1, non in lista) o su un elemento non
+  // raggiungibile: riporta dentro. Shift+Tab va all'ULTIMO (mai dietro l'overlay),
+  // Tab al PRIMO. Copre anche il caso "focus iniziale ancora sul container" per timing.
+  if (!inside || !inList) {
+    e.preventDefault();
+    focusElement(e.shiftKey ? last : first);
+    return;
+  }
+  if (e.shiftKey && active === first) {
+    e.preventDefault();
+    focusElement(last);
+  } else if (!e.shiftKey && active === last) {
+    e.preventDefault();
+    focusElement(first);
+  }
+};
+
+const syncModalFocusStack = (node) => {
+  if (!(node instanceof Element)) return;
+  const isOpen = node.matches && node.matches(MODAL_ACTIVE_SELECTOR);
+  const stackIndex = modalFocusStack.findIndex(entry => entry.el === node);
+  if (isOpen) {
+    if (stackIndex === -1) {
+      const opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+      modalFocusStack.push({ el: node, opener });
+      focusIntoModal(node);
+    }
+  } else if (stackIndex !== -1) {
+    const [entry] = modalFocusStack.splice(stackIndex, 1);
+    restoreFocusTo(entry.opener);
+  }
+};
+
+const dropModalFromFocusStack = (node) => {
+  const stackIndex = modalFocusStack.findIndex(entry => entry.el === node);
+  if (stackIndex === -1) return;
+  const [entry] = modalFocusStack.splice(stackIndex, 1);
+  restoreFocusTo(entry.opener);
+};
+
+const initModalFocusManagement = () => {
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'attributes') {
+        syncModalFocusStack(mutation.target);
+      } else if (mutation.type === 'childList') {
+        mutation.addedNodes.forEach(node => {
+          if (!(node instanceof Element)) return;
+          if (node.matches && node.matches(MODAL_ACTIVE_SELECTOR)) syncModalFocusStack(node);
+        });
+        mutation.removedNodes.forEach(node => {
+          if (node instanceof Element) dropModalFromFocusStack(node);
+        });
+        // Copre append e classList.add('active') nello stesso frame.
+        document.querySelectorAll(MODAL_ACTIVE_SELECTOR).forEach(syncModalFocusStack);
+      }
+    }
+  });
+  observer.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class'],
+    subtree: true,
+    childList: true
+  });
+  document.addEventListener('keydown', handleModalTabKey, true);
+};
+
 const initApp = () => {
   initTheme();
   initSidebar();
+  initTopbarHeightVar();
   checkAuth();
   initTickerMarquee();
   injectStockModalHTML();
   initSteppers();
   injectCommandPaletteHTML();
   initGlobalKeyboardShortcuts();
+  initModalFocusManagement();
 
   // Listen for theme changes to update modal chart
   window.addEventListener('themeChanged', () => {

@@ -1,9 +1,11 @@
+import inspect
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import delete as sa_delete
+from sqlalchemy import case, delete as sa_delete, func, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +13,7 @@ from backend.database import get_db
 from backend.models.advice import Advice
 from backend.models.portfolio import Holding, Transaction
 from backend.models.settings import AlertRule, UserSettings
+from backend.models.target_allocation import TargetAllocation
 from backend.models.user import User
 from backend.models.watchlist import WatchlistItem
 from backend.services.auth import (
@@ -24,6 +27,9 @@ from backend.services.auth import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
 
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1)
@@ -94,20 +100,38 @@ async def login(
             user.failed_attempts = 0
 
     if not await verify_password_async(login_data.password, user.hashed_password):
-        user.failed_attempts = (user.failed_attempts or 0) + 1
-        max_attempts = 5
-        
-        if user.failed_attempts >= max_attempts:
-            user.locked_until = now + timedelta(minutes=15)
-            await db.commit()
+        # M10: incremento ATOMICO lato DB (failed_attempts = failed_attempts + 1):
+        # due login falliti in parallelo contano entrambi, niente check-then-write.
+        # Il lockout scatta nello stesso UPDATE via CASE, quindi non c'è finestra
+        # tra conteggio e blocco. Il valore letto è solo per il messaggio.
+        increment = func.coalesce(User.failed_attempts, 0) + 1
+        lock_until = now + timedelta(minutes=LOCKOUT_MINUTES)
+        await db.execute(
+            update(User)
+            .where(User.id == user.id)
+            .values(
+                failed_attempts=increment,
+                locked_until=case(
+                    (increment >= MAX_FAILED_ATTEMPTS, lock_until),
+                    else_=User.locked_until,
+                ),
+            )
+        )
+        await db.commit()
+        failed_attempts = (
+            await db.execute(select(User.failed_attempts).where(User.id == user.id))
+        ).scalar() or 1
+        # Risincronizza l'istanza ORM con i valori appena scritti.
+        await db.refresh(user)
+
+        if failed_attempts >= MAX_FAILED_ATTEMPTS:
             logger.warning(f"Account bloccato per troppi tentativi: {username}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Troppi tentativi falliti. Account bloccato per 15 minuti."
             )
-            
-        await db.commit()
-        remaining_attempts = max_attempts - user.failed_attempts
+
+        remaining_attempts = MAX_FAILED_ATTEMPTS - failed_attempts
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Password errata. {remaining_attempts} tentativi rimasti prima del blocco temporaneo."
@@ -205,8 +229,20 @@ async def create_user(
         is_active=True
     )
     db.add(new_user)
-    await db.commit()
-    await db.refresh(new_user)
+    try:
+        await db.commit()
+        await db.refresh(new_user)
+    except IntegrityError:
+        # H8: race su UNIQUE(users.username) tra il check e l'INSERT.
+        # Ri-seleziona e restituisci lo stesso 400 del controllo preventivo.
+        await db.rollback()
+        existing = await db.execute(select(User).where(User.username == username))
+        if existing.scalars().first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"L'utente '{username}' esiste già."
+            )
+        raise
     return new_user
 
 @router.delete("/users/{user_id}")
@@ -228,7 +264,10 @@ async def delete_user(
 
     # Le FK aggiunte via ALTER TABLE non hanno ON DELETE CASCADE sul DB esistente:
     # eliminiamo esplicitamente i dati dell'utente prima di rimuovere l'account.
+    # ORDINE: prima le tabelle dipendenti (TargetAllocation inclusa, altrimenti
+    # PRAGMA foreign_keys=ON fa fallire il db.delete(user) con IntegrityError).
     username = user.username
+    await db.execute(sa_delete(TargetAllocation).where(TargetAllocation.user_id == user_id))
     await db.execute(sa_delete(Holding).where(Holding.user_id == user_id))
     await db.execute(sa_delete(Transaction).where(Transaction.user_id == user_id))
     await db.execute(sa_delete(WatchlistItem).where(WatchlistItem.user_id == user_id))
@@ -237,6 +276,17 @@ async def delete_user(
     await db.execute(sa_delete(Advice).where(Advice.user_id == user_id))
     await db.delete(user)
     await db.commit()
+
+    # Invalida le cache per-utente (serie/risk). Import lazy con guardia:
+    # `analytics.invalidate_user_caches` è aggiunta dalla lane BE-3.
+    try:
+        from backend.services.analytics import invalidate_user_caches
+        result = invalidate_user_caches(user_id)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as e:
+        logger.warning(f"Invalidazione cache per l'utente {user_id} non riuscita: {e}")
+
     return {"status": "success", "message": f"Utente '{username}' eliminato"}
 
 @router.put("/users/{user_id}/reset-password")

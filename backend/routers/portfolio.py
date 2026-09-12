@@ -1,15 +1,17 @@
 import io
 import csv
+import asyncio
+import inspect
 import logging
 from datetime import datetime, date, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from sqlalchemy import or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_, func, update as sa_update, delete as sa_delete
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from backend.database import get_db
 from backend.models.portfolio import Holding, Transaction
@@ -29,6 +31,78 @@ from backend.services.analytics import (
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Helper di concorrenza e affidabilità scritture
+# ---------------------------------------------------------------------------
+# Un asyncio.Lock per utente serializza le mutazioni di holdings/transactions
+# in-process (deployment a singolo worker uvicorn). Il vincolo DB
+# UNIQUE(user_id, stock_id) resta la difesa di ultima istanza.
+_user_write_locks: dict[int, asyncio.Lock] = {}
+
+
+def _get_user_lock(user_id: int) -> asyncio.Lock:
+    """Ritorna (creandolo se serve) il lock di scrittura dell'utente."""
+    lock = _user_write_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_write_locks[user_id] = lock
+    return lock
+
+
+async def _invalidate_user_caches(user_id: int) -> None:
+    """
+    Invalida le cache analytics dell'utente dopo una scrittura riuscita.
+    Import lazy + guardia: la funzione è fornita da un'altra lane e la sua
+    assenza (o un errore) non deve mai rompere una scrittura già committata.
+    """
+    try:
+        from backend.services.analytics import invalidate_user_caches
+        result = invalidate_user_caches(user_id)
+        if inspect.isawaitable(result):
+            await result
+    except Exception as e:
+        logger.debug(f"invalidate_user_caches non disponibile: {e}")
+
+
+async def _commit_write(
+    db: AsyncSession,
+    conflict_detail: str = "Conflitto di integrità dei dati, riprova.",
+) -> None:
+    """
+    Commit con mappatura degli errori DB in risposte HTTP pulite:
+    OperationalError (DB occupato/locked) -> 503, IntegrityError -> 409.
+    """
+    try:
+        await db.commit()
+    except OperationalError as e:
+        await db.rollback()
+        logger.warning(f"Commit fallito (database occupato): {e}")
+        raise HTTPException(status_code=503, detail="database temporaneamente occupato, riprova")
+    except IntegrityError as e:
+        await db.rollback()
+        logger.warning(f"Commit fallito (vincolo di integrità): {e}")
+        raise HTTPException(status_code=409, detail=conflict_detail)
+
+
+def _can_access_holding(holding: Holding, current_user: User) -> bool:
+    """
+    Ownership STRICT: solo il proprietario può modificare/eliminare la holding.
+
+    Righe legacy con user_id NULL (pre multi-utente): accesso riservato
+    all'admin, stesso precedente di `_can_access_watchlist_item` in watchlist.py
+    e `_can_access_alert_rule` in settings.py.
+    """
+    if holding.user_id is None:
+        return bool(current_user.is_admin)
+    return holding.user_id == current_user.id
+
+
+def _can_access_transaction(tx: Transaction, current_user: User) -> bool:
+    """Ownership STRICT sulla transazione; righe legacy NULL -> solo admin."""
+    if tx.user_id is None:
+        return bool(current_user.is_admin)
+    return tx.user_id == current_user.id
 
 
 async def _ensure_stocks(db: AsyncSession, specs: dict[str, dict]) -> dict[str, Stock]:
@@ -76,21 +150,21 @@ async def _ensure_stocks(db: AsyncSession, specs: dict[str, dict]) -> dict[str, 
 class HoldingCreate(BaseModel):
     ticker: Optional[str] = None
     stock_id: Optional[int] = None
-    quantity: float
-    avg_purchase_price: float
+    quantity: float = Field(..., gt=0, description="Quantità deve essere > 0")
+    avg_purchase_price: float = Field(..., gt=0, description="Prezzo medio deve essere > 0")
     purchase_date: Optional[date] = None
     notes: Optional[str] = None
 
 class HoldingUpdate(BaseModel):
-    quantity: Optional[float] = None
-    avg_purchase_price: Optional[float] = None
+    quantity: Optional[float] = Field(None, gt=0, description="Quantità deve essere > 0")
+    avg_purchase_price: Optional[float] = Field(None, gt=0, description="Prezzo medio deve essere > 0")
     purchase_date: Optional[date] = None
     notes: Optional[str] = None
 
 class HoldingBatchItem(BaseModel):
     id: int
-    quantity: float
-    avg_purchase_price: float
+    quantity: float = Field(..., gt=0, description="Quantità deve essere > 0")
+    avg_purchase_price: float = Field(..., gt=0, description="Prezzo medio deve essere > 0")
     notes: Optional[str] = None
 
 class BatchUpdateRequest(BaseModel):
@@ -189,22 +263,38 @@ async def create_target(
     if scope_type == "MARKET" and not data.scope_value:
         raise HTTPException(status_code=400, detail="Per scope MARKET indica scope_value (IT, US, EU).")
 
-    target = TargetAllocation(
-        user_id=current_user.id,
-        name=data.name.strip(),
-        target_percent=data.target_percent,
-        scope_type=scope_type,
-        scope_value=(data.scope_value or "").strip().upper(),
-    )
-    db.add(target)
-    try:
-        await db.commit()
+    # Check+insert atomici sotto il lock per-utente: due POST paralleli dello
+    # stesso utente non possono entrambi superare il check e sfondare il 100%.
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        # La somma delle allocazioni target dell'utente non può superare il 100%.
+        existing_sum_res = await db.execute(
+            select(func.coalesce(func.sum(TargetAllocation.target_percent), 0.0))
+            .where(TargetAllocation.user_id == current_user.id)
+        )
+        existing_sum = float(existing_sum_res.scalar() or 0.0)
+        if existing_sum + data.target_percent > 100.0 + 1e-6:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "La somma delle allocazioni target non può superare 100% "
+                    f"(attuale {existing_sum:.2f}% + nuova {data.target_percent:.2f}%)."
+                ),
+            )
+
+        target = TargetAllocation(
+            user_id=current_user.id,
+            name=data.name.strip(),
+            target_percent=data.target_percent,
+            scope_type=scope_type,
+            scope_value=(data.scope_value or "").strip().upper(),
+        )
+        db.add(target)
+        await _commit_write(db, conflict_detail="Conflitto nella creazione dell'allocazione target, riprova.")
         await db.refresh(target)
-    except Exception as e:
-        await db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"id": target.id, "name": target.name, "target_percent": target.target_percent,
-            "scope_type": target.scope_type, "scope_value": target.scope_value or ""}
+        response = {"id": target.id, "name": target.name, "target_percent": target.target_percent,
+                    "scope_type": target.scope_type, "scope_value": target.scope_value or ""}
+    return response
 
 @router.delete("/rebalance/targets/{target_id}")
 async def delete_target(
@@ -216,7 +306,7 @@ async def delete_target(
     if not target or target.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Allocazione target non trovata.")
     await db.delete(target)
-    await db.commit()
+    await _commit_write(db, conflict_detail="Conflitto nella rimozione dell'allocazione target, riprova.")
     return {"status": "success"}
 
 @router.post("/rebalance/preview")
@@ -255,70 +345,114 @@ async def add_holding(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    stock_id = holding_data.stock_id
+    """
+    Aggiunge (o fonde) una posizione per l'utente in modo serializzato e atomico:
+    lock per-utente + UNIQUE(user_id, stock_id) impediscono righe duplicate.
+    La Stock eventualmente auto-creata viene solo flushata e committata insieme
+    alla holding: un errore non lascia Stock orfani.
+    """
+    ticker_norm = (holding_data.ticker or "").strip().upper() or None
 
-    # If stock_id not provided but ticker is, find or create Stock
-    if not stock_id and holding_data.ticker:
-        ticker = holding_data.ticker.strip().upper()
-        result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+    async def _resolve_stock_id() -> int:
+        """Risolve stock_id da stock_id esplicito o da ticker (find or create)."""
+        if holding_data.stock_id is not None:
+            stock = await db.get(Stock, holding_data.stock_id)
+            if not stock:
+                raise HTTPException(status_code=400, detail=f"Stock id {holding_data.stock_id} inesistente.")
+            return stock.id
+        if not ticker_norm:
+            raise HTTPException(status_code=400, detail="Specificare stock_id o ticker valido.")
+
+        result = await db.execute(select(Stock).where(Stock.ticker == ticker_norm))
         stock = result.scalars().first()
         if not stock:
-            # Auto-create stock (risoluzione nome asincrona e non bloccante).
-            # Il suffisso è autoritario: Yahoo arricchisce solo il nome, mai
-            # declassato a US (classify_new_stock logga l'eventuale mismatch).
-            info = await MarketDataService.resolve_stock_info(ticker)
-            name = info.get("name") or ticker
-            market, currency = MarketDataService.classify_new_stock(ticker, info)
-            stock = Stock(ticker=ticker, name=name, market=market, currency=currency)
-            db.add(stock)
+            # Auto-create stock (nome via Yahoo quando disponibile), senza commit:
+            # flush + commit finale unico per evitare Stock orfani.
+            info = await MarketDataService.resolve_stock_info(ticker_norm)
+            name = info.get("name") or ticker_norm
+            market, currency = MarketDataService.classify_new_stock(ticker_norm, info)
+            stocks_map = await _ensure_stocks(db, {
+                ticker_norm: {"name": name, "market": market, "currency": currency}
+            })
+            stock = stocks_map.get(ticker_norm)
+            if stock is None:
+                raise HTTPException(status_code=409, detail=f"Conflitto concorrente sulla creazione di {ticker_norm}.")
+        return stock.id
+
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        stock_id = await _resolve_stock_id()
+
+        # Upsert sotto lock: la seconda richiesta concorrente ri-legge la riga
+        # committata dalla prima e la fonde (mai una seconda riga).
+        # Il retry su IntegrityError copre comunque la corsa a livello DB.
+        for _attempt in range(3):
+            existing_result = await db.execute(
+                select(Holding)
+                .where(Holding.stock_id == stock_id, Holding.user_id == current_user.id)
+            )
+            existing_holding = existing_result.scalars().first()
+            if existing_holding:
+                total_qty = existing_holding.quantity + holding_data.quantity
+                if total_qty <= 0:
+                    # Mai ricadere nella creazione di una seconda riga: la posizione
+                    # risultante sarebbe nulla/negativa, quindi l'operazione è invalida.
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Operazione rifiutata: la quantità totale della posizione "
+                            "diventerebbe uguale o inferiore a zero."
+                        ),
+                    )
+                new_avg = (
+                    (existing_holding.quantity * existing_holding.avg_purchase_price) +
+                    (holding_data.quantity * holding_data.avg_purchase_price)
+                ) / total_qty
+                existing_holding.quantity = round(total_qty, 4)
+                existing_holding.avg_purchase_price = round(new_avg, 4)
+                if holding_data.notes:
+                    existing_holding.notes = f"{existing_holding.notes or ''}; {holding_data.notes}".strip("; ")
+                try:
+                    await db.commit()
+                except IntegrityError:
+                    await db.rollback()
+                    stock_id = await _resolve_stock_id()
+                    continue
+                except OperationalError as e:
+                    await db.rollback()
+                    logger.warning(f"Commit fallito (database occupato): {e}")
+                    raise HTTPException(status_code=503, detail="database temporaneamente occupato, riprova")
+                await db.refresh(existing_holding)
+                await _invalidate_user_caches(current_user.id)
+                return existing_holding
+
+            new_holding = Holding(
+                user_id=current_user.id,
+                stock_id=stock_id,
+                quantity=holding_data.quantity,
+                avg_purchase_price=holding_data.avg_purchase_price,
+                purchase_date=holding_data.purchase_date or date.today(),
+                notes=holding_data.notes
+            )
+            db.add(new_holding)
             try:
                 await db.commit()
-                await db.refresh(stock)
             except IntegrityError:
-                # Race su UNIQUE stocks.ticker: un'altra sessione l'ha creato nel frattempo.
+                # Un'altra richiesta ha inserito la stessa (user_id, stock_id):
+                # rollback, ri-risolve lo stock (potrebbe essere stato creato da
+                # noi in questa transazione) e fonde al giro successivo.
                 await db.rollback()
-                result = await db.execute(select(Stock).where(Stock.ticker == ticker))
-                stock = result.scalars().first()
-                if not stock:
-                    raise HTTPException(status_code=409, detail=f"Conflitto concorrente sulla creazione di {ticker}.")
-        stock_id = stock.id
+                stock_id = await _resolve_stock_id()
+                continue
+            except OperationalError as e:
+                await db.rollback()
+                logger.warning(f"Commit fallito (database occupato): {e}")
+                raise HTTPException(status_code=503, detail="database temporaneamente occupato, riprova")
+            await db.refresh(new_holding)
+            await _invalidate_user_caches(current_user.id)
+            return new_holding
 
-    if not stock_id:
-        raise HTTPException(status_code=400, detail="Specificare stock_id o ticker valido.")
-
-    # Check if a holding for this stock already exists for THIS user -> if so, update weighted average
-    existing_result = await db.execute(
-        select(Holding)
-        .where(Holding.stock_id == stock_id, Holding.user_id == current_user.id)
-    )
-    existing_holding = existing_result.scalars().first()
-    if existing_holding:
-        total_qty = existing_holding.quantity + holding_data.quantity
-        if total_qty > 0:
-            new_avg = (
-                (existing_holding.quantity * existing_holding.avg_purchase_price) +
-                (holding_data.quantity * holding_data.avg_purchase_price)
-            ) / total_qty
-            existing_holding.quantity = total_qty
-            existing_holding.avg_purchase_price = round(new_avg, 4)
-            if holding_data.notes:
-                existing_holding.notes = f"{existing_holding.notes or ''}; {holding_data.notes}".strip("; ")
-            await db.commit()
-            await db.refresh(existing_holding)
-            return existing_holding
-
-    new_holding = Holding(
-        user_id=current_user.id,
-        stock_id=stock_id,
-        quantity=holding_data.quantity,
-        avg_purchase_price=holding_data.avg_purchase_price,
-        purchase_date=holding_data.purchase_date or date.today(),
-        notes=holding_data.notes
-    )
-    db.add(new_holding)
-    await db.commit()
-    await db.refresh(new_holding)
-    return new_holding
+        raise HTTPException(status_code=409, detail="Conflitto concorrente sulla posizione, riprova.")
 
 @router.put("/holdings/{holding_id}")
 async def update_holding(
@@ -327,18 +461,21 @@ async def update_holding(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    holding = await db.get(Holding, holding_id)
-    if not holding or (holding.user_id is not None and holding.user_id != current_user.id):
-        raise HTTPException(status_code=404, detail="Holding non trovata")
-        
-    update_data = holding_update.dict(exclude_unset=True)
-    for key, value in update_data.items():
-        if value is not None:
-            setattr(holding, key, value)
-        
-    await db.commit()
-    await db.refresh(holding)
-    return holding
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        holding = await db.get(Holding, holding_id)
+        if not holding or not _can_access_holding(holding, current_user):
+            raise HTTPException(status_code=404, detail="Holding non trovata")
+
+        update_data = holding_update.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            if value is not None:
+                setattr(holding, key, value)
+
+        await _commit_write(db, conflict_detail="Conflitto nell'aggiornamento della holding, riprova.")
+        await db.refresh(holding)
+        await _invalidate_user_caches(current_user.id)
+        return holding
 
 @router.put("/batch")
 async def batch_update_holdings(
@@ -352,28 +489,37 @@ async def batch_update_holdings(
     if not batch_data.holdings:
         return {"status": "success", "updated_count": 0}
 
-    holding_ids = [item.id for item in batch_data.holdings]
-    # Una sola query per caricare tutte le holdings coinvolte (niente db.get in loop)
-    result = await db.execute(
-        select(Holding).where(
-            Holding.id.in_(holding_ids),
-            or_(Holding.user_id == current_user.id, Holding.user_id.is_(None)),
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        holding_ids = [item.id for item in batch_data.holdings]
+        # Una sola query per caricare tutte le holdings coinvolte (niente db.get in loop).
+        # Le righe legacy user_id NULL sono visibili/aggiornabili solo dall'admin:
+        # il filtro SQL evita di toccarle per i non-admin.
+        access_filter = Holding.user_id == current_user.id
+        if current_user.is_admin:
+            access_filter = or_(access_filter, Holding.user_id.is_(None))
+        result = await db.execute(
+            select(Holding).where(Holding.id.in_(holding_ids), access_filter)
         )
-    )
-    holdings_by_id = {h.id: h for h in result.scalars().all()}
+        holdings_by_id = {
+            h.id: h for h in result.scalars().all()
+            if _can_access_holding(h, current_user)
+        }
 
-    updated_count = 0
-    for item in batch_data.holdings:
-        holding = holdings_by_id.get(item.id)
-        if holding:
-            holding.quantity = item.quantity
-            holding.avg_purchase_price = item.avg_purchase_price
-            if item.notes is not None:
-                holding.notes = item.notes
-            updated_count += 1
+        updated_count = 0
+        for item in batch_data.holdings:
+            holding = holdings_by_id.get(item.id)
+            if holding:
+                holding.quantity = item.quantity
+                holding.avg_purchase_price = item.avg_purchase_price
+                if item.notes is not None:
+                    holding.notes = item.notes
+                updated_count += 1
 
-    await db.commit()
-    return {"status": "success", "updated_count": updated_count}
+        await _commit_write(db, conflict_detail="Conflitto nell'aggiornamento batch delle holdings, riprova.")
+        if updated_count:
+            await _invalidate_user_caches(current_user.id)
+        return {"status": "success", "updated_count": updated_count}
 
 @router.delete("/holdings/{holding_id}")
 async def remove_holding(
@@ -381,13 +527,16 @@ async def remove_holding(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    holding = await db.get(Holding, holding_id)
-    if not holding or (holding.user_id is not None and holding.user_id != current_user.id):
-        raise HTTPException(status_code=404, detail="Holding non trovata")
-        
-    await db.delete(holding)
-    await db.commit()
-    return {"status": "success", "message": "Holding rimossa"}
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        holding = await db.get(Holding, holding_id)
+        if not holding or not _can_access_holding(holding, current_user):
+            raise HTTPException(status_code=404, detail="Holding non trovata")
+
+        await db.delete(holding)
+        await _commit_write(db, conflict_detail="Conflitto nella rimozione della holding, riprova.")
+        await _invalidate_user_caches(current_user.id)
+        return {"status": "success", "message": "Holding rimossa"}
 
 @router.get("/export")
 async def export_portfolio(
@@ -473,6 +622,9 @@ async def import_holdings(
             continue
             
         if quantity <= 0:
+            errors.append(
+                f"Riga {row_idx}: Quantità deve essere maggiore di zero per {ticker} (trovato {quantity})."
+            )
             continue
             
         # Price resolution
@@ -482,6 +634,12 @@ async def import_holdings(
             avg_price = float(price_str)
         except ValueError:
             errors.append(f"Riga {row_idx}: Prezzo non valido '{price_str}' per {ticker}")
+            continue
+
+        if avg_price <= 0:
+            errors.append(
+                f"Riga {row_idx}: Prezzo medio di acquisto deve essere maggiore di zero per {ticker} (trovato {avg_price})."
+            )
             continue
 
         # Notes resolution
@@ -515,50 +673,54 @@ async def import_holdings(
             "'ticker, quantity, avg_purchase_price' (separatore , o ;)."
         )
 
-    if parsed_rows:
-        # Prefetch: UNA query per gli stock esistenti e UNA per le holdings dell'utente
-        # (creazione con gestione della race su UNIQUE stocks.ticker)
-        specs = {
-            r["ticker"]: {
-                "name": r["name"],
-                "market": MarketDataService.detect_market_currency(r["ticker"])[0],
-                "currency": MarketDataService.detect_market_currency(r["ticker"])[1],
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        if parsed_rows:
+            # Prefetch: UNA query per gli stock esistenti e UNA per le holdings dell'utente
+            # (creazione con gestione della race su UNIQUE stocks.ticker)
+            specs = {
+                r["ticker"]: {
+                    "name": r["name"],
+                    "market": MarketDataService.detect_market_currency(r["ticker"])[0],
+                    "currency": MarketDataService.detect_market_currency(r["ticker"])[1],
+                }
+                for r in parsed_rows
             }
-            for r in parsed_rows
-        }
-        stocks_by_ticker = await _ensure_stocks(db, specs)
+            stocks_by_ticker = await _ensure_stocks(db, specs)
 
-        stock_ids = [s.id for s in stocks_by_ticker.values() if s.id is not None]
-        holdings_result = await db.execute(
-            select(Holding).where(Holding.stock_id.in_(stock_ids), Holding.user_id == current_user.id)
-        )
-        holdings_by_stock_id = {h.stock_id: h for h in holdings_result.scalars().all()}
+            stock_ids = [s.id for s in stocks_by_ticker.values() if s.id is not None]
+            holdings_result = await db.execute(
+                select(Holding).where(Holding.stock_id.in_(stock_ids), Holding.user_id == current_user.id)
+            )
+            holdings_by_stock_id = {h.stock_id: h for h in holdings_result.scalars().all()}
 
-        for r in parsed_rows:
-            stock = stocks_by_ticker[r["ticker"]]
-            holding = holdings_by_stock_id.get(stock.id)
-            if holding:
-                holding.quantity = r["quantity"]
-                holding.avg_purchase_price = r["avg_price"]
-                if r["notes"]:
-                    holding.notes = r["notes"]
-                if r["purchase_date"]:
-                    holding.purchase_date = r["purchase_date"]
-                updated += 1
-            else:
-                holding = Holding(
-                    user_id=current_user.id,
-                    stock_id=stock.id,
-                    quantity=r["quantity"],
-                    avg_purchase_price=r["avg_price"],
-                    purchase_date=r["purchase_date"] or date.today(),
-                    notes=r["notes"]
-                )
-                db.add(holding)
-                holdings_by_stock_id[stock.id] = holding
-                imported += 1
-            
-    await db.commit()
+            for r in parsed_rows:
+                stock = stocks_by_ticker[r["ticker"]]
+                holding = holdings_by_stock_id.get(stock.id)
+                if holding:
+                    holding.quantity = r["quantity"]
+                    holding.avg_purchase_price = r["avg_price"]
+                    if r["notes"]:
+                        holding.notes = r["notes"]
+                    if r["purchase_date"]:
+                        holding.purchase_date = r["purchase_date"]
+                    updated += 1
+                else:
+                    holding = Holding(
+                        user_id=current_user.id,
+                        stock_id=stock.id,
+                        quantity=r["quantity"],
+                        avg_purchase_price=r["avg_price"],
+                        purchase_date=r["purchase_date"] or date.today(),
+                        notes=r["notes"]
+                    )
+                    db.add(holding)
+                    holdings_by_stock_id[stock.id] = holding
+                    imported += 1
+
+        # Un solo commit: se fallisce non restano né Stock né holdings parziali.
+        await _commit_write(db, conflict_detail="Conflitto durante l'import del portafoglio, riprova.")
+        await _invalidate_user_caches(current_user.id)
     return {
         "status": "success",
         "imported": imported,
@@ -598,52 +760,56 @@ async def seed_demo_data(
         item["ticker"]: {"name": item["name"], "market": item["market"], "currency": item["currency"]}
         for item in demo_holdings + demo_watchlist
     }
-    stocks_by_ticker = await _ensure_stocks(db, specs)
 
-    stock_ids = [s.id for s in stocks_by_ticker.values() if s.id is not None]
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        stocks_by_ticker = await _ensure_stocks(db, specs)
 
-    created_holdings = 0
-    held_res = await db.execute(
-        select(Holding.stock_id)
-        .where(Holding.stock_id.in_(stock_ids), Holding.user_id == current_user.id)
-    )
-    held_stock_ids = {row[0] for row in held_res.all()}
-    for item in demo_holdings:
-        stock = stocks_by_ticker[item["ticker"]]
-        if stock.id not in held_stock_ids:
-            h = Holding(
-                user_id=current_user.id,
-                stock_id=stock.id,
-                quantity=item["qty"],
-                avg_purchase_price=item["price"],
-                purchase_date=date.today(),
-                notes=item["notes"]
-            )
-            db.add(h)
-            held_stock_ids.add(stock.id)
-            created_holdings += 1
+        stock_ids = [s.id for s in stocks_by_ticker.values() if s.id is not None]
 
-    created_watchlist = 0
-    wl_res = await db.execute(
-        select(WatchlistItem.stock_id)
-        .where(WatchlistItem.stock_id.in_(stock_ids), WatchlistItem.user_id == current_user.id)
-    )
-    wl_stock_ids = {row[0] for row in wl_res.all()}
-    for item in demo_watchlist:
-        stock = stocks_by_ticker[item["ticker"]]
-        if stock.id not in wl_stock_ids:
-            w = WatchlistItem(
-                user_id=current_user.id,
-                stock_id=stock.id,
-                notes=item["notes"],
-                alert_above=item.get("alert_above"),
-                alert_below=item.get("alert_below")
-            )
-            db.add(w)
-            wl_stock_ids.add(stock.id)
-            created_watchlist += 1
+        created_holdings = 0
+        held_res = await db.execute(
+            select(Holding.stock_id)
+            .where(Holding.stock_id.in_(stock_ids), Holding.user_id == current_user.id)
+        )
+        held_stock_ids = {row[0] for row in held_res.all()}
+        for item in demo_holdings:
+            stock = stocks_by_ticker[item["ticker"]]
+            if stock.id not in held_stock_ids:
+                h = Holding(
+                    user_id=current_user.id,
+                    stock_id=stock.id,
+                    quantity=item["qty"],
+                    avg_purchase_price=item["price"],
+                    purchase_date=date.today(),
+                    notes=item["notes"]
+                )
+                db.add(h)
+                held_stock_ids.add(stock.id)
+                created_holdings += 1
 
-    await db.commit()
+        created_watchlist = 0
+        wl_res = await db.execute(
+            select(WatchlistItem.stock_id)
+            .where(WatchlistItem.stock_id.in_(stock_ids), WatchlistItem.user_id == current_user.id)
+        )
+        wl_stock_ids = {row[0] for row in wl_res.all()}
+        for item in demo_watchlist:
+            stock = stocks_by_ticker[item["ticker"]]
+            if stock.id not in wl_stock_ids:
+                w = WatchlistItem(
+                    user_id=current_user.id,
+                    stock_id=stock.id,
+                    notes=item["notes"],
+                    alert_above=item.get("alert_above"),
+                    alert_below=item.get("alert_below")
+                )
+                db.add(w)
+                wl_stock_ids.add(stock.id)
+                created_watchlist += 1
+
+        await _commit_write(db, conflict_detail="Conflitto durante la creazione dei dati demo, riprova.")
+        await _invalidate_user_caches(current_user.id)
     return {
         "status": "success",
         "message": f"Demo popolata con successo ({created_holdings} holding, {created_watchlist} watchlist).",
@@ -658,9 +824,9 @@ async def seed_demo_data(
 class TransactionCreate(BaseModel):
     ticker: str
     type: str  # BUY, SELL, DIVIDEND
-    quantity: float = 0.0
-    price: float = 0.0
-    fee: float = 0.0
+    quantity: float = Field(0.0, ge=0, description="Quantità deve essere >= 0")
+    price: float = Field(0.0, ge=0, description="Prezzo deve essere >= 0")
+    fee: float = Field(0.0, ge=0, description="Commissioni devono essere >= 0")
     transaction_date: Optional[datetime] = None
     notes: Optional[str] = ""
 
@@ -729,101 +895,126 @@ async def create_transaction(
     if not ticker:
         raise HTTPException(status_code=400, detail="Specificare un ticker valido.")
 
-    # Risolve o crea Stock
-    res = await db.execute(select(Stock).where(Stock.ticker == ticker))
-    stock = res.scalars().first()
-    if not stock:
-        info = await MarketDataService.resolve_stock_info(ticker)
-        market, currency = MarketDataService.classify_new_stock(ticker, info)
-        stock = Stock(
-            ticker=ticker,
-            name=info.get("name", ticker),
-            market=market,
-            currency=currency
-        )
-        db.add(stock)
-        try:
-            await db.commit()
-            await db.refresh(stock)
-        except IntegrityError:
-            # Race su UNIQUE stocks.ticker: un'altra sessione l'ha creato nel frattempo.
-            await db.rollback()
-            res = await db.execute(select(Stock).where(Stock.ticker == ticker))
-            stock = res.scalars().first()
-            if not stock:
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        # Risolve o crea Stock con solo flush: niente commit anticipato, così
+        # un errore successivo non lascia una Stock orfana attiva.
+        res = await db.execute(select(Stock).where(Stock.ticker == ticker))
+        stock = res.scalars().first()
+        if not stock:
+            info = await MarketDataService.resolve_stock_info(ticker)
+            market, currency = MarketDataService.classify_new_stock(ticker, info)
+            stocks_map = await _ensure_stocks(db, {
+                ticker: {"name": info.get("name", ticker), "market": market, "currency": currency}
+            })
+            stock = stocks_map.get(ticker)
+            if stock is None:
                 raise HTTPException(status_code=409, detail=f"Conflitto concorrente sulla creazione di {ticker}.")
 
-    tx_date = tx_in.transaction_date or datetime.now(timezone.utc)
-    realized_pnl = None
+        tx_date = tx_in.transaction_date or datetime.now(timezone.utc)
+        realized_pnl = None
+        holding = None
 
-    # Recupera posizione esistente per questo utente
-    h_res = await db.execute(
-        select(Holding)
-        .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
-    )
-    holding = h_res.scalars().first()
+        if t_type == "BUY":
+            if tx_in.quantity <= 0 or tx_in.price <= 0:
+                raise HTTPException(status_code=400, detail="Quantità e prezzo devono essere maggiori di zero per un acquisto.")
 
-    if t_type == "BUY":
-        if tx_in.quantity <= 0 or tx_in.price <= 0:
-            raise HTTPException(status_code=400, detail="Quantità e prezzo devono essere maggiori di zero per un acquisto.")
-        
-        if holding:
-            new_qty = holding.quantity + tx_in.quantity
-            new_avg = ((holding.quantity * holding.avg_purchase_price) + (tx_in.quantity * tx_in.price)) / new_qty
-            holding.quantity = round(new_qty, 4)
-            holding.avg_purchase_price = round(new_avg, 4)
-            if tx_in.notes:
-                holding.notes = tx_in.notes
-        else:
-            holding = Holding(
-                user_id=current_user.id,
-                stock_id=stock.id,
-                quantity=tx_in.quantity,
-                avg_purchase_price=tx_in.price,
-                purchase_date=tx_date.date() if isinstance(tx_date, datetime) else tx_date,
-                notes=tx_in.notes
+            h_res = await db.execute(
+                select(Holding)
+                .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
             )
-            db.add(holding)
-        realized_pnl = 0.0
+            holding = h_res.scalars().first()
+            if holding:
+                new_qty = holding.quantity + tx_in.quantity
+                new_avg = ((holding.quantity * holding.avg_purchase_price) + (tx_in.quantity * tx_in.price)) / new_qty
+                holding.quantity = round(new_qty, 4)
+                holding.avg_purchase_price = round(new_avg, 4)
+                if tx_in.notes:
+                    holding.notes = tx_in.notes
+            else:
+                holding = Holding(
+                    user_id=current_user.id,
+                    stock_id=stock.id,
+                    quantity=tx_in.quantity,
+                    avg_purchase_price=tx_in.price,
+                    purchase_date=tx_date.date() if isinstance(tx_date, datetime) else tx_date,
+                    notes=tx_in.notes
+                )
+                db.add(holding)
+            realized_pnl = 0.0
 
-    elif t_type == "SELL":
-        if tx_in.quantity <= 0 or tx_in.price <= 0:
-            raise HTTPException(status_code=400, detail="Quantità e prezzo devono essere maggiori di zero per una vendita.")
-        if not holding or holding.quantity < tx_in.quantity:
-            avail = holding.quantity if holding else 0
-            raise HTTPException(
-                status_code=400,
-                detail=f"Quantità insufficiente in portafoglio: possiedi {avail} quote di {ticker}, impossibile venderne {tx_in.quantity}."
+        elif t_type == "SELL":
+            if tx_in.quantity <= 0 or tx_in.price <= 0:
+                raise HTTPException(status_code=400, detail="Quantità e prezzo devono essere maggiori di zero per una vendita.")
+
+            h_res = await db.execute(
+                select(Holding)
+                .where(Holding.stock_id == stock.id, Holding.user_id == current_user.id)
             )
-        
-        # Calcolo P&L realizzato = (Prezzo Vendita - Prezzo Medio di Carico) * Qty - Commissioni
-        realized_pnl = round((tx_in.price - holding.avg_purchase_price) * tx_in.quantity - tx_in.fee, 2)
-        holding.quantity = round(holding.quantity - tx_in.quantity, 4)
-        if holding.quantity <= 0.0001:
-            await db.delete(holding)
+            holding = h_res.scalars().first()
+            if not holding or holding.quantity + 1e-9 < tx_in.quantity:
+                avail = holding.quantity if holding else 0
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Quantità insufficiente in portafoglio: possiedi {avail} quote di {ticker}, impossibile venderne {tx_in.quantity}."
+                )
 
-    elif t_type == "DIVIDEND":
-        if tx_in.price < 0:
-            raise HTTPException(status_code=400, detail="L'importo del dividendo non può essere negativo.")
-        total_div = (tx_in.price * tx_in.quantity) if tx_in.quantity > 0 else tx_in.price
-        realized_pnl = round(total_div - tx_in.fee, 2)
+            # P&L realizzato sul prezzo medio di carico letto PRIMA della vendita
+            # (dentro il lock). = (Prezzo Vendita - Prezzo Medio) * Qty - Commissioni
+            realized_pnl = round((tx_in.price - holding.avg_purchase_price) * tx_in.quantity - tx_in.fee, 2)
 
-    # Crea record transazione per questo utente
-    tx = Transaction(
-        user_id=current_user.id,
-        stock_id=stock.id,
-        type=t_type,
-        quantity=tx_in.quantity,
-        price=tx_in.price,
-        fee=tx_in.fee,
-        realized_pnl=realized_pnl,
-        currency=stock.currency or "EUR",
-        transaction_date=tx_date,
-        notes=tx_in.notes or ""
-    )
-    db.add(tx)
-    await db.commit()
-    await db.refresh(tx)
+            # Decremento atomico con guardia quantity >= q: due SELL concorrenti
+            # non possono andare entrambe a buon fine (rowcount 0 -> 409).
+            upd = await db.execute(
+                sa_update(Holding)
+                .where(
+                    Holding.id == holding.id,
+                    Holding.user_id == current_user.id,
+                    Holding.quantity >= tx_in.quantity,
+                )
+                .values(quantity=Holding.quantity - tx_in.quantity)
+                .execution_options(synchronize_session=False)
+            )
+            if upd.rowcount != 1:
+                await db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Quantità insufficiente in portafoglio per {ticker}: la posizione è cambiata durante la vendita, riprova."
+                )
+
+            # Uso la quantità letta prima dell'UPDATE (l'ORM non è sincronizzato
+            # di proposito) per decidere se la posizione va rimossa.
+            if holding.quantity - tx_in.quantity <= 0.0001:
+                await db.execute(
+                    sa_delete(Holding).where(
+                        Holding.id == holding.id,
+                        Holding.user_id == current_user.id,
+                    )
+                )
+
+        elif t_type == "DIVIDEND":
+            if tx_in.price < 0:
+                raise HTTPException(status_code=400, detail="L'importo del dividendo non può essere negativo.")
+            total_div = (tx_in.price * tx_in.quantity) if tx_in.quantity > 0 else tx_in.price
+            realized_pnl = round(total_div - tx_in.fee, 2)
+
+        # Crea record transazione per questo utente (stessa transazione della holding)
+        tx = Transaction(
+            user_id=current_user.id,
+            stock_id=stock.id,
+            type=t_type,
+            quantity=tx_in.quantity,
+            price=tx_in.price,
+            fee=tx_in.fee,
+            realized_pnl=realized_pnl,
+            currency=stock.currency or "EUR",
+            transaction_date=tx_date,
+            notes=tx_in.notes or ""
+        )
+        db.add(tx)
+        await _commit_write(db, conflict_detail="Conflitto nella registrazione della transazione, riprova.")
+        await db.refresh(tx)
+        await _invalidate_user_caches(current_user.id)
 
     return {
         "status": "success",
@@ -847,12 +1038,82 @@ async def delete_transaction(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Elimina una riga dallo storico transazioni dell'utente."""
-    tx = await db.get(Transaction, tx_id)
-    if not tx or (tx.user_id is not None and tx.user_id != current_user.id):
-        raise HTTPException(status_code=404, detail="Transazione non trovata.")
-    await db.delete(tx)
-    await db.commit()
+    """
+    Elimina una riga dallo storico transazioni e ricalcola atomicamente la
+    posizione dai movimenti residui (stesso lock per-utente, un solo commit).
+
+    Semantica documentata: il modello non traccia i lotti venduti, quindi
+    quantity = somma(BUY) - somma(SELL) e avg_purchase_price = media ponderata
+    di TUTTI i BUY residui (non solo delle quote ancora in portafoglio).
+    Se non restano quote la holding viene eliminata.
+    """
+    lock = _get_user_lock(current_user.id)
+    async with lock:
+        tx = await db.get(Transaction, tx_id)
+        if not tx or not _can_access_transaction(tx, current_user):
+            raise HTTPException(status_code=404, detail="Transazione non trovata.")
+
+        # Access check già superato: per l'admin una riga legacy con user_id NULL
+        # è trattata come propria (i dati storici pre multi-utente sono suoi),
+        # quindi il recompute usa il suo id come proprietario effettivo.
+        owner_id = tx.user_id if tx.user_id is not None else current_user.id
+        stock_id = tx.stock_id
+
+        await db.delete(tx)
+
+        # Ricalcolo dai movimenti residui (la SELECT forza l'autoflush della DELETE).
+        remaining_res = await db.execute(
+            select(Transaction.type, Transaction.quantity, Transaction.price, Transaction.transaction_date)
+            .where(
+                Transaction.user_id == owner_id,
+                Transaction.stock_id == stock_id,
+                Transaction.type.in_(("BUY", "SELL")),
+            )
+            .order_by(Transaction.transaction_date, Transaction.id)
+        )
+        remaining = remaining_res.all()
+
+        buy_qty = sum(float(r.quantity or 0.0) for r in remaining if r.type == "BUY")
+        sell_qty = sum(float(r.quantity or 0.0) for r in remaining if r.type == "SELL")
+        total_qty = buy_qty - sell_qty
+        total_cost = sum(
+            float(r.quantity or 0.0) * float(r.price or 0.0)
+            for r in remaining if r.type == "BUY"
+        )
+        new_avg = (total_cost / buy_qty) if buy_qty > 0 else None
+
+        h_res = await db.execute(
+            select(Holding).where(Holding.user_id == owner_id, Holding.stock_id == stock_id)
+        )
+        holding = h_res.scalars().first()
+
+        if total_qty <= 0.0001:
+            # Nessuna quota residua: la posizione non esiste più.
+            if holding:
+                await db.delete(holding)
+        elif holding:
+            holding.quantity = round(total_qty, 4)
+            if new_avg is not None:
+                holding.avg_purchase_price = round(new_avg, 4)
+        else:
+            # Posizione ricreata dai movimenti residui (es. holding rimossa a mano).
+            first_buy = next((r for r in remaining if r.type == "BUY"), None)
+            purchase_day = (
+                first_buy.transaction_date.date()
+                if first_buy and isinstance(first_buy.transaction_date, datetime)
+                else (first_buy.transaction_date if first_buy else None)
+            )
+            db.add(Holding(
+                user_id=owner_id,
+                stock_id=stock_id,
+                quantity=round(total_qty, 4),
+                avg_purchase_price=round(new_avg or 0.0, 4),
+                purchase_date=purchase_day or date.today(),
+            ))
+
+        await _commit_write(db, conflict_detail="Conflitto nel ricalcolo della posizione, riprova.")
+        await _invalidate_user_caches(current_user.id)
+
     return {"status": "success", "message": f"Transazione #{tx_id} rimossa."}
 
 
@@ -874,6 +1135,7 @@ async def get_realized_pnl(
     total_realized_capital_gains = 0.0
     total_dividends_collected = 0.0
     total_fees_paid = 0.0
+    sell_fees_already_netted = 0.0
     wins = 0
     losses = 0
 
@@ -885,6 +1147,11 @@ async def get_realized_pnl(
         if tx.type == "SELL" and tx.realized_pnl is not None:
             pnl_eur = tx.realized_pnl * fx
             total_realized_capital_gains += pnl_eur
+            # Convenzione: realized_pnl di una SELL è già al netto della fee
+            # (vedi create_transaction), quindi la commissione di vendita è già
+            # inclusa nel P&L capital gain e non va sottratta una seconda volta.
+            # total_fees_paid resta il totale informativo lordo di tutte le fee.
+            sell_fees_already_netted += fee_eur
             if pnl_eur >= 0:
                 wins += 1
             else:
@@ -893,7 +1160,14 @@ async def get_realized_pnl(
             div_val = (tx.price * tx.quantity if tx.quantity > 0 else tx.price) * fx
             total_dividends_collected += div_val
 
-    net_realized_profit = total_realized_capital_gains + total_dividends_collected - total_fees_paid
+    # Le fee su BUY e DIVIDEND non sono incluse altrove: si sottraggono dal
+    # netto; le fee SELL sono già dentro total_realized_capital_gains.
+    fees_not_yet_netted = total_fees_paid - sell_fees_already_netted
+    net_realized_profit = (
+        total_realized_capital_gains
+        + total_dividends_collected
+        - fees_not_yet_netted
+    )
     win_rate = (wins / (wins + losses) * 100) if (wins + losses) > 0 else 0.0
 
     return {

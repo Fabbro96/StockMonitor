@@ -1,5 +1,6 @@
 import logging
 import math
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,11 @@ from backend.utils.helpers import calculate_pnl
 
 logger = logging.getLogger(__name__)
 
+# Soglia di freschezza del prezzo letto da PriceHistory: oltre ~una sessione
+# di mercato (+ margine weekend/festivi) la riga DB è considerata obsoleta e
+# viene esposta con price_stale=True (o sostituita da un prezzo live valido).
+_PRICE_FRESHNESS_HOURS = 36
+
 
 def _is_valid_float(v) -> bool:
     if v is None:
@@ -21,6 +27,16 @@ def _is_valid_float(v) -> bool:
         return not (math.isnan(f) or math.isinf(f)) and f > 0
     except (ValueError, TypeError):
         return False
+
+
+def _is_fresh_price(timestamp, now: datetime | None = None) -> bool:
+    """True se il timestamp (naive interpretato UTC) è entro la soglia di freschezza."""
+    if timestamp is None:
+        return False
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    reference = now or datetime.now(timezone.utc)
+    return (reference - timestamp) <= timedelta(hours=_PRICE_FRESHNESS_HOURS)
 
 
 async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None, usd_to_eur: float | None = None) -> list[dict]:
@@ -70,11 +86,14 @@ async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None, usd
     for ph in ph_result.scalars().all():
         db_prices.setdefault(ph.stock_id, []).append(ph)
 
-    # 2. Per i titoli senza prezzo valido nel DB, scarica i prezzi live in un'unica chiamata BATCH
+    # 2. Per i titoli senza prezzo valido nel DB (o con prezzo DB ormai
+    #    obsoleto) scarica i prezzi live in un'unica chiamata BATCH
+    now = datetime.now(timezone.utc)
     missing_live_tickers = []
     for h in holdings:
         ph_list = db_prices.get(h.stock_id, [])
-        if not (ph_list and _is_valid_float(ph_list[0].close)):
+        latest = ph_list[0] if (ph_list and _is_valid_float(ph_list[0].close)) else None
+        if latest is None or not _is_fresh_price(latest.timestamp, now):
             missing_live_tickers.append(h.stock.ticker)
 
     batch_prices = {}
@@ -85,15 +104,33 @@ async def build_portfolio_rows(db: AsyncSession, user_id: int | None = None, usd
     for h in holdings:
         stock = h.stock
         ph_list = db_prices.get(h.stock_id, [])
+        latest_db = ph_list[0] if (ph_list and _is_valid_float(ph_list[0].close)) else None
+        prev_db = float(ph_list[1].close) if (len(ph_list) > 1 and _is_valid_float(ph_list[1].close)) else None
 
-        if ph_list and _is_valid_float(ph_list[0].close):
-            raw_p = float(ph_list[0].close)
-            prev_close = float(ph_list[1].close) if (len(ph_list) > 1 and _is_valid_float(ph_list[1].close)) else None
+        pdata = batch_prices.get(stock.ticker) or {}
+        live_close = pdata.get("close")
+        live_usable = _is_valid_float(live_close) and not pdata.get("stale", False)
+        live_prev = float(pdata["previous_close"]) if _is_valid_float(pdata.get("previous_close")) else None
+
+        if latest_db is not None and _is_fresh_price(latest_db.timestamp, now):
+            # Prezzo DB fresco: fonte primaria (nessuna chiamata live necessaria).
+            raw_p = float(latest_db.close)
+            prev_close = prev_db
             is_stale = False
+        elif live_usable:
+            # Prezzo DB assente/obsoleto ma live valido: preferisci il live.
+            raw_p = live_close
+            prev_close = live_prev if live_prev is not None else prev_db
+            is_stale = False
+        elif latest_db is not None:
+            # Nessun dato live: ultimo prezzo DB noto, esplicitamente stale.
+            raw_p = float(latest_db.close)
+            prev_close = prev_db
+            is_stale = True
         else:
-            pdata = batch_prices.get(stock.ticker) or {}
-            raw_p = pdata.get("close")
-            prev_close = float(pdata["previous_close"]) if _is_valid_float(pdata.get("previous_close")) else None
+            # Nessun prezzo DB: fallback live (anche stale/sintetico).
+            raw_p = live_close
+            prev_close = live_prev
             is_stale = bool(pdata.get("stale", False))
 
         current_price = float(raw_p) if _is_valid_float(raw_p) else (float(h.avg_purchase_price) if _is_valid_float(h.avg_purchase_price) else 0.0)

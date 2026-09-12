@@ -47,6 +47,9 @@ class AdvisorService:
 
         # Contesto di mercato (prezzi + news) calcolato UNA sola volta per tutti gli utenti.
         price_map = await self._latest_closes_by_stock(db_session, [s.id for s in stocks])
+        # H4: chiude la transazione di lettura PRIMA delle chiamate di rete
+        # (news/sentiment). Gli oggetti Stock restano validi (expire_on_commit=False).
+        await db_session.commit()
         market_context = []
         for s in stocks:
             closes = price_map.get(s.id, [])
@@ -105,6 +108,10 @@ class AdvisorService:
             }
 
             prompt = self._build_macro_prompt(italian_stocks, us_stocks, settings_summary)
+
+            # H4: chiude la transazione di lettura (holdings/settings) prima
+            # della chiamata di rete a Gemini.
+            await db_session.commit()
 
             async with _gemini_semaphore:
                 response_json = await self._call_gemini(prompt)
@@ -188,17 +195,19 @@ class AdvisorService:
         if not data or 'overview' not in data:
             return None
 
+        # M5: le colonne action/reasoning/confidence sono NOT NULL: coercizione
+        # esplicita per non far fallire il commit e abortire l'intera generazione.
         advice = Advice(
             user_id=user_id,
             market=market,
             title=data.get('title') or default_title,
-            action=data.get('action', 'MANTENIMENTO'),
+            action=str(data.get('action') or 'MANTENIMENTO'),
             overview=data.get('overview'),
-            reasoning=data.get('strategy'),
+            reasoning=data.get('strategy') or '',
             stocks_json=json.dumps(data.get('stocks_analysis', []), ensure_ascii=False),
             risks=data.get('risks'),
-            confidence=(data.get('confidence') or 'MEDIUM').upper(),
-            timeframe=data.get('timeframe', 'Medio Termine'),
+            confidence=str(data.get('confidence') or 'MEDIUM').upper(),
+            timeframe=data.get('timeframe') or 'Medio Termine',
             timestamp=now_utc,
         )
         db_session.add(advice)
@@ -246,6 +255,9 @@ class AdvisorService:
                 "current_pnl_pct": round(pnl_pct, 2)
             }
 
+        # H4: chiude la lettura della posizione prima delle chiamate di rete (news).
+        await db_session.commit()
+
         # News contestuali
         name = deep_data.get("name", ticker_up)
         news_items = await self.sentiment_service.get_combined_market_context(ticker_up, name)
@@ -258,6 +270,9 @@ class AdvisorService:
         result = await db_session.execute(settings_query.limit(1))
         user_settings = result.scalars().first()
         strategy = user_settings.strategy if user_settings else "mixed"
+
+        # H4: chiude la lettura del profilo utente prima della chiamata Gemini.
+        await db_session.commit()
 
         portfolio_context_str = "L'utente NON possiede attualmente questo titolo in portafoglio."
         if holding_info:

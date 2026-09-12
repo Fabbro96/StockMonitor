@@ -25,6 +25,34 @@ _RISK_CACHE_TTL = 300.0  # 5 minuti
 # Lo storico reale resta su PriceHistory; qui si cachia solo il risultato.
 _SERIES_CACHE: dict[str, tuple[list[dict], float]] = {}
 _SERIES_CACHE_TTL = 120.0  # 2 minuti
+# Tetto semplice anti-crescita illimitata (multi-utente x più finestre `days`).
+_ANALYTICS_CACHE_MAX_ENTRIES = 256
+
+
+def _cache_store(cache: dict, key: str, value: tuple) -> None:
+    """Scrive in cache applicando un tetto FIFO (le entry più vecchie escono)."""
+    cache[key] = value
+    while len(cache) > _ANALYTICS_CACHE_MAX_ENTRIES:
+        cache.pop(next(iter(cache)), None)
+
+
+def invalidate_user_caches(user_id) -> None:
+    """Invalida le cache analytics (serie giornaliera e risk) di un utente.
+
+    Le chiavi sono `series:{user_id}:{days}` e `risk:{user_id}:{days}`: rimuove
+    tutte le varianti per quel solo utente, senza toccare gli altri. Sicura da
+    chiamare in qualsiasi momento (cache vuote, user_id None/str/int) e non
+    solleva mai: BE-1/BE-2 la invocano via import lazy dopo mutazioni di
+    portafoglio/watchlist/holdings.
+    """
+    try:
+        prefixes = (f"series:{user_id}:", f"risk:{user_id}:")
+        for cache in (_SERIES_CACHE, _RISK_CACHE):
+            stale_keys = [k for k in list(cache.keys()) if k.startswith(prefixes)]
+            for k in stale_keys:
+                cache.pop(k, None)
+    except Exception as e:  # l'invalidazione non deve mai propagare errori
+        logger.debug(f"invalidate_user_caches fallita per user_id={user_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +70,10 @@ async def build_portfolio_daily_series(
     2. backfill con candele giornaliere Yahoo (fetch_stock_candles '1y')
     3. forward-fill dei giorni mancanti; prezzo corrente per l'ultimo giorno
     Ritorna [{"date": "YYYY-MM-DD", "value": float}] ordinato per data.
+    Ogni `value` è il controvalore del portafoglio in EUR: i prezzi nativi dei
+    titoli in valuta estera sono convertiti con `fx_rate_to_eur` (stesso
+    percorso FX di `build_portfolio_rows` e del rebalancer), così le metriche
+    derivate (drawdown, volatilità, Sharpe) non sommano valute diverse.
 
     `portfolio_rows`: righe già calcolate da build_portfolio_rows per la stessa
     richiesta; se fornite evitano un ricalcolo completo del portafoglio.
@@ -112,13 +144,15 @@ async def build_portfolio_daily_series(
                 last_known[h["stock_id"]] = closes[day_str]
             price = last_known.get(h["stock_id"])
             if price:
-                total += float(h["quantity"]) * price
+                # Valore della posizione in EUR: stessa conversione FX per-holding
+                # usata da `compute_rebalance_plan` (price * fx_rate_to_eur).
+                total += float(h["quantity"]) * price * _holding_fx_to_eur(h)
                 has_data = True
         if has_data:
             series.append({"date": day_str, "value": round(total, 2)})
         current += timedelta(days=1)
 
-    _SERIES_CACHE[cache_key] = (series, now_ts)
+    _cache_store(_SERIES_CACHE, cache_key, (series, now_ts))
     return series
 
 
@@ -203,8 +237,8 @@ async def compute_risk_metrics(
         if ann_vol > 1e-9:
             metrics["sharpe_ratio"] = round((ann_return - settings.RISK_FREE_RATE) / ann_vol, 2)
 
-    # --- Beta pesato (pesi = controvalore attuale) ---
-    total_value = sum(h["total_value"] for h in portfolio)
+    # --- Beta pesato (pesi = controvalore attuale convertito in EUR) ---
+    total_value = sum(_holding_value_eur(h) for h in portfolio)
     if portfolio and total_value > 0:
         deep_tasks = [MarketDataService.fetch_stock_deep_dive(h["ticker"]) for h in portfolio]
         deep_results = await asyncio.gather(*deep_tasks, return_exceptions=True)
@@ -219,11 +253,11 @@ async def compute_risk_metrics(
             if beta is None or not (0.0 <= beta <= 5.0):
                 beta = 1.0  # default prudenziale
             betas[h["ticker"]] = round(beta, 2)
-            weighted_beta += (h["total_value"] / total_value) * beta
+            weighted_beta += (_holding_value_eur(h) / total_value) * beta
         metrics["weighted_beta"] = round(weighted_beta, 2)
         metrics["betas"] = betas
 
-    _RISK_CACHE[cache_key] = (metrics, now_ts)
+    _cache_store(_RISK_CACHE, cache_key, (metrics, now_ts))
     return metrics
 
 
@@ -316,6 +350,81 @@ def _market_of(holding_row: dict) -> str:
     return m
 
 
+def _holding_value_eur(holding_row: dict) -> float:
+    """Controvalore della posizione convertito in EUR (fallback al nativo).
+
+    `build_portfolio_rows` espone `total_value_eur`; per righe legacy o parziali
+    (test, chiamate dirette) si ricade sul valore nativo, come già fa il summary.
+    """
+    try:
+        raw = holding_row.get("total_value_eur", holding_row.get("total_value", 0.0))
+        return float(raw or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _holding_fx_to_eur(holding_row: dict) -> float:
+    try:
+        fx = float(holding_row.get("fx_rate_to_eur") or 1.0)
+        return fx if fx > 0 else 1.0
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _merge_rebalance_orders(raw_orders: list[dict]) -> list[dict]:
+    """Consolida gli ordini per ticker (fix doppio conteggio target sovrapposti).
+
+    Le quantità con segno si sommano: un ticker presente in più bucket non genera
+    più gambe duplicate. La gamba SELL aggregata viene poi limitata alla quantità
+    detenuta. `estimated_value` è ricalcolato come quantità * prezzo nativo.
+    """
+    merged: dict[str, dict] = {}
+    for o in raw_orders:
+        tk = o["ticker"]
+        current = merged.get(tk)
+        if current is None:
+            current = {
+                "ticker": tk,
+                "name": o["name"],
+                "allocation_names": [],
+                "signed_quantity": 0.0,
+                "estimated_price": o["estimated_price"],
+                "currency": o["currency"],
+                "fx_rate_to_eur": o["fx_rate_to_eur"],
+                "held_quantity": o["held_quantity"],
+            }
+            merged[tk] = current
+        alloc_name = o.get("allocation_name")
+        if alloc_name and alloc_name not in current["allocation_names"]:
+            current["allocation_names"].append(alloc_name)
+        current["signed_quantity"] += o["signed_quantity"]
+        current["held_quantity"] = max(current["held_quantity"], o["held_quantity"])
+
+    orders = []
+    for m in merged.values():
+        qty = m["signed_quantity"]
+        if qty < 0:
+            # Cap aggregato: mai vendere più di quanto posseduto.
+            qty = max(qty, -m["held_quantity"])
+        if abs(qty) < 0.0001:
+            continue
+        price = float(m["estimated_price"])
+        value_native = abs(qty) * price
+        orders.append({
+            "ticker": m["ticker"],
+            "name": m["name"],
+            "allocation_name": " + ".join(m["allocation_names"]) if m["allocation_names"] else None,
+            "side": "BUY" if qty > 0 else "SELL",
+            "quantity": round(abs(qty), 4),
+            "estimated_price": round(price, 2),
+            "estimated_value": round(value_native, 2),
+            "currency": m["currency"],
+            # Solo per i totali di piano in EUR; rimosso dal payload pubblico.
+            "_value_eur": round(value_native * float(m["fx_rate_to_eur"] or 1.0), 2),
+        })
+    return orders
+
+
 def compute_rebalance_plan(portfolio: list[dict], targets: list[dict], extra_cash: float = 0.0) -> dict:
     """
     Motore di ribilanciamento: date le allocazioni target e le posizioni correnti,
@@ -323,11 +432,17 @@ def compute_rebalance_plan(portfolio: list[dict], targets: list[dict], extra_cas
     distribuiti pro-quota sui titoli del bucket.
 
     targets: [{"id", "name", "target_percent", "scope_type" (MARKET|TICKERS|CASH), "scope_value"}]
+
+    Tutti gli aggregati di piano (total_value, allocations) sono in EUR
+    (`total_value_eur`), per non sommare controvalori USD ed EUR. Gli ordini
+    restano nella valuta nativa del titolo (estimated_price/estimated_value/
+    currency) e sono consolidati per ticker.
     """
-    total_value = sum(h["total_value"] for h in portfolio) + max(extra_cash, 0.0)
+    extra_cash = max(extra_cash, 0.0)
+    total_value = sum(_holding_value_eur(h) for h in portfolio) + extra_cash
 
     allocations = []
-    orders = []
+    raw_orders = []
 
     for target in targets:
         scope_type = (target.get("scope_type") or "MARKET").upper()
@@ -344,7 +459,7 @@ def compute_rebalance_plan(portfolio: list[dict], targets: list[dict], extra_cas
             constituents = [h for h in portfolio if h["ticker"].upper() in ticker_set]
         # CASH -> nessun titolo costituente
 
-        current_value = max(extra_cash, 0.0) if scope_type == "CASH" else sum(h["total_value"] for h in constituents)
+        current_value = extra_cash if scope_type == "CASH" else sum(_holding_value_eur(h) for h in constituents)
         delta = target_value - current_value
         current_pct = (current_value / total_value * 100.0) if total_value > 0 else 0.0
 
@@ -363,30 +478,40 @@ def compute_rebalance_plan(portfolio: list[dict], targets: list[dict], extra_cas
 
         # Genera ordini distribuiti pro-quota sul bucket
         if scope_type != "CASH" and abs(delta) >= 1.0 and constituents:
-            bucket_total = sum(h["total_value"] for h in constituents)
+            bucket_total = sum(_holding_value_eur(h) for h in constituents)
             for h in constituents:
-                price = h.get("current_price") or 0.0
-                if price <= 0:
+                price = float(h.get("current_price") or 0.0)
+                fx = _holding_fx_to_eur(h)
+                price_eur = price * fx
+                if price <= 0 or price_eur <= 0:
                     continue
-                weight = (h["total_value"] / bucket_total) if bucket_total > 0 else (1.0 / len(constituents))
-                leg_value = delta * weight
-                qty = leg_value / price
+                weight = (_holding_value_eur(h) / bucket_total) if bucket_total > 0 else (1.0 / len(constituents))
+                leg_value_eur = delta * weight
+                qty = leg_value_eur / price_eur
                 if abs(qty) < 0.0001:
                     continue
-                # Non vendere mai più di quanto posseduto
+                held_qty = abs(float(h.get("quantity") or 0.0))
+                # Non vendere mai più di quanto posseduto (clamp per gamba;
+                # il cap aggregato è applicato dopo il merge per ticker).
                 if qty < 0:
-                    qty = max(qty, -float(h["quantity"]))
-                    leg_value = qty * price
-                orders.append({
+                    qty = max(qty, -held_qty)
+                raw_orders.append({
                     "ticker": h["ticker"],
                     "name": h["name"],
                     "allocation_name": target.get("name"),
-                    "side": "BUY" if qty > 0 else "SELL",
-                    "quantity": round(abs(qty), 4),
+                    "signed_quantity": qty,
                     "estimated_price": round(price, 2),
-                    "estimated_value": round(abs(leg_value), 2),
                     "currency": h.get("currency", "EUR"),
+                    "fx_rate_to_eur": fx,
+                    "held_quantity": held_qty,
                 })
+
+    # Consolida i duplicati da target sovrapposti (M7)
+    merged_orders = _merge_rebalance_orders(raw_orders)
+
+    total_buy_value = round(sum(o["_value_eur"] for o in merged_orders if o["side"] == "BUY"), 2)
+    total_sell_value = round(sum(o["_value_eur"] for o in merged_orders if o["side"] == "SELL"), 2)
+    orders = [{k: v for k, v in o.items() if k != "_value_eur"} for o in merged_orders]
 
     # Ordini: prima i BUY più grandi, poi i SELL
     orders.sort(key=lambda o: (o["side"] != "BUY", -o["estimated_value"]))
@@ -395,11 +520,11 @@ def compute_rebalance_plan(portfolio: list[dict], targets: list[dict], extra_cas
 
     return {
         "total_value": round(total_value, 2),
-        "extra_cash": round(max(extra_cash, 0.0), 2),
+        "extra_cash": round(extra_cash, 2),
         "targets_sum_percent": round(covered_targets, 2),
         "allocations": allocations,
         "orders": orders,
         "orders_count": len(orders),
-        "total_buy_value": round(sum(o["estimated_value"] for o in orders if o["side"] == "BUY"), 2),
-        "total_sell_value": round(sum(o["estimated_value"] for o in orders if o["side"] == "SELL"), 2),
+        "total_buy_value": total_buy_value,
+        "total_sell_value": total_sell_value,
     }

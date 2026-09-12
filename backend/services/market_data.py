@@ -67,8 +67,30 @@ def get_yf_session() -> requests.Session:
 YF_EXECUTOR_MAX_WORKERS = 4
 _yf_executor: ThreadPoolExecutor | None = None
 
+# Flag di shutdown di processo: impostato PRIMA di chiudere executor/session,
+# così un job ancora in corsa che invoca run_blocking_yf fallisce subito invece
+# di ricreare l'executor appena chiuso (thread leak) o usare risorse rilasciate.
+_shutdown_requested = False
+
+
+class MarketDataShutdownError(RuntimeError):
+    """Sollevata quando si richiede nuovo lavoro yfinance durante lo shutdown."""
+
+
+def request_yf_shutdown() -> None:
+    """Marca lo shutdown: da qui in poi run_blocking_yf rifiuta nuovo lavoro."""
+    global _shutdown_requested
+    _shutdown_requested = True
+
+
+def is_shutdown_requested() -> bool:
+    return _shutdown_requested
+
+
 def _get_yf_executor() -> ThreadPoolExecutor:
     global _yf_executor
+    if _shutdown_requested:
+        raise MarketDataShutdownError("Executor yfinance non disponibile: shutdown in corso.")
     if _yf_executor is None:
         _yf_executor = ThreadPoolExecutor(
             max_workers=YF_EXECUTOR_MAX_WORKERS,
@@ -82,9 +104,14 @@ async def run_blocking_yf(func, timeout: float | None = None):
     Su timeout il future asyncio viene cancellato ma il thread resta occupato fino
     allo scadere del timeout HTTP della session (YF_HTTP_TIMEOUT), quindi il pool
     non può restare saturato indefinitamente.
+    Dopo lo shutdown rifiuta il nuovo lavoro (MarketDataShutdownError) senza
+    ricreare l'executor.
     """
+    if _shutdown_requested:
+        raise MarketDataShutdownError("run_blocking_yf rifiutata: shutdown in corso.")
+    executor = _get_yf_executor()
     loop = asyncio.get_running_loop()
-    future = loop.run_in_executor(_get_yf_executor(), func)
+    future = loop.run_in_executor(executor, func)
     if timeout is not None:
         return await asyncio.wait_for(future, timeout=timeout)
     return await future
@@ -92,6 +119,8 @@ async def run_blocking_yf(func, timeout: float | None = None):
 def shutdown_yf_executor() -> None:
     """Shutdown best-effort dell'esecutore yfinance (chiamato nel lifecycle dell'app)."""
     global _yf_executor
+    # 1. Blocca nuovo lavoro PRIMA di smontare l'executor.
+    request_yf_shutdown()
     executor = _yf_executor
     _yf_executor = None
     if executor is not None:
@@ -100,16 +129,49 @@ def shutdown_yf_executor() -> None:
         except TypeError:  # Python < 3.9
             executor.shutdown(wait=False)
 
+# ---------------------------------------------------------------------------
+# Single-flight per chiave: richieste concorrenti sulla stessa chiave fredda
+# condividono UNA sola chiamata upstream (niente cache stampede / saturazione
+# dei 4 worker yfinance). Le entry vengono rimosse quando il task termina,
+# anche per timeout/cancel (done callback), quindi non serve alcun lock globale.
+# ---------------------------------------------------------------------------
+_INFLIGHT_FETCHES: dict[str, asyncio.Task] = {}
+
+
+def _get_or_create_inflight(key: str, coro_factory) -> asyncio.Task:
+    task = _INFLIGHT_FETCHES.get(key)
+    if task is not None and task.done():
+        # Task concluso ma done callback non ancora eseguita: scartalo.
+        if _INFLIGHT_FETCHES.get(key) is task:
+            _INFLIGHT_FETCHES.pop(key, None)
+        task = None
+    if task is None:
+        task = asyncio.ensure_future(coro_factory())
+        _INFLIGHT_FETCHES[key] = task
+
+        def _cleanup(done_task, _key=key):
+            if _INFLIGHT_FETCHES.get(_key) is done_task:
+                _INFLIGHT_FETCHES.pop(_key, None)
+
+        task.add_done_callback(_cleanup)
+    return task
+
 # In-memory caches with TTL
 CACHE_MAX_ENTRIES = 256
 _PRICE_CACHE: OrderedDict[str, tuple[dict, float]] = OrderedDict()
+# Cache separata (TTL breve) per i payload sintetici/stale: NON vengono mai
+# serviti come dati freschi per 60s/90s; al massimo per _FALLBACK_TTL secondi,
+# poi si ritenta upstream.
+_FALLBACK_TTL = 10.0
+_PRICE_FALLBACK_CACHE: OrderedDict[str, tuple[dict, float]] = OrderedDict()
 _INDICES_CACHE: tuple[list[dict], float] = ([], 0.0)  # single-slot cache (max 1 entry)
 _DEEP_DIVE_CACHE: OrderedDict[str, tuple[dict, float]] = OrderedDict()
 CACHE_TTL = 60.0 # 1 minute
 DEEP_CACHE_TTL = 180.0 # 3 minutes
-# TTL breve per i deep-dive STALE (fallback offline): evita di rifare N deep-dive
-# a ogni load quando Yahoo è ko, mantenendo i dati sintetici freschi e brevi.
-DEEP_CACHE_STALE_TTL = 90.0 # 90 secondi
+# TTL breve per i deep-dive STALE (fallback offline): non sono dati freschi,
+# quindi restano in cache solo pochi secondi per evitare N deep-dive a ogni load
+# quando Yahoo è ko, poi si ritenta upstream.
+DEEP_CACHE_STALE_TTL = 10.0 # 10 secondi
 
 # Budget wall-clock del batch prezzi. Il default (~4.5s) resta per i path
 # user-facing (dashboard/watchlist/alerting); il job orario di background usa
@@ -296,7 +358,10 @@ class MarketDataService:
         if f == "USD" and t == "EUR":
             try:
                 price_data = await MarketDataService.fetch_current_price("EURUSD=X")
-                if price_data and price_data.get("close") and price_data["close"] > 0:
+                # Solo un cambio reale vale come tasso live: i payload sintetici
+                # (stale=True) non vanno spacciati per quotazione di mercato.
+                if (price_data and price_data.get("close") and price_data["close"] > 0
+                        and not price_data.get("stale")):
                     eur_usd = float(price_data["close"])
                     return 1.0 / eur_usd
             except Exception:
@@ -306,7 +371,8 @@ class MarketDataService:
         if f == "EUR" and t == "USD":
             try:
                 price_data = await MarketDataService.fetch_current_price("EURUSD=X")
-                if price_data and price_data.get("close") and price_data["close"] > 0:
+                if (price_data and price_data.get("close") and price_data["close"] > 0
+                        and not price_data.get("stale")):
                     return float(price_data["close"])
             except Exception:
                 pass
@@ -410,7 +476,29 @@ class MarketDataService:
             cached_data, cached_time = _PRICE_CACHE[ticker]
             if now_ts - cached_time < CACHE_TTL:
                 return cached_data
+        if ticker in _PRICE_FALLBACK_CACHE:
+            cached_data, cached_time = _PRICE_FALLBACK_CACHE[ticker]
+            if now_ts - cached_time < _FALLBACK_TTL:
+                return cached_data
 
+        # Single-flight: N richieste concorrenti per lo stesso ticker freddo
+        # condividono una sola chiamata upstream.
+        task = _get_or_create_inflight(
+            f"price:{ticker}",
+            lambda: MarketDataService._fetch_current_price_uncached(ticker),
+        )
+        try:
+            # shield: se il chiamante viene cancellato il fetch condiviso continua
+            # e gli altri waiter ricevono comunque il risultato.
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(f"Fetch prezzo condiviso fallita per {ticker}: {e}")
+            return MarketDataService._generate_fallback_price(ticker)
+
+    @staticmethod
+    async def _fetch_current_price_uncached(ticker: str) -> dict:
         def _sync_fetch():
             try:
                 stock = yf.Ticker(ticker, session=_yf_session)
@@ -462,7 +550,11 @@ class MarketDataService:
             result = MarketDataService._generate_fallback_price(ticker)
 
         if result:
-            _cache_put(_PRICE_CACHE, ticker, (result, now_ts))
+            # I fallback sintetici NON entrano nella cache "fresca" a 60s.
+            if result.get("stale"):
+                _cache_put(_PRICE_FALLBACK_CACHE, ticker, (result, time.time()))
+            else:
+                _cache_put(_PRICE_CACHE, ticker, (result, time.time()))
         return result
 
     @staticmethod
@@ -474,6 +566,9 @@ class MarketDataService:
         `timeout`: budget wall-clock per l'intero batch. Se None usa il default
         user-facing (BATCH_FETCH_TIMEOUT); il job di background passa
         BATCH_FETCH_TIMEOUT_BACKGROUND (~15s).
+
+        Single-flight per batch (stessi ticker + stesso budget): richieste
+        concorrenti condividono una sola yf.download.
         """
         now_ts = time.time()
         results = {}
@@ -488,11 +583,44 @@ class MarketDataService:
                 if now_ts - cached_time < CACHE_TTL:
                     results[t_clean] = cached_data
                     continue
+            if t_clean in _PRICE_FALLBACK_CACHE:
+                cached_data, cached_time = _PRICE_FALLBACK_CACHE[t_clean]
+                if now_ts - cached_time < _FALLBACK_TTL:
+                    results[t_clean] = cached_data
+                    continue
             missing_tickers.append(t_clean)
 
         if not missing_tickers:
             return results
 
+        effective_timeout = timeout if timeout is not None else BATCH_FETCH_TIMEOUT
+        batch_key = "batch:%s:%s" % (effective_timeout, ",".join(sorted(set(missing_tickers))))
+        task = _get_or_create_inflight(
+            batch_key,
+            lambda: MarketDataService._fetch_batch_prices_uncached(missing_tickers, effective_timeout),
+        )
+        try:
+            downloaded = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            downloaded = {tk: MarketDataService._generate_fallback_price(tk) for tk in missing_tickers}
+
+        for tk, pdata in downloaded.items():
+            if not isinstance(pdata, dict):
+                continue
+            # Solo i dati reali vanno nella cache fresca: i fallback finiscono
+            # nella cache breve e restano marcati stale=True.
+            if pdata.get("stale"):
+                _cache_put(_PRICE_FALLBACK_CACHE, tk, (pdata, time.time()))
+            else:
+                _cache_put(_PRICE_CACHE, tk, (pdata, time.time()))
+            results[tk] = pdata
+
+        return results
+
+    @staticmethod
+    async def _fetch_batch_prices_uncached(missing_tickers: list[str], effective_timeout: float) -> dict[str, dict]:
         def _sync_batch():
             batch_res = {}
             try:
@@ -555,17 +683,10 @@ class MarketDataService:
 
             return batch_res
 
-        effective_timeout = timeout if timeout is not None else BATCH_FETCH_TIMEOUT
         try:
-            downloaded = await run_blocking_yf(_sync_batch, timeout=effective_timeout)
+            return await run_blocking_yf(_sync_batch, timeout=effective_timeout)
         except Exception:
-            downloaded = {tk: MarketDataService._generate_fallback_price(tk) for tk in missing_tickers}
-
-        for tk, pdata in downloaded.items():
-            _cache_put(_PRICE_CACHE, tk, (pdata, now_ts))
-            results[tk] = pdata
-
-        return results
+            return {tk: MarketDataService._generate_fallback_price(tk) for tk in missing_tickers}
 
     @staticmethod
     async def fetch_market_indices() -> list[dict]:
@@ -593,7 +714,9 @@ class MarketDataService:
                 "stale": bool(pdata.get("stale", False))
             })
 
-        if results:
+        # Non congelare per 60s un payload interamente sintetico come se fosse
+        # fresco: la cache breve dei prezzi (10s) evita comunque fetch ripetute.
+        if results and not any(item.get("stale") for item in results):
             _INDICES_CACHE = (results, now_ts)
         return results
 
@@ -621,12 +744,28 @@ class MarketDataService:
         ticker_up = ticker.strip().upper()
         if ticker_up in _DEEP_DIVE_CACHE:
             cached_data, cached_time = _DEEP_DIVE_CACHE[ticker_up]
-            # Gli stale (fallback offline) usano un TTL breve dedicato: restano
-            # serviti da cache 90s invece di rifare N deep-dive a ogni load.
+            # Gli stale (fallback offline) NON sono dati freschi: TTL breve
+            # dedicato, poi si ritenta upstream.
             ttl = DEEP_CACHE_STALE_TTL if cached_data.get("stale") else DEEP_CACHE_TTL
             if now_ts - cached_time < ttl:
                 return cached_data
 
+        # Single-flight per ticker: watchlist/risk con più posizioni non
+        # generano più deep-dive concorrenti duplicate per lo stesso titolo.
+        task = _get_or_create_inflight(
+            f"deep:{ticker_up}",
+            lambda: MarketDataService._fetch_stock_deep_dive_uncached(ticker_up),
+        )
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(f"Deep dive condiviso fallito per {ticker_up}: {e}")
+            return MarketDataService._deep_dive_fallback(ticker_up)
+
+    @staticmethod
+    async def _fetch_stock_deep_dive_uncached(ticker_up: str) -> dict:
         def _sync_deep_dive():
             ref = KNOWN_STOCKS.get(ticker_up, {})
             used_fallback = False
@@ -819,10 +958,10 @@ class MarketDataService:
             logger.debug(f"Timeout/errore deep dive per {ticker_up}, uso fallback stale.")
             data = MarketDataService._deep_dive_fallback(ticker_up)
         if data and data.get('current_price', 0) > 0:
-            # Cache condivisa: anche gli stale (TTL breve in lettura) così
-            # watchlist/risk non rifanno N deep-dive a ogni chiamata con Yahoo ko.
-            # Il payload resta marcato stale=True per il frontend.
-            _cache_put(_DEEP_DIVE_CACHE, ticker_up, (data, now_ts))
+            # Anche gli stale restano nella cache dedicata (il TTL di lettura è
+            # breve: DEEP_CACHE_STALE_TTL), così watchlist/risk non rifanno N
+            # deep-dive a ogni chiamata con Yahoo ko. Il payload resta stale=True.
+            _cache_put(_DEEP_DIVE_CACHE, ticker_up, (data, time.time()))
         return data
 
     @staticmethod

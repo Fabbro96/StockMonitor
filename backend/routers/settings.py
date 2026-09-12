@@ -1,4 +1,6 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -60,6 +62,63 @@ class AlertRuleCreate(BaseModel):
 
 from backend.config import settings as app_settings
 
+# H8: serializza il check-and-insert di UserSettings nel processo (il DB
+# garantisce UNIQUE(user_id); il lock evita il caso in cui la migrazione
+# UNIQUE non sia ancora applicata e due GET/PUT paralleli inseriscano due righe).
+_settings_init_lock = asyncio.Lock()
+
+async def _get_or_create_user_settings(db: AsyncSession, user_id: int) -> UserSettings:
+    """
+    Ritorna la riga UserSettings dell'utente, creandola se assente.
+
+    Concorrenza: rilettura sotto lock + gestione IntegrityError (UNIQUE(user_id)
+    violata da un'altra sessione) con rollback e ri-selezione, mai 500.
+    """
+    async def _read() -> Optional[UserSettings]:
+        result = await db.execute(
+            select(UserSettings).where(UserSettings.user_id == user_id).limit(1)
+        )
+        return result.scalars().first()
+
+    user_settings = await _read()
+    if user_settings:
+        return user_settings
+
+    async with _settings_init_lock:
+        # Chiude la transazione di lettura aperta prima del lock: in WAL una
+        # rilettura nello stesso snapshot non vedrebbe la riga inserita nel
+        # frattempo da un'altra richiesta. Il commit non espira gli oggetti
+        # (expire_on_commit=False).
+        await db.commit()
+        user_settings = await _read()
+        if user_settings:
+            return user_settings
+
+        user_settings = UserSettings(user_id=user_id)
+        db.add(user_settings)
+        try:
+            await db.commit()
+            await db.refresh(user_settings)
+            return user_settings
+        except IntegrityError:
+            # Un'altra sessione ha creato la riga nel frattempo: ri-seleziona.
+            await db.rollback()
+            user_settings = await _read()
+            if user_settings:
+                return user_settings
+            raise
+
+def _can_access_alert_rule(rule: AlertRule, current_user: User) -> bool:
+    """
+    Ownership STRICT: solo il proprietario può eliminare la regola.
+
+    Righe legacy con user_id NULL: accesso riservato all'admin, stesso
+    precedente di `_can_access_advice` in advice.py.
+    """
+    if rule.user_id is None:
+        return bool(current_user.is_admin)
+    return rule.user_id == current_user.id
+
 def is_valid_api_key(val: str | None) -> bool:
     if not val:
         return False
@@ -73,15 +132,8 @@ async def get_settings(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    result = await db.execute(select(UserSettings).where(UserSettings.user_id == current_user.id).limit(1))
-    user_settings = result.scalars().first()
-    
-    if not user_settings:
-        # Fallback a impostazioni globali o crea impostazioni utente dedicate
-        user_settings = UserSettings(user_id=current_user.id)
-        db.add(user_settings)
-        await db.commit()
-        await db.refresh(user_settings)
+    # H8: lettura o creazione idempotente e race-safe (lock + IntegrityError re-select).
+    user_settings = await _get_or_create_user_settings(db, current_user.id)
         
     return {
         "id": user_settings.id,
@@ -106,19 +158,14 @@ async def update_settings(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    result = await db.execute(select(UserSettings).where(UserSettings.user_id == current_user.id).limit(1))
-    settings = result.scalars().first()
-
     normalized = update_data.normalized()
     if not normalized:
         raise HTTPException(status_code=400, detail="Nessun campo valido da aggiornare.")
 
-    if not settings:
-        settings = UserSettings(user_id=current_user.id, **normalized)
-        db.add(settings)
-    else:
-        for key, value in normalized.items():
-            setattr(settings, key, value)
+    # H8: get-or-create race-safe, poi applica i valori (upsert effettivo).
+    settings = await _get_or_create_user_settings(db, current_user.id)
+    for key, value in normalized.items():
+        setattr(settings, key, value)
 
     await db.commit()
     await db.refresh(settings)
@@ -190,8 +237,16 @@ async def create_alert(
             stock = Stock(ticker=ticker, name=name, market=market,
                           currency=info.get("currency") or suffix_currency)
             db.add(stock)
-            await db.commit()
-            await db.refresh(stock)
+            try:
+                await db.commit()
+                await db.refresh(stock)
+            except IntegrityError:
+                # Race su UNIQUE stocks.ticker: un'altra sessione l'ha creato nel frattempo.
+                await db.rollback()
+                result = await db.execute(select(Stock).where(Stock.ticker == ticker))
+                stock = result.scalars().first()
+                if not stock:
+                    raise HTTPException(status_code=409, detail=f"Conflitto concorrente sulla creazione di {ticker}.")
         stock_id = stock.id
 
     new_rule = AlertRule(
@@ -222,7 +277,7 @@ async def delete_alert(
     db: AsyncSession = Depends(get_db)
 ):
     rule = await db.get(AlertRule, rule_id)
-    if not rule or (rule.user_id is not None and rule.user_id != current_user.id):
+    if not rule or not _can_access_alert_rule(rule, current_user):
         raise HTTPException(status_code=404, detail="Alert rule not found")
         
     await db.delete(rule)

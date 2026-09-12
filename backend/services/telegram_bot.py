@@ -16,6 +16,36 @@ def _is_key_configured(val: str | None) -> bool:
     return bool(val) and not str(val).strip().lower().startswith("your_")
 
 
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
+
+
+def _split_message(text: str, limit: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> list[str]:
+    """
+    Spezza un messaggio oltre il limite Telegram (4096 char) privilegiando i
+    confini di riga; le righe singole più lunghe del limite vengono tagliate
+    in blocchi duri (caso raro: il bot non supera mai il limite).
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            if current:
+                chunks.append(current)
+            while len(line) > limit:
+                chunks.append(line[:limit])
+                line = line[limit:]
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 async def _get_admin_user(session):
     """
     Risolve l'utente a cui riferire i comandi Telegram: username ADMIN_USERNAME
@@ -48,9 +78,12 @@ class TelegramService:
         }
         
         try:
+            # L11: messaggi oltre 4096 char vengono spezzati in più invii.
+            chunks = _split_message(text)
             async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(api_url, json=payload)
-                response.raise_for_status()
+                for chunk in chunks:
+                    response = await client.post(api_url, json={**payload, "text": chunk})
+                    response.raise_for_status()
                 logger.info("Messaggio Telegram inviato con successo.")
         except Exception as e:
             logger.error(f"Errore invio messaggio Telegram: {e}")
@@ -263,7 +296,7 @@ class InteractiveTelegramBot:
             return
         ticker = args[0].strip().upper()
 
-        await update.message.reply_text(f"🧠 Analisi AI di <code>{ticker}</code> in corso (Gemini)... attendi ~15s", parse_mode="HTML")
+        await update.message.reply_text(f"🧠 Analisi AI di <code>{html.escape(ticker)}</code> in corso (Gemini)... attendi ~15s", parse_mode="HTML")
         try:
             from backend.services.advisor import AdvisorService
             from backend.database import async_session_maker
@@ -292,7 +325,7 @@ class InteractiveTelegramBot:
             bear = analysis.get("bear_case", "")
 
             text = (
-                f"🧠 <b>ANALISI AI — {html.escape(analysis.get('name', ticker))}</b> (<code>{ticker}</code>)\n"
+                f"🧠 <b>ANALISI AI — {html.escape(analysis.get('name', ticker))}</b> (<code>{html.escape(ticker)}</code>)\n"
                 f"{'─' * 24}\n"
                 f"🎯 Raccomandazione: <b>{html.escape(str(action_label or action))}</b>\n"
                 f"💹 Target Price: <b>{tp}</b>\n"

@@ -92,9 +92,9 @@ async def list_advices(
     market: Optional[str] = None,
     action: Optional[str] = None,
     date: Optional[str] = None,
-    days: int = Query(7),
-    skip: int = 0,
-    limit: int = 20,
+    days: int = Query(7, ge=1, le=3650),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):

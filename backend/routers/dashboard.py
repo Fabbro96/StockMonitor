@@ -37,9 +37,12 @@ async def get_dashboard(
     )
     recent_advices = [serialize_advice(a, include_stock=True, short_titles=True) for a in advices_result.scalars().all()]
     
-    # 3. Active alerts count
+    # 3. Active alerts count (solo le regole dell'utente corrente)
     alerts_result = await db.execute(
-        select(AlertRule).where(AlertRule.is_active == True)
+        select(AlertRule).where(
+            AlertRule.is_active == True,
+            AlertRule.user_id == current_user.id,
+        )
     )
     active_alerts_count = len(alerts_result.scalars().all())
     
@@ -123,7 +126,7 @@ async def get_market_heatmap(db: AsyncSession = Depends(get_db)):
 
 @router.get("/performance")
 async def get_performance(
-    days: int = Query(30),
+    days: int = Query(30, ge=1, le=3650),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):

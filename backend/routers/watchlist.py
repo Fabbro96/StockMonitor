@@ -26,6 +26,17 @@ class WatchlistAlertUpdateRequest(BaseModel):
     alert_above: Optional[float] = None
     alert_below: Optional[float] = None
 
+def _can_access_watchlist_item(item: WatchlistItem, current_user: User) -> bool:
+    """
+    Ownership STRICT: solo il proprietario può modificare/eliminare l'elemento.
+
+    Righe legacy con user_id NULL (pre multi-utente): accesso riservato
+    all'admin, stesso precedente di `_can_access_advice` in advice.py.
+    """
+    if item.user_id is None:
+        return bool(current_user.is_admin)
+    return item.user_id == current_user.id
+
 @router.get("/")
 async def get_watchlist(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(
@@ -48,20 +59,34 @@ async def get_watchlist(current_user: User = Depends(get_current_user), db: Asyn
     )
     in_portfolio_ids = {row[0] for row in holdings_result.all()}
 
-    deep_tasks = [
-        MarketDataService.fetch_stock_deep_dive(stocks_map[item.stock_id].ticker)
+    # H4: chiude la transazione di lettura PRIMA delle chiamate di rete
+    # (deep-dive). Con expire_on_commit=False gli oggetti ORM restano utilizzabili.
+    await db.commit()
+
+    # M2: mappa {stock_id: deep_result} costruita sulla STESSA lista filtrata
+    # usata poi nel loop: niente più disallineamento degli iteratori quando
+    # uno stock è assente (ogni item riceve il proprio deep-dive, non quello
+    # dell'item precedente).
+    deep_stocks = {
+        item.stock_id: stocks_map[item.stock_id]
         for item in items if item.stock_id in stocks_map
+    }
+    deep_tasks = [
+        MarketDataService.fetch_stock_deep_dive(stock.ticker)
+        for stock in deep_stocks.values()
     ]
     deep_results = await asyncio.gather(*deep_tasks, return_exceptions=True)
+    deep_by_stock_id: dict[int, dict] = {}
+    for stock_id, deep in zip(deep_stocks.keys(), deep_results):
+        deep_by_stock_id[stock_id] = deep if isinstance(deep, dict) else {}
 
     watchlist = []
-    deep_iter = iter(deep_results)
     for item in items:
         stock = stocks_map.get(item.stock_id)
         if not stock:
             continue
 
-        deep = next(deep_iter)
+        deep = deep_by_stock_id.get(item.stock_id, {})
         if not isinstance(deep, dict):
             deep = {}
 
@@ -168,7 +193,7 @@ async def update_watchlist_alert(
     db: AsyncSession = Depends(get_db)
 ):
     item = await db.get(WatchlistItem, item_id)
-    if not item or (item.user_id is not None and item.user_id != current_user.id):
+    if not item or not _can_access_watchlist_item(item, current_user):
         raise HTTPException(status_code=404, detail="Elemento Watchlist non trovato.")
     
     item.alert_above = data.alert_above
@@ -183,7 +208,7 @@ async def remove_from_watchlist(
     db: AsyncSession = Depends(get_db)
 ):
     item = await db.get(WatchlistItem, item_id)
-    if not item or (item.user_id is not None and item.user_id != current_user.id):
+    if not item or not _can_access_watchlist_item(item, current_user):
         raise HTTPException(status_code=404, detail="Elemento Watchlist non trovato.")
 
     await db.delete(item)

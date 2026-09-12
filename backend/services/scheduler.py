@@ -1,3 +1,5 @@
+import asyncio
+import functools
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +13,7 @@ from backend.models.sentiment import Sentiment
 from backend.services.market_data import (
     MarketDataService,
     BATCH_FETCH_TIMEOUT_BACKGROUND,
+    request_yf_shutdown,
     shutdown_yf_executor,
 )
 from backend.services.sentiment import SentimentService
@@ -20,8 +23,34 @@ from backend.config import settings
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+# Timezone esplicita: senza di essa AsyncIOScheduler usa quella di sistema,
+# rendendo imprevedibili gli orari cron tra host/NAS con TZ diverse.
+SCHEDULER_TIMEZONE = "Europe/Rome"
+SHUTDOWN_JOBS_WAIT_SECONDS = 5.0
 
+scheduler = AsyncIOScheduler(timezone=SCHEDULER_TIMEZONE)
+
+# Task dei job correntemente in esecuzione: permettono allo shutdown di
+# attendere (best-effort, con timeout) i job in corso prima di chiudere le
+# risorse condivise (executor yfinance, client HTTP).
+_running_job_tasks: set[asyncio.Task] = set()
+
+
+def _track_running_job(func):
+    """Registra il task del job in esecuzione per lo shutdown best-effort."""
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        task = asyncio.current_task()
+        if task is not None:
+            _running_job_tasks.add(task)
+        try:
+            return await func(*args, **kwargs)
+        finally:
+            _running_job_tasks.discard(task)
+    return wrapper
+
+
+@_track_running_job
 async def collect_prices_job():
     # Mantiene la cadenza oraria ma evita fetch inutili a mercati chiusi (NAS 24/7)
     if not MarketDataService.are_any_markets_open():
@@ -38,6 +67,7 @@ async def collect_prices_job():
     except Exception as e:
         logger.error(f"Errore durante collect_prices_job: {e}")
 
+@_track_running_job
 async def check_alerts_job():
     if not MarketDataService.are_any_markets_open():
         logger.debug("Borse chiuse: controllo alert saltato.")
@@ -49,6 +79,7 @@ async def check_alerts_job():
     except Exception as e:
         logger.error(f"Errore durante check_alerts_job: {e}")
 
+@_track_running_job
 async def analyze_sentiment_job():
     logger.info("Avvio job periodico: raccolta notizie e sentiment multi-fonte")
     try:
@@ -59,6 +90,7 @@ async def analyze_sentiment_job():
     except Exception as e:
         logger.error(f"Errore durante analyze_sentiment_job: {e}")
 
+@_track_running_job
 async def generate_advice_job():
     if not MarketDataService.are_any_markets_open():
         logger.info("Borse chiuse: job periodico generazione consigli saltato.")
@@ -91,6 +123,7 @@ async def _delete_older_than_batch(session, model, cutoff, batch_size: int) -> i
     return total
 
 
+@_track_running_job
 async def cleanup_old_data_job():
     logger.info("Avvio job pulizia dati storici (advice, price_history, sentiments)")
     try:
@@ -125,7 +158,7 @@ async def cleanup_old_data_job():
         logger.error(f"Errore durante cleanup_old_data_job: {e}")
 
 
-def init_scheduler(app):
+def init_scheduler():
     # Esegui ogni ora durante l'orario di borsa
     scheduler.add_job(
         collect_prices_job,
@@ -186,10 +219,31 @@ def init_scheduler(app):
     logger.info("Scheduler APScheduler avviato con successo.")
 
 
-def shutdown_scheduler():
+async def shutdown_scheduler():
+    """Shutdown ordinato: prima blocca il nuovo lavoro yfinance, poi smonta.
+
+    L'ordine è essenziale (M8): il flag viene impostato PRIMA di fermare lo
+    scheduler e chiudere l'executor, così un job ancora in corsa che chiama
+    run_blocking_yf riceve MarketDataShutdownError invece di ricreare un pool
+    di thread già chiuso. I job in corso vengono attesi best-effort con timeout.
+    """
+    # 1. Nessun nuovo lavoro yfinance da qui in avanti.
+    request_yf_shutdown()
+
+    # 2. Ferma lo scheduler (wait=False: APScheduler cancella i task coroutine
+    #    pendenti; i thread yfinance già avviati terminano entro l'HTTP timeout).
     if scheduler.running:
-        # wait=False: non bloccare lo shutdown del lifespan se un job è in corso
         scheduler.shutdown(wait=False)
         logger.info("Scheduler terminato correttamente.")
-    # Cleanup best-effort del pool dedicato alle chiamate yfinance
+
+    # 3. Attesa best-effort dei job in corso (max SHUTDOWN_JOBS_WAIT_SECONDS):
+    #    evita di chiudere il client HTTP condiviso sotto i piedi a un job.
+    pending = [t for t in list(_running_job_tasks) if not t.done()]
+    if pending:
+        try:
+            await asyncio.wait(pending, timeout=SHUTDOWN_JOBS_WAIT_SECONDS)
+        except Exception as e:
+            logger.debug(f"Attesa job in corso interrotta: {e}")
+
+    # 4. Cleanup best-effort del pool dedicato alle chiamate yfinance.
     shutdown_yf_executor()

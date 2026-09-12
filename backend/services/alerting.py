@@ -4,8 +4,10 @@ from sqlalchemy import func
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
+from backend.config import settings
 from backend.models.settings import AlertRule
 from backend.models.stock import Stock, PriceHistory
+from backend.models.user import User
 from backend.models.watchlist import WatchlistItem
 from backend.models.portfolio import Holding
 from backend.services.market_data import MarketDataService
@@ -15,6 +17,27 @@ logger = logging.getLogger(__name__)
 
 class AlertingService:
     _last_alert_times = {}  # dict mapping cache_key -> datetime
+
+    @staticmethod
+    async def _resolve_admin_user_id(db_session: AsyncSession) -> int | None:
+        """
+        M4 — Gli alert push vanno alla SOLA chat Telegram configurata
+        (TELEGRAM_CHAT_ID), quindi la run valuta esclusivamente i dati
+        dell'utente ADMIN (ADMIN_USERNAME, fallback: id minimo).
+
+        LIMITAZIONE MULTI-UTENTE (documentata): gli altri utenti non ricevono
+        alert via Telegram finché non esisterà un mapping utente -> chat_id;
+        le loro regole restano salvate e verranno valutate quando il mapping
+        sarà disponibile.
+        """
+        result = await db_session.execute(
+            select(User).where(User.username == settings.ADMIN_USERNAME).order_by(User.id).limit(1)
+        )
+        admin = result.scalars().first()
+        if not admin:
+            result = await db_session.execute(select(User).order_by(User.id).limit(1))
+            admin = result.scalars().first()
+        return admin.id if admin else None
 
     async def check_alerts(self, db_session: AsyncSession):
         """
@@ -30,26 +53,51 @@ class AlertingService:
             logger.info("Nessun mercato aperto: controllo alert saltato.")
             return
 
+        admin_user_id = await self._resolve_admin_user_id(db_session)
+        if admin_user_id is None:
+            logger.warning("Nessun utente configurato: controllo alert saltato.")
+            return
+
         telegram = TelegramService()
         now = datetime.now(timezone.utc)
 
-        # 1. AlertRule (Variazione % giornaliera)
+        # 1. AlertRule (Variazione % giornaliera) — solo admin (vedi M4 sopra)
         rules_res = await db_session.execute(
-            select(AlertRule).join(Stock).where(AlertRule.is_active == True, Stock.is_active == True).options(selectinload(AlertRule.stock))
+            select(AlertRule).join(Stock).where(
+                AlertRule.is_active == True,
+                AlertRule.user_id == admin_user_id,
+                Stock.is_active == True,
+            ).options(selectinload(AlertRule.stock))
         )
         rules = rules_res.scalars().all()
 
-        # 2. WatchlistItem (Soglie prezzo assolute)
+        # 2. WatchlistItem (Soglie prezzo assolute) — solo admin
         wl_res = await db_session.execute(
-            select(WatchlistItem).join(Stock).where(Stock.is_active == True).options(selectinload(WatchlistItem.stock))
+            select(WatchlistItem).join(Stock).where(
+                WatchlistItem.user_id == admin_user_id,
+                Stock.is_active == True,
+            ).options(selectinload(WatchlistItem.stock))
         )
         watchlist_items = wl_res.scalars().all()
 
-        # 3. Holding Stop-Loss / Take-Profit Monitor
+        # 3. Holding Stop-Loss / Take-Profit Monitor — solo admin
         holdings_res = await db_session.execute(
-            select(Holding).join(Stock).where(Stock.is_active == True).options(selectinload(Holding.stock))
+            select(Holding).join(Stock).where(
+                Holding.user_id == admin_user_id,
+                Stock.is_active == True,
+            ).options(selectinload(Holding.stock))
         )
         holdings = holdings_res.scalars().all()
+
+        # L6: evict delle chiavi di throttle non più esistenti (regole/watchlist/
+        # holdings cancellati) per evitare crescita illimitata di _last_alert_times.
+        valid_keys = (
+            {f"rule_{r.id}" for r in rules}
+            | {f"wl_{i.id}" for i in watchlist_items}
+            | {f"sl_tp_h_{h.id}" for h in holdings}
+        )
+        for stale_key in [k for k in self._last_alert_times if k not in valid_keys]:
+            self._last_alert_times.pop(stale_key, None)
 
         # Prezzi: UNA sola chiamata batch per tutti i ticker della run
         stocks_by_id: dict[int, Stock] = {}
@@ -106,6 +154,18 @@ class AlertingService:
             if not stock:
                 continue
 
+            # L6: threshold_percent può essere NULL su righe legacy: senza guard
+            # il confronto `>= None` solleva TypeError e aborta l'intera run.
+            try:
+                threshold = float(rule.threshold_percent) if rule.threshold_percent is not None else None
+            except (TypeError, ValueError):
+                threshold = None
+            if threshold is None:
+                logger.debug(f"AlertRule #{rule.id} senza threshold_percent valido: saltata.")
+                continue
+
+            direction = rule.direction or 'BOTH'
+
             cache_key = f"rule_{rule.id}"
             last_alert = self._last_alert_times.get(cache_key)
             if last_alert and (now - last_alert) < timedelta(hours=1):
@@ -114,11 +174,11 @@ class AlertingService:
             change_percent = _change(stock.ticker)
 
             trigger = False
-            if rule.direction == 'UP' and change_percent >= rule.threshold_percent:
+            if direction == 'UP' and change_percent >= threshold:
                 trigger = True
-            elif rule.direction == 'DOWN' and change_percent <= -rule.threshold_percent:
+            elif direction == 'DOWN' and change_percent <= -threshold:
                 trigger = True
-            elif rule.direction == 'BOTH' and abs(change_percent) >= rule.threshold_percent:
+            elif direction == 'BOTH' and abs(change_percent) >= threshold:
                 trigger = True
 
             if trigger:

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import bcrypt
@@ -19,6 +20,15 @@ security_bearer = HTTPBearer(auto_error=False)
 
 ALGORITHM = "HS256"
 
+# Pool dedicato per bcrypt (cost 12 = CPU-bound ~0.5-1.5s su ARM): evita che
+# login paralleli saturino il default executor di asyncio (8 thread), che
+# bloccherebbe anche il resto dell'app. Dimensione volutamente piccola (2).
+_BCRYPT_EXECUTOR_MAX_WORKERS = 2
+_bcrypt_executor = ThreadPoolExecutor(
+    max_workers=_BCRYPT_EXECUTOR_MAX_WORKERS,
+    thread_name_prefix="bcrypt",
+)
+
 def hash_password(password: str) -> str:
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(password.encode("utf-8"), salt).decode("utf-8")
@@ -31,13 +41,22 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return False
 
 async def hash_password_async(password: str) -> str:
-    """Esegue l'hashing bcrypt (CPU-bound, cost 12) in un thread dedicato,
-    evitando di bloccare l'event loop su hardware ARM."""
-    return await asyncio.to_thread(hash_password, password)
+    """Esegue l'hashing bcrypt (CPU-bound, cost 12) nel pool dedicato,
+    evitando di bloccare l'event loop o di saturare il default executor."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_bcrypt_executor, hash_password, password)
 
 async def verify_password_async(plain_password: str, hashed_password: str) -> bool:
-    """Esegue la verifica bcrypt in un thread dedicato (off event loop)."""
-    return await asyncio.to_thread(verify_password, plain_password, hashed_password)
+    """Esegue la verifica bcrypt nel pool dedicato (off event loop)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_bcrypt_executor, verify_password, plain_password, hashed_password)
+
+def shutdown_bcrypt_executor() -> None:
+    """Shutdown best-effort del pool bcrypt (invocata dal lifespan in uscita)."""
+    try:
+        _bcrypt_executor.shutdown(wait=False, cancel_futures=True)
+    except TypeError:  # Python < 3.9
+        _bcrypt_executor.shutdown(wait=False)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()

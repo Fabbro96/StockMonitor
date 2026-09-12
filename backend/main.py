@@ -14,7 +14,7 @@ from backend.database import init_db, async_session_maker
 from backend.services.scheduler import init_scheduler, shutdown_scheduler
 from backend.models.settings import UserSettings
 from backend.models.user import User
-from backend.services.auth import get_current_user, hash_password_async
+from backend.services.auth import get_current_user, hash_password_async, shutdown_bcrypt_executor
 from backend.services.telegram_bot import InteractiveTelegramBot
 from backend.routers import (
     stocks_router,
@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
 
     
     # Initialize Scheduler
-    init_scheduler(app)
+    init_scheduler()
 
     # Avvia bot Telegram interattivo bidirezionale (se configurato)
     await telegram_bot.start()
@@ -84,7 +84,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Stock Monitor...")
     await telegram_bot.stop()
-    shutdown_scheduler()
+    # Ordine M8: shutdown_scheduler blocca prima il nuovo lavoro yfinance,
+    # ferma lo scheduler e attende (best-effort) i job in corso; SOLO DOPO
+    # viene chiuso il client HTTP condiviso.
+    await shutdown_scheduler()
+    shutdown_bcrypt_executor()
 
     # Chiusura best-effort del client HTTP condiviso (esposto dal layer sentiment)
     try:
@@ -114,17 +118,19 @@ _IMMUTABLE_EXTENSIONS = (".css", ".js", ".mjs", ".woff", ".woff2", ".ttf", ".otf
 @app.middleware("http")
 async def add_cache_headers(request, call_next):
     response = await call_next(request)
-    path = request.url.path
-    if path.startswith("/static"):
-        if path.endswith(_IMMUTABLE_EXTENSIONS) and request.query_params.get("v"):
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        else:
-            # HTML e asset non versionati: rivalidazione obbligatoria
+    # L17: niente header di cache asset su risposte di errore (404/500).
+    if response.status_code < 400:
+        path = request.url.path
+        if path.startswith("/static"):
+            if path.endswith(_IMMUTABLE_EXTENSIONS) and request.query_params.get("v"):
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            else:
+                # HTML e asset non versionati: rivalidazione obbligatoria
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+                response.headers["Pragma"] = "no-cache"
+                response.headers["Expires"] = "0"
+        elif path.endswith(".html"):
             response.headers["Cache-Control"] = "no-cache, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-    elif path.endswith(".html"):
-        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 @app.get("/health", tags=["system"])

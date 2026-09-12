@@ -152,7 +152,7 @@ async def get_stock_candles(ticker: str, timeframe: str = Query("1m", pattern="^
 @router.get("/{stock_id}/history")
 async def get_history(
     stock_id: int, 
-    days: int = Query(7), 
+    days: int = Query(7, ge=1, le=3650), 
     db: AsyncSession = Depends(get_db)
 ):
     # Timestamp UTC-aware coerenti con quelli persistiti (evita confronti naive/aware)

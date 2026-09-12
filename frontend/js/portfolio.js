@@ -112,10 +112,15 @@ const updateAllocationChart = () => {
     })).filter(d => d.value > 0);
     drawPieChart(data);
   } else {
-    const data = portfolioData.map(item => ({
-      label: item.ticker,
-      value: item.total_value || ((item.current_price || item.avg_purchase_price) * item.quantity)
-    })).filter(d => d.value > 0);
+    const data = portfolioData.map(item => {
+      const mod = modifiedHoldings.get(item.id);
+      const qty = mod ? mod.newQty : item.quantity;
+      const price = item.current_price || (mod ? mod.newPrice : item.avg_purchase_price);
+      return {
+        label: item.ticker,
+        value: mod ? price * qty : (item.total_value || price * qty)
+      };
+    }).filter(d => d.value > 0);
     drawPieChart(data);
   }
 };
@@ -139,7 +144,7 @@ const triggerSeedDemo = async () => {
     showLoading('portfolioContent');
     const res = await api.seedDemo();
     showToast(res.message || 'Demo inizializzata con successo!', 'success');
-    loadPortfolio();
+    await loadPortfolio();
   } catch (e) {
     showToast(e.message || 'Errore nel caricamento della demo', 'error');
   } finally {
@@ -298,14 +303,19 @@ const handleInlineEdit = (e) => {
   }
 
   updateSaveBar();
+  // Ridisegna la torta senza ri-renderizzare la tabella (nessuna perdita di focus)
+  updateAllocationChart();
 };
 
 const loadPortfolio = async () => {
+  if (modifiedHoldings.size > 0 && !confirm('Hai modifiche non salvate. Ricaricare e perderle?')) {
+    return;
+  }
   try {
     renderSkeletons();
     const [summaryResult, portfolioResult, settingsResult] = await Promise.all([
-      api.getPortfolioSummary().catch(() => ({})),
-      api.getPortfolio().catch(() => []),
+      api.getPortfolioSummary(),
+      api.getPortfolio(),
       api.getSettings().catch(() => ({}))
     ]);
     summaryData = summaryResult;
@@ -354,7 +364,12 @@ const loadPortfolio = async () => {
     loadDividends();
 
   } catch (error) {
-    showToast('Errore nel caricamento del portafoglio', 'error');
+    showToast(error?.message || 'Errore nel caricamento del portafoglio', 'error');
+    // In caso di errore mantiene a schermo i dati precedenti (se presenti)
+    if (portfolioData.length > 0) {
+      renderTable();
+      updateAllocationChart();
+    }
   }
 };
 
@@ -440,7 +455,7 @@ const loadTransactions = async (type = currentTxFilter) => {
   }
 };
 
-window.deleteTransaction = async (id) => {
+const deleteTransaction = async (id) => {
   if (!confirm(`Sei sicuro di voler eliminare la transazione #${id}?`)) return;
   try {
     await api.deleteTransaction(id);
@@ -452,7 +467,7 @@ window.deleteTransaction = async (id) => {
   }
 };
 
-window.deleteHolding = async (id) => {
+const deleteHolding = async (id) => {
   const item = portfolioData.find(h => h.id === id);
   const ticker = item ? item.ticker : 'questa holding';
   
@@ -471,7 +486,7 @@ window.deleteHolding = async (id) => {
     });
     loadPortfolio();
   } catch (e) {
-    showToast('Errore durante l\'eliminazione', 'error');
+    showToast(e.message || 'Errore durante l\'eliminazione', 'error');
   }
 };
 
@@ -733,7 +748,7 @@ const openAddModal = (defaultTicker = '') => {
   holdingModal.classList.add('active');
 };
 
-window.openTxModal = (ticker = '') => {
+const openTxModal = (ticker = '') => {
   if (!txModal) return;
   document.getElementById('txForm')?.reset();
   if (ticker) {
@@ -756,9 +771,11 @@ const closeTxModal = () => txModal?.classList.remove('active');
 const setupAutocomplete = (inputEl, resultsEl, onSelect) => {
   if (!inputEl || !resultsEl) return;
   let timeout = null;
+  let requestSeq = 0;
 
   inputEl.addEventListener('input', (e) => {
     clearTimeout(timeout);
+    const seq = ++requestSeq;
     const q = e.target.value.trim();
     if (q.length < 2) {
       resultsEl.style.display = 'none';
@@ -767,6 +784,7 @@ const setupAutocomplete = (inputEl, resultsEl, onSelect) => {
     timeout = setTimeout(async () => {
       try {
         const results = await api.searchStocks(q);
+        if (seq !== requestSeq) return; // risposta obsoleta
         if (results && results.length > 0) {
           resultsEl.innerHTML = results.map(r => `
             <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
@@ -778,6 +796,7 @@ const setupAutocomplete = (inputEl, resultsEl, onSelect) => {
           resultsEl.style.display = 'none';
         }
       } catch (e) {
+        if (seq !== requestSeq) return;
         resultsEl.style.display = 'none';
       }
     }, 250);
@@ -837,7 +856,7 @@ const initPortfolio = () => {
     const btn = e.target.closest('[data-action="delete-holding"]');
     if (btn) {
       const id = parseInt(btn.dataset.id, 10);
-      if (!isNaN(id) && window.deleteHolding) window.deleteHolding(id);
+      if (!isNaN(id)) deleteHolding(id);
       return;
     }
     const marketBtn = e.target.closest('[data-action="edit-market"]');
@@ -855,13 +874,13 @@ const initPortfolio = () => {
   document.getElementById('transactionsTableBody')?.addEventListener('click', (e) => {
     const openTxBtn = e.target.closest('[data-action="open-tx-modal"]');
     if (openTxBtn) {
-      window.openTxModal();
+      openTxModal();
       return;
     }
     const btn = e.target.closest('[data-action="delete-transaction"]');
     if (!btn) return;
     const id = parseInt(btn.dataset.id, 10);
-    if (!isNaN(id) && window.deleteTransaction) window.deleteTransaction(id);
+    if (!isNaN(id)) deleteTransaction(id);
   });
 
   // Listen for theme changes to redraw canvas chart
@@ -927,6 +946,13 @@ const initPortfolio = () => {
   document.getElementById('btnSaveChanges')?.addEventListener('click', () => {
     if (modifiedHoldings.size === 0) return;
 
+    const invalid = Array.from(modifiedHoldings.values())
+      .find(m => !(m.newQty > 0) || !(m.newPrice > 0));
+    if (invalid) {
+      showToast('La quantità e il prezzo devono essere maggiori di 0. Per rimuovere una posizione usa 🗑️.', 'error');
+      return;
+    }
+
     const listEl = document.getElementById('confirmChangesList');
     listEl.innerHTML = Array.from(modifiedHoldings.values()).map(m => `
       <div class="change-item">
@@ -960,6 +986,8 @@ const initPortfolio = () => {
       const res = await api.batchUpdateHoldings(updates);
       showToast(`Salvate ${res.updated_count || updates.length} posizioni con successo!`, 'success');
       closeConfirmModal();
+      modifiedHoldings.clear();
+      updateSaveBar();
       loadPortfolio();
     } catch (err) {
       showToast(err.message || 'Errore durante il salvataggio delle modifiche', 'error');
@@ -1059,7 +1087,7 @@ const initPortfolio = () => {
   });
 
   // Trade Ledger Modal & Filter Handlers
-  document.getElementById('btnOpenTxModal')?.addEventListener('click', () => window.openTxModal());
+  document.getElementById('btnOpenTxModal')?.addEventListener('click', () => openTxModal());
   document.getElementById('closeTxModal')?.addEventListener('click', closeTxModal);
   document.getElementById('cancelTxModal')?.addEventListener('click', closeTxModal);
 

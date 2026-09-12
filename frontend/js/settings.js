@@ -70,7 +70,7 @@ const renderTimeInputs = (count, values = []) => {
   if (!container) return;
   let html = '';
   for (let i = 0; i < count; i++) {
-    const val = values[i] || (i === 0 ? '09:00' : '18:00');
+    const val = values[i] ?? (i === 0 ? '09:00' : '18:00');
     html += `<input type="time" name="reportTime" value="${escapeHtml(val)}" class="input-time" required>`;
   }
   container.innerHTML = html;
@@ -197,7 +197,7 @@ const initSettings = () => {
     if (!isNaN(id) && window.deleteUser) window.deleteUser(id, btn.dataset.username || '');
   });
 
-  document.getElementById('reportFreq').addEventListener('change', (e) => {
+  document.getElementById('reportFreq')?.addEventListener('change', (e) => {
     const existing = Array.from(document.querySelectorAll('input[name="reportTime"]')).map(i => i.value);
     renderTimeInputs(parseInt(e.target.value), existing);
   });
@@ -206,6 +206,7 @@ const initSettings = () => {
   const btnCreateUser = document.getElementById('btnCreateUser');
   if (btnCreateUser) {
     btnCreateUser.addEventListener('click', async () => {
+      if (btnCreateUser.disabled) return;
       const usernameInput = document.getElementById('newUsername');
       const passwordInput = document.getElementById('newUserPassword');
       const isAdminInput = document.getElementById('newUserIsAdmin');
@@ -244,7 +245,10 @@ const initSettings = () => {
   }
 
   // Add Alert Rule
-  document.getElementById('btnAddAlert').addEventListener('click', async () => {
+  document.getElementById('btnAddAlert').addEventListener('click', async (e) => {
+    const btnAddAlert = e.currentTarget;
+    if (btnAddAlert.disabled) return;
+
     const ticker = document.getElementById('alertTicker').value.trim().toUpperCase();
     const threshold = parseFloat(document.getElementById('alertThreshold').value);
     const direction = document.getElementById('alertDir').value;
@@ -254,17 +258,26 @@ const initSettings = () => {
       return;
     }
 
+    btnAddAlert.disabled = true;
     try {
       const newAlert = { ticker, threshold, direction, active: true };
       const created = await api.addAlertRule(newAlert);
-      alertRules.push(created || { id: Date.now(), ...newAlert });
-      renderAlertRules();
+      if (created?.id != null) {
+        alertRules.push(created);
+        renderAlertRules();
+      } else {
+        // Id non restituito: ricarica dal server invece di inventarne uno non cancellabile.
+        alertRules = await api.getAlertRules().catch(() => alertRules);
+        renderAlertRules();
+      }
       
       document.getElementById('alertTicker').value = '';
       document.getElementById('alertThreshold').value = '';
       showToast(`Regola per ${ticker} aggiunta`, 'success');
     } catch(e) {
       showToast('Errore durante il salvataggio dell\'alert', 'error');
+    } finally {
+      btnAddAlert.disabled = false;
     }
   });
 

@@ -3,6 +3,13 @@ import { formatCurrency, formatPercent, showToast, escapeHtml, openMarketEditor 
 
 let watchlistData = [];
 
+// Converte in numero finito; null/undefined/'' -> null (così 0 resta un valore valido).
+const toFiniteNumberOrNull = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
 const renderSkeletons = () => {
   const tbody = document.getElementById('watchlistTableBody');
   if (tbody) {
@@ -20,7 +27,7 @@ const renderWatchlist = () => {
   if (!tbody) return;
 
   const filtered = query
-    ? watchlistData.filter(item => item.ticker.includes(query) || (item.name && item.name.toUpperCase().includes(query)))
+    ? watchlistData.filter(item => String(item.ticker || '').toUpperCase().includes(query) || String(item.name || '').toUpperCase().includes(query))
     : watchlistData;
 
   if (filtered.length === 0) {
@@ -38,15 +45,17 @@ const renderWatchlist = () => {
     const isUp = item.change_percent >= 0;
     const sign = isUp ? '+' : '';
     const flag = item.market === 'IT' ? '🇮🇹' : (item.market === 'EU' ? '🇪🇺' : '🇺🇸');
-    const pct = Math.max(0, Math.min(100, item.fifty_two_week_pct || 50));
+    const pctRaw = toFiniteNumberOrNull(item.fifty_two_week_pct);
+    const pct = Math.max(0, Math.min(100, pctRaw !== null ? pctRaw : 50));
 
-    // Numerici API: coercizione + guardie per non rompere il render con stringhe/null
-    const rsiNum = Number(item.rsi);
-    const rsiText = item.rsi && Number.isFinite(rsiNum) ? rsiNum : '--';
-    const peNum = Number(item.pe_ratio);
-    const peText = item.pe_ratio && Number.isFinite(peNum) ? peNum.toFixed(1) : '--';
-    const dyNum = Number(item.dividend_yield);
-    const dyText = item.dividend_yield && Number.isFinite(dyNum) ? `${dyNum.toFixed(2)}%` : '--';
+    // Numerici API: coercizione + guardie per non rompere il render con stringhe/null.
+    // 0 è un valore valido (es. yield 0%), quindi si distingue solo null/undefined/''.
+    const rsiNum = toFiniteNumberOrNull(item.rsi);
+    const rsiText = rsiNum !== null ? rsiNum : '--';
+    const peNum = toFiniteNumberOrNull(item.pe_ratio);
+    const peText = peNum !== null ? peNum.toFixed(1) : '--';
+    const dyNum = toFiniteNumberOrNull(item.dividend_yield);
+    const dyText = dyNum !== null ? `${dyNum.toFixed(2)}%` : '--';
 
     // Alert Badge
     let alertHtml = '<span class="text-xs text-muted">Nessuno</span>';
@@ -138,7 +147,7 @@ const updateStats = () => {
 const loadWatchlist = async () => {
   try {
     renderSkeletons();
-    watchlistData = await api.getWatchlist().catch(() => []);
+    watchlistData = await api.getWatchlist();
     updateStats();
     renderWatchlist();
   } catch (e) {
@@ -146,7 +155,7 @@ const loadWatchlist = async () => {
   }
 };
 
-window.removeFromWatchlist = async (id, ticker) => {
+const removeFromWatchlist = async (id, ticker) => {
   try {
     await api.removeFromWatchlist(id);
     const removedItem = watchlistData.find(w => w.id === id);
@@ -168,7 +177,7 @@ window.removeFromWatchlist = async (id, ticker) => {
 };
 
 // Edit Alert Modal
-window.openEditAlertModal = (id, ticker, above, below) => {
+const openEditAlertModal = (id, ticker, above, below) => {
   document.getElementById('editAlertItemId').value = id;
   document.getElementById('editAlertTickerLabel').textContent = `Imposta soglie per ${ticker}`;
   document.getElementById('editAlertAbove').value = above !== null && above !== undefined ? above : '';
@@ -213,12 +222,12 @@ const initWatchlist = () => {
       } else if (action === 'add-holding') {
         window.location.href = `/static/portfolio.html?add=${encodeURIComponent(ticker)}`;
       } else if (action === 'remove-watchlist') {
-        window.removeFromWatchlist(parseInt(btn.dataset.id, 10), ticker);
+        removeFromWatchlist(parseInt(btn.dataset.id, 10), ticker);
       } else if (action === 'edit-alert') {
         const id = parseInt(btn.dataset.id, 10);
         const above = btn.dataset.above !== '' ? parseFloat(btn.dataset.above) : null;
         const below = btn.dataset.below !== '' ? parseFloat(btn.dataset.below) : null;
-        window.openEditAlertModal(id, ticker, above, below);
+        openEditAlertModal(id, ticker, above, below);
       } else if (action === 'edit-market') {
         openMarketEditor(ticker, btn.dataset.market, () => loadWatchlist());
       }
@@ -280,12 +289,14 @@ const initWatchlist = () => {
 
   // Autocomplete
   let timeout = null;
+  let requestSeq = 0;
   const input = document.getElementById('wlTickerInput');
   const resultsDiv = document.getElementById('wlAutocompleteResults');
 
   if (input && resultsDiv) {
     input.addEventListener('input', (e) => {
       clearTimeout(timeout);
+      const seq = ++requestSeq;
       const q = e.target.value.trim();
       if (q.length < 2) {
         resultsDiv.style.display = 'none';
@@ -294,6 +305,7 @@ const initWatchlist = () => {
       timeout = setTimeout(async () => {
         try {
           const results = await api.searchStocks(q);
+          if (seq !== requestSeq) return; // risposta obsoleta
           if (results && results.length > 0) {
             resultsDiv.innerHTML = results.map(r => `
               <div class="autocomplete-item" data-ticker="${escapeHtml(r.ticker)}">
@@ -305,6 +317,7 @@ const initWatchlist = () => {
             resultsDiv.style.display = 'none';
           }
         } catch (e) {
+          if (seq !== requestSeq) return;
           resultsDiv.style.display = 'none';
         }
       }, 250);

@@ -65,14 +65,39 @@
     <script type="module">
         import { api } from '/static/js/api.js?v=3.0.0';
 
+        // Anti open-redirect: accetta solo path relativi same-origin.
+        // I control char TAB/LF/CR vengono rimossi dal parser URL in fase di
+        // navigazione: vanno rimossi anche qui, altrimenti `/%09/evil.com`
+        // aggira il controllo e diventa `//evil.com`. La validazione finale è
+        // semantica: URL risolto rispetto all'origin corrente e stesso origin.
+        const getSafeRedirect = () => {
+            const redirect = new URLSearchParams(window.location.search).get('redirect');
+            const cleaned = (redirect || '').replace(/[\t\n\r]/g, '');
+            if (!cleaned) return '/static/index.html';
+            try {
+                const url = new URL(cleaned, window.location.origin);
+                if (url.origin === window.location.origin && url.pathname.startsWith('/')) {
+                    const out = url.pathname + url.search + url.hash;
+                    // Un pathname che inizia con '//' o '/\' resta protocol-relative
+                    // in navigazione (es. https://host//evil.com): va rifiutato.
+                    // Defense in depth: il valore ricostruito deve risolvere same-origin.
+                    if (!out.startsWith('//') && !out.startsWith('/\\') &&
+                        new URL(out, window.location.origin).origin === window.location.origin) {
+                        return out;
+                    }
+                }
+            } catch (e) {
+                // URL malformato: fallback sicuro.
+            }
+            return '/static/index.html';
+        };
+
         // Check if already authenticated
         (async () => {
             try {
                 const me = await api.getMe();
                 if (me && me.username) {
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const redirect = urlParams.get('redirect') || '/static/index.html';
-                    window.location.href = redirect;
+                    window.location.href = getSafeRedirect();
                 }
             } catch (e) {
                 // Not authenticated, stay on login page
@@ -117,9 +142,7 @@
                     localStorage.setItem('auth_token', res.access_token);
                     localStorage.setItem('auth_username', res.username);
 
-                    const urlParams = new URLSearchParams(window.location.search);
-                    const redirect = urlParams.get('redirect') || '/static/index.html';
-                    window.location.href = redirect;
+                    window.location.href = getSafeRedirect();
                 }
             } catch (err) {
                 alertBox.style.display = 'flex';

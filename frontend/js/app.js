@@ -27,22 +27,26 @@ const formatCompactNumber = (val) => {
 
 export const formatDate = (dateString) => {
   if (!dateString) return '-';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('it-IT', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric'
-  }).format(new Date(dateString));
+  }).format(date);
 };
 
 export const formatDateTime = (dateString) => {
   if (!dateString) return '-';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('it-IT', {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit'
-  }).format(new Date(dateString));
+  }).format(date);
 };
 
 // Escapes dynamic values before interpolation into innerHTML (XSS hardening).
@@ -69,29 +73,38 @@ export const showToast = (message, type = 'info', actionText = null, onAction = 
   
   let actionHtml = '';
   if (actionText && typeof onAction === 'function') {
-    actionHtml = `<button class="btn btn-ghost btn-sm toast-action" id="toastActionBtn">${escapeHtml(actionText)}</button>`;
+    actionHtml = `<button class="btn btn-ghost btn-sm toast-action">${escapeHtml(actionText)}</button>`;
   }
 
   toast.innerHTML = `<span>${escapeHtml(message)}</span>${actionHtml}`;
   container.appendChild(toast);
 
   if (actionText && onAction) {
-    toast.querySelector('#toastActionBtn')?.addEventListener('click', () => {
+    toast.querySelector('.toast-action')?.addEventListener('click', () => {
       onAction();
       toast.remove();
     });
   }
 
   setTimeout(() => toast.classList.add('show'), 10);
-  
-  let removeTimer = null;
-  const timer = setTimeout(() => {
-    toast.classList.remove('show');
-    clearTimeout(removeTimer);
-    removeTimer = setTimeout(() => toast.remove(), 300);
-  }, 4000);
 
-  toast.addEventListener('mouseenter', () => clearTimeout(timer));
+  let autoTimer = null;
+  let removeTimer = null;
+  const dismiss = () => {
+    clearTimeout(autoTimer);
+    clearTimeout(removeTimer);
+    toast.classList.remove('show');
+    removeTimer = setTimeout(() => toast.remove(), 300);
+  };
+
+  autoTimer = setTimeout(dismiss, 4000);
+
+  // L'hover sospende la chiusura; al mouseleave viene riprogrammata per non lasciare il toast appeso.
+  toast.addEventListener('mouseenter', () => clearTimeout(autoTimer));
+  toast.addEventListener('mouseleave', () => {
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(dismiss, 2500);
+  });
 };
 
 export const showLoading = (elementId = null) => {
@@ -573,7 +586,8 @@ const injectStockModalHTML = () => {
       modalEl.querySelectorAll('.timeframe-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentModalTimeframe = btn.dataset.tf;
-      loadModalChart(currentModalTicker, currentModalTimeframe);
+      // Nuova generazione: invalida eventuali risposte in volo di timeframe precedenti.
+      loadModalChart(currentModalTicker, currentModalTimeframe, ++modalLoadGeneration);
     });
   });
 
@@ -624,6 +638,15 @@ const initModalChart = () => {
   if (modalChart) {
     try { modalChart.remove(); } catch(e){}
   }
+  // I riferimenti alle serie del chart rimosso non sono più validi: azzerali per evitare
+  // removePriceLine/applyOptions su oggetti morti alla riapertura del modal.
+  modalChart = null;
+  modalAreaSeries = null;
+  modalCandleSeries = null;
+  modalVolumeSeries = null;
+  modalBreakevenLine = null;
+  // Nuovo ticker/chart: le serie del precedente non devono riapparire.
+  rawCandlesData = [];
 
   const themeColors = getChartThemeColors();
 
@@ -703,8 +726,12 @@ const applyModalChartData = () => {
 const loadModalChart = async (ticker, timeframe = '1m', generation = modalLoadGeneration) => {
   if (!modalChart || !ticker) return;
   try {
-    rawCandlesData = await api.getStockCandles(ticker, timeframe);
+    const data = await api.getStockCandles(ticker, timeframe);
+    // Solo la risposta della generazione corrente scrive lo stato condiviso:
+    // una risposta stale non deve rimpiazzare rawCandlesData, che theme change
+    // e toggle area/candele riapplicano sul chart corrente.
     if (generation !== modalLoadGeneration || !modalChart) return;
+    rawCandlesData = data;
     applyModalChartData();
   } catch (e) {
     console.error('Errore caricamento candele modale:', e);
@@ -713,6 +740,7 @@ const loadModalChart = async (ticker, timeframe = '1m', generation = modalLoadGe
 
 const runModalStockAi = async () => {
   if (!currentModalTicker) return;
+  const ticker = currentModalTicker;
   const container = document.getElementById('stockAiResultContainer');
   const btn = document.getElementById('btnRunStockAi');
   
@@ -721,7 +749,9 @@ const runModalStockAi = async () => {
   container.innerHTML = '<div class="flex justify-center items-center py-8"><div class="spinner"></div></div>';
 
   try {
-    const result = await api.analyzeStockOnDemand(currentModalTicker);
+    const result = await api.analyzeStockOnDemand(ticker);
+    // Il modal può essere stato riaperto su un altro ticker durante l'analisi: scarta il risultato.
+    if (ticker !== currentModalTicker) return;
     const actionBadgeClass = result.action === 'ACCUMULO' || result.action === 'BUY' ? 'badge-buy' : (result.action === 'PRESA_PROFITTO' || result.action === 'SELL' ? 'badge-sell' : 'badge-hold');
 
     let holdingBox = '';
@@ -782,7 +812,8 @@ const runModalStockAi = async () => {
       </div>
     `;
   } catch (e) {
-    container.innerHTML = `<div class="alert-error text-center py-4 text-xs">Impossibile completare l'analisi per ${escapeHtml(currentModalTicker)}: ${escapeHtml(e.message)}</div>`;
+    if (ticker !== currentModalTicker) return;
+    container.innerHTML = `<div class="alert-error text-center py-4 text-xs">Impossibile completare l'analisi per ${escapeHtml(ticker)}: ${escapeHtml(e.message)}</div>`;
   } finally {
     btn.disabled = false;
     btn.textContent = '⚡ Rielabora Analisi';
@@ -861,7 +892,8 @@ const openStockModal = async (ticker) => {
     }
 
     const tech = data.technical || {};
-    document.getElementById('smRsiVal').textContent = tech.rsi_14 || '--';
+    // 0 è un valore legittimo per RSI/Beta: usa ?? per non mostrare '--'.
+    document.getElementById('smRsiVal').textContent = tech.rsi_14 ?? '--';
     const rsiBadge = document.getElementById('smRsiBadge');
     rsiBadge.textContent = tech.rsi_status || 'Neutro';
     rsiBadge.className = `badge ${tech.rsi_badge || 'badge-hold'}`;
@@ -873,14 +905,15 @@ const openStockModal = async (ticker) => {
     document.getElementById('sm52Low').textContent = formatCurrency(data.fifty_two_week_low, data.currency);
     document.getElementById('sm52High').textContent = formatCurrency(data.fifty_two_week_high, data.currency);
     const pin = document.getElementById('sm52Pin');
-    const pct = Math.max(0, Math.min(100, data.fifty_two_week_pct || 50));
+    const raw52wPct = Number(data.fifty_two_week_pct);
+    const pct = Math.max(0, Math.min(100, Number.isFinite(raw52wPct) ? raw52wPct : 50));
     pin.style.left = `${pct}%`;
     document.getElementById('sm52Pos').textContent = `Posizione: ${pct}%`;
 
     document.getElementById('smMarketCap').textContent = formatCompactNumber(data.market_cap);
     document.getElementById('smPe').textContent = data.pe_ratio || '--';
     document.getElementById('smEps').textContent = data.eps ? formatCurrency(data.eps, data.currency) : '--';
-    document.getElementById('smBeta').textContent = data.beta || '--';
+    document.getElementById('smBeta').textContent = data.beta ?? '--';
     document.getElementById('smDivYield').textContent = data.dividend_yield ? `${data.dividend_yield}%` : '--%';
     document.getElementById('smVolume').textContent = formatCompactNumber(data.avg_volume || data.volume);
     document.getElementById('smSummary').textContent = data.summary || 'Nessuna descrizione disponibile.';
@@ -1053,6 +1086,8 @@ const checkAuth = async () => {
     const me = await api.getMe();
     if (me && me.username) {
       localStorage.setItem('auth_username', me.username);
+      const usernameEl = document.querySelector('.sidebar-username');
+      if (usernameEl) usernameEl.textContent = me.username;
     }
   } catch (e) {
     // Redirect handled by api.js
@@ -1372,6 +1407,13 @@ const openCommandPalette = () => {
 const closeCommandPalette = () => {
   const backdrop = document.getElementById('commandPaletteBackdrop');
   if (backdrop) backdrop.classList.remove('active');
+  // Annulla ricerca/debounce pendenti: non devono scrivere nella DOM nascosta.
+  if (paletteSearchAbortController) {
+    paletteSearchAbortController.abort();
+    paletteSearchAbortController = null;
+  }
+  clearTimeout(paletteSearchDebounce);
+  paletteSearchDebounce = null;
 };
 
 const openShortcutsHelp = () => {
@@ -1472,15 +1514,15 @@ const initApp = () => {
     }
   });
 
-  // Attach global click listener for stock tickers
+  // Attach global click listener for stock tickers: agisce solo su elementi con data-stock.
+  // I link senza data-stock (es. "Tutti ➔") devono navigare normalmente.
   document.addEventListener('click', (e) => {
-    const target = e.target.closest('[data-stock], .stock-ticker-link');
-    if (target) {
-      const ticker = target.dataset.stock || target.textContent.trim();
-      if (ticker) {
-        e.preventDefault();
-        openStockModal(ticker);
-      }
+    const target = e.target.closest('[data-stock]');
+    if (!target) return;
+    const ticker = target.dataset.stock;
+    if (ticker) {
+      e.preventDefault();
+      openStockModal(ticker);
     }
   });
 };

@@ -9,6 +9,25 @@ const handleUnauthorized = () => {
   }
 };
 
+// Estrae un messaggio leggibile da una risposta di errore FastAPI:
+// detail può essere stringa, array di errori di validazione o oggetto.
+const extractErrorMessage = (data, status) => {
+  const detail = data?.detail;
+  if (typeof detail === 'string' && detail) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail.map((d) => {
+      if (typeof d === 'string') return d;
+      if (d && typeof d.msg === 'string') return d.msg;
+      try { return JSON.stringify(d); } catch { return String(d); }
+    }).filter(Boolean);
+    if (parts.length > 0) return parts.join('; ');
+  } else if (detail && typeof detail === 'object') {
+    try { return JSON.stringify(detail); } catch { /* fallback sotto */ }
+  }
+  if (typeof data?.message === 'string' && data.message) return data.message;
+  return `API Error: ${status}`;
+};
+
 const fetchApi = async (endpoint, options = {}) => {
   const url = `${API_BASE}${endpoint}`;
   
@@ -46,8 +65,7 @@ const fetchApi = async (endpoint, options = {}) => {
     }
     
     if (!response.ok) {
-      const msg = data?.detail || data?.message || `API Error: ${response.status}`;
-      throw new Error(msg);
+      throw new Error(extractErrorMessage(data, response.status));
     }
     
     return data;
@@ -156,10 +174,15 @@ export const api = {
     
     if (response.status === 401) {
       handleUnauthorized();
-      return null;
+      // Non ritornare null: il chiamante mostrerebbe un falso successo durante il redirect.
+      throw new Error('Sessione scaduta');
     }
     
-    if (!response.ok) throw new Error('Import failed');
+    if (!response.ok) {
+      let data = null;
+      try { data = await response.json(); } catch { data = null; }
+      throw new Error(extractErrorMessage(data, response.status));
+    }
     return response.json();
   },
   

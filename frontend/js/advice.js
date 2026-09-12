@@ -3,23 +3,29 @@ import { formatCurrency, formatDateTime, showLoading, hideLoading, showToast, es
 
 let currentPage = 1;
 let currentFilters = { market: '', action: '', date: '', q: '' };
+let adviceRequestId = 0;
+
+// L14: mappa unica azione → classe badge, tollerante alle varianti (includes).
+const getActionBadgeClass = (action) => {
+  const act = String(action || '').toUpperCase();
+  if (act.includes('ACCUMULO') || act.includes('BUY')) return 'badge-buy';
+  if (act.includes('PROFITTO') || act.includes('SELL') || act.includes('ALLEGGERIMENTO')) return 'badge-sell';
+  return 'badge-hold';
+};
 
 const renderAdviceCard = (advice) => {
   const isFollowed = Boolean(advice.followed);
   const isIT = advice.market === 'IT';
   const flag = isIT ? '🇮🇹' : '🇺🇸';
 
-  let actionBadge = 'badge-hold';
+  const actionBadge = getActionBadgeClass(advice.action);
   let actionText = '🟡 MANTENIMENTO';
   const act = (advice.action || '').toUpperCase();
   if (act.includes('ACCUMULO') || act.includes('BUY')) {
-    actionBadge = 'badge-buy';
     actionText = '🟢 ACCUMULO / BUY';
   } else if (act.includes('PROFITTO') || act.includes('SELL') || act.includes('ALLEGGERIMENTO')) {
-    actionBadge = 'badge-sell';
     actionText = '🔴 PRESA PROFITTO / SELL';
   } else if (act.includes('PRUDENZA')) {
-    actionBadge = 'badge-hold';
     actionText = '🛡️ PRUDENZA';
   }
 
@@ -50,7 +56,7 @@ const renderAdviceCard = (advice) => {
             <tbody>
               ${stocks.map(s => {
                 const sAct = (s.action || 'HOLD').toUpperCase();
-                const sBadge = (sAct.includes('BUY') || sAct.includes('ACCUMULO')) ? 'badge-buy' : ((sAct.includes('SELL') || sAct.includes('PROFITTO')) ? 'badge-sell' : 'badge-hold');
+                const sBadge = getActionBadgeClass(sAct);
                 const sLabel = (sAct.includes('BUY') || sAct.includes('ACCUMULO')) ? '🟢 COMPRA' : ((sAct.includes('SELL') || sAct.includes('PROFITTO')) ? '🔴 VENDI' : '🟡 TIENI');
                 
                 const prio = (s.priority || 'MEDIA').toUpperCase();
@@ -163,14 +169,19 @@ const renderAdviceCard = (advice) => {
 };
 
 const loadAdvice = async (page = 1, append = false) => {
+  const requestId = ++adviceRequestId;
   const loadMoreBtn = document.getElementById('btnLoadMore');
   if (append && loadMoreBtn) loadMoreBtn.disabled = true;
   try {
     if (!append) showLoading('adviceContent');
-    
+
     const params = { page, limit: 10, days: 7, ...currentFilters };
-    const response = await api.getAdvice(params).catch(() => []);
-    
+    const response = await api.getAdvice(params);
+
+    // M2: scarta le risposte fuori ordine (filtri/debounce/load-more
+    // concorrenti) prima di qualsiasi scrittura sul DOM.
+    if (requestId !== adviceRequestId) return;
+
     const adviceList = Array.isArray(response) ? response : (response.data || []);
 
     if (page === 1) {
@@ -208,10 +219,15 @@ const loadAdvice = async (page = 1, append = false) => {
     if (loadMoreBtn) loadMoreBtn.style.display = adviceList.length === 10 ? 'block' : 'none';
 
   } catch (error) {
-    showToast('Errore nel caricamento dei consigli', 'error');
+    if (requestId === adviceRequestId) {
+      showToast('Errore nel caricamento dei consigli', 'error');
+    }
   } finally {
-    hideLoading('adviceContent');
-    if (append && loadMoreBtn) loadMoreBtn.disabled = false;
+    // Solo la richiesta più recente gestisce spinner e stato del bottone.
+    if (requestId === adviceRequestId) {
+      hideLoading('adviceContent');
+      if (loadMoreBtn) loadMoreBtn.disabled = false;
+    }
   }
 };
 
@@ -289,7 +305,7 @@ const runSingleStockAnalysis = async () => {
 
   try {
     const result = await api.analyzeStockOnDemand(ticker);
-    const actionBadgeClass = result.action === 'ACCUMULO' || result.action === 'BUY' ? 'badge-buy' : (result.action === 'PRESA_PROFITTO' || result.action === 'SELL' ? 'badge-sell' : 'badge-hold');
+    const actionBadgeClass = getActionBadgeClass(result.action);
 
     // Coercizione numerica sicura: l'output LLM non è validato e finisce in innerHTML.
     const upsideRaw = Number(result.upside_potential_pct);
@@ -487,15 +503,19 @@ const initAdvice = () => {
     loadAdvice(1);
   });
 
-  document.getElementById('btnGenerate')?.addEventListener('click', async () => {
+  const btnGenerate = document.getElementById('btnGenerate');
+  btnGenerate?.addEventListener('click', async () => {
+    if (btnGenerate.disabled) return; // L2: evita doppi click su ?force=true
+    btnGenerate.disabled = true;
     try {
       showLoading('adviceContent');
       await api.generateAdvice(true);
       showToast('Analisi per Borsa Italiana e Americana generata con successo!', 'success');
-      loadAdvice(1);
+      await loadAdvice(1);
     } catch(e) {
       showToast(e.message || 'Errore durante la generazione dell\'analisi', 'error');
     } finally {
+      btnGenerate.disabled = false;
       hideLoading('adviceContent');
     }
   });

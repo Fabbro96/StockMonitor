@@ -11,6 +11,9 @@ let currentChartType = 'area';
 let benchSeriesMap = {};
 let activeBenchmark = 'none';
 let performanceRawData = [];
+let performanceRequestId = 0;
+let benchmarkRequestId = 0;
+let dashboardHasLoaded = false;
 
 // Helper: bandiera mercato (IT→🇮🇹, EU→🇪🇺, resto→🇺🇸). Niente default USA per l'Europa.
 const marketFlag = (market) => {
@@ -187,6 +190,9 @@ const updateChartTheme = () => {
   benchSeriesMap['^GSPC']?.applyOptions({ color: themeColors.benchmarkSp });
   benchSeriesMap['FTSEMIB.MI']?.applyOptions({ color: themeColors.benchmarkMib });
   if (performanceRawData.length > 0) applyChartData();
+  // H4b: con un benchmark attivo il theme change non deve riportare
+  // permanentemente alla vista assoluta in EUR appena ridisegnata.
+  if (activeBenchmark !== 'none') refreshBenchmarks();
 };
 
 const applyChartData = () => {
@@ -250,7 +256,7 @@ const renderHeatmap = (items) => {
   }
 
   container.innerHTML = items.map(item => {
-    const chg = item.change_percent || 0;
+    const chg = Number(item.change_percent) || 0;
     let tileClass = 'tile-neutral';
     if (chg >= 3.0) tileClass = 'tile-gain-high';
     else if (chg >= 1.0) tileClass = 'tile-gain-mid';
@@ -284,7 +290,7 @@ const triggerSeedDemo = async () => {
     showLoading('dashboardContent');
     const res = await api.seedDemo();
     showToast(res.message || 'Demo caricata con successo!', 'success');
-    loadDashboardData();
+    await loadDashboardData();
   } catch (e) {
     showToast(e.message || 'Errore nel caricamento della demo', 'error');
   } finally {
@@ -292,16 +298,104 @@ const triggerSeedDemo = async () => {
   }
 };
 
-const loadPerformanceChart = async (days = 30) => {
-  if (!chart) return;
+const loadPerformanceChart = async (days = 30, silent = false) => {
+  if (!chart) return true;
+  const requestId = ++performanceRequestId;
   try {
-    const performance = await api.getPerformance(days).catch(() => ({ data: [] }));
-    if (performance.data && performance.data.length > 0) {
+    const performance = await api.getPerformance(days);
+    // M6: scarta la risposta se nel frattempo è partita una richiesta più recente
+    // (click rapidi 7G→1A), così un dato vecchio non sovrascrive quello nuovo.
+    if (requestId !== performanceRequestId) return true;
+    if (performance && performance.data && performance.data.length > 0) {
       performanceRawData = performance.data;
       applyChartData();
+      // H4b: il write assoluto appena fatto clobbererebbe la vista % del
+      // benchmark attivo; la riapplica (token-guarded) dopo di esso.
+      if (activeBenchmark !== 'none') refreshBenchmarks();
     }
+    return true;
   } catch (e) {
     console.error('Errore storico performance:', e);
+    if (requestId === performanceRequestId && !silent) {
+      showToast('Impossibile aggiornare il grafico performance', 'error');
+    }
+    return false;
+  }
+};
+
+// H4: (ri)carica i benchmark per l'orizzonte corrente con token anti-race.
+// Usato sia dai chip benchmark sia al cambio timeframe con benchmark attivo.
+const refreshBenchmarks = async () => {
+  const requestedBenchmark = activeBenchmark;
+  const requestId = ++benchmarkRequestId;
+
+  if (requestedBenchmark === 'none') {
+    benchSeriesMap['^GSPC']?.applyOptions({ visible: false });
+    benchSeriesMap['^GSPC']?.setData([]);
+    benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: false });
+    benchSeriesMap['FTSEMIB.MI']?.setData([]);
+    // Torna alla vista assoluta in EUR (linea/candele + volumi).
+    applyChartData();
+    return;
+  }
+
+  try {
+    const benchData = await api.getBenchmarks(currentChartDays);
+    // Scarta risposte obsolete: vale solo l'ultima richiesta e solo se il
+    // benchmark selezionato non è cambiato nel frattempo.
+    if (requestId !== benchmarkRequestId || requestedBenchmark !== activeBenchmark) return;
+
+    const portfolioPoints = Array.isArray(benchData?.portfolio)
+      ? benchData.portfolio.map(p => ({ time: p.date, value: p.growth_pct }))
+      : [];
+
+    if (portfolioPoints.length === 0) {
+      // Nessun dato portfolio in %: fallback alla vista assoluta, senza crash.
+      benchSeriesMap['^GSPC']?.applyOptions({ visible: false });
+      benchSeriesMap['^GSPC']?.setData([]);
+      benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: false });
+      benchSeriesMap['FTSEMIB.MI']?.setData([]);
+      applyChartData();
+      return;
+    }
+
+    // Confronto in crescita %: la linea principale è il portafoglio
+    // normalizzato; candele e volumi non hanno senso sulla scala %.
+    lineSeries?.applyOptions({ visible: true });
+    lineSeries?.setData(portfolioPoints);
+    candleSeries?.applyOptions({ visible: false });
+    volumeSeries?.setData([]);
+
+    if (requestedBenchmark === '^GSPC' || requestedBenchmark === 'both') {
+      const spData = toPointArray(benchData?.benchmarks?.['^GSPC']);
+      benchSeriesMap['^GSPC']?.applyOptions({ visible: true });
+      benchSeriesMap['^GSPC']?.setData(spData.map(p => ({ time: p.date, value: p.growth_pct })));
+    } else {
+      benchSeriesMap['^GSPC']?.applyOptions({ visible: false });
+      benchSeriesMap['^GSPC']?.setData([]);
+    }
+
+    if (requestedBenchmark === 'FTSEMIB.MI' || requestedBenchmark === 'both') {
+      const mibData = toPointArray(benchData?.benchmarks?.['FTSEMIB.MI']);
+      benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: true });
+      benchSeriesMap['FTSEMIB.MI']?.setData(mibData.map(p => ({ time: p.date, value: p.growth_pct })));
+    } else {
+      benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: false });
+      benchSeriesMap['FTSEMIB.MI']?.setData([]);
+    }
+
+    chart?.timeScale().fitContent();
+  } catch (e) {
+    console.error('Errore benchmark:', e);
+    // Solo la richiesta corrente tocca il DOM: un errore stale non deve
+    // sovrascrivere una vista benchmark più recente.
+    if (requestId !== benchmarkRequestId || requestedBenchmark !== activeBenchmark) return;
+    // Errore: niente overlay rotti, si torna alla vista assoluta.
+    benchSeriesMap['^GSPC']?.applyOptions({ visible: false });
+    benchSeriesMap['^GSPC']?.setData([]);
+    benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: false });
+    benchSeriesMap['FTSEMIB.MI']?.setData([]);
+    applyChartData();
   }
 };
 
@@ -310,51 +404,68 @@ const loadRiskMetrics = async () => {
   if (!container) return;
 
   try {
-    const metrics = await api.getRiskMetrics(180).catch(() => ({}));
+    const metrics = await api.getRiskMetrics(180);
     if (!metrics || Object.keys(metrics).length === 0) {
       container.innerHTML = '<div class="text-muted text-xs py-2 text-center span-full">Metriche calcolate dopo l\'inserimento di posizioni storiche.</div>';
       return;
     }
 
+    // P0.4: l'API espone le chiavi con suffisso _pct; fallback ai vecchi nomi
+    // e coercizione numerica per non stampare NaN su payload inattesi.
+    const maxDrawdown = Number(metrics.max_drawdown_pct ?? metrics.max_drawdown ?? 0) || 0;
+    const annualizedVolatility = Number(metrics.annualized_volatility_pct ?? metrics.annualized_volatility ?? 0) || 0;
+    const sharpeRatio = Number(metrics.sharpe_ratio ?? 0) || 0;
+    const weightedBetaRaw = Number(metrics.weighted_beta);
+    const weightedBeta = Number.isFinite(weightedBetaRaw) ? weightedBetaRaw : 1.0;
+
     container.innerHTML = `
       <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Max Drawdown</div>
-        <div class="text-lg font-bold font-mono text-loss mt-1">${formatPercent(metrics.max_drawdown || 0)}</div>
+        <div class="text-lg font-bold font-mono text-loss mt-1">${formatPercent(maxDrawdown)}</div>
         <div class="text-2xs text-muted mt-0.5">Picco-minimo</div>
       </div>
       <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Volatilità Annua</div>
-        <div class="text-lg font-bold font-mono text-primary mt-1">${(metrics.annualized_volatility || 0).toFixed(1)}%</div>
+        <div class="text-lg font-bold font-mono text-primary mt-1">${annualizedVolatility.toFixed(1)}%</div>
         <div class="text-2xs text-muted mt-0.5">Deviazione std</div>
       </div>
       <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Sharpe Ratio</div>
-        <div class="text-lg font-bold font-mono ${(metrics.sharpe_ratio || 0) >= 1 ? 'text-profit' : 'text-primary'} mt-1">${(metrics.sharpe_ratio || 0).toFixed(2)}</div>
+        <div class="text-lg font-bold font-mono ${sharpeRatio >= 1 ? 'text-profit' : 'text-primary'} mt-1">${sharpeRatio.toFixed(2)}</div>
         <div class="text-2xs text-muted mt-0.5">Rendimento / Rischio</div>
       </div>
       <div class="stat-card card-subtle p-3">
         <div class="text-xs text-muted">Beta Pesato</div>
-        <div class="text-lg font-bold font-mono text-primary mt-1">${(metrics.weighted_beta || 1.0).toFixed(2)}</div>
+        <div class="text-lg font-bold font-mono text-primary mt-1">${weightedBeta.toFixed(2)}</div>
         <div class="text-2xs text-muted mt-0.5">Sensibilità mercato</div>
       </div>
     `;
   } catch (e) {
     console.error('Errore metriche rischio:', e);
+    // M11: in errore non si azzerano le metriche già mostrate; si ripulisce
+    // solo lo skeleton del primo caricamento.
+    if (container.querySelector('.skeleton')) {
+      container.innerHTML = '<div class="text-muted text-xs py-2 text-center span-full">Metriche non disponibili al momento.</div>';
+    }
   }
 };
 
-const clearSkeletons = () => {
+// F1: pulisce gli skeleton del primo load. Se una call primaria è fallita non
+// si mostrano stati "vuoti" finti (0,00 € / "Nessun titolo...") ma l'indisponibilità.
+const clearSkeletons = (failed = {}) => {
+  const unavailable = 'Dati non disponibili';
+
   const statTotal = document.getElementById('statTotalValue');
-  if (statTotal && statTotal.querySelector('.skeleton')) statTotal.textContent = '0,00 €';
+  if (statTotal && statTotal.querySelector('.skeleton')) statTotal.textContent = failed.dash ? unavailable : '0,00 €';
   
   const dailyEl = document.getElementById('statDailyPnL');
-  if (dailyEl && dailyEl.querySelector('.skeleton')) dailyEl.textContent = '0,00 € (+0.00%)';
+  if (dailyEl && dailyEl.querySelector('.skeleton')) dailyEl.textContent = failed.dash ? unavailable : '0,00 € (+0.00%)';
   
   const totalEl = document.getElementById('statTotalPnL');
-  if (totalEl && totalEl.querySelector('.skeleton')) totalEl.textContent = '0,00 € (+0.00%)';
+  if (totalEl && totalEl.querySelector('.skeleton')) totalEl.textContent = failed.dash ? unavailable : '0,00 € (+0.00%)';
   
   const divEl = document.getElementById('statDividends');
-  if (divEl && divEl.querySelector('.skeleton')) divEl.textContent = '0,00 €/anno';
+  if (divEl && divEl.querySelector('.skeleton')) divEl.textContent = failed.dash ? unavailable : '0,00 €/anno';
   
   const tgEl = document.getElementById('statTopGainer');
   if (tgEl && tgEl.querySelector('.skeleton')) tgEl.textContent = '--';
@@ -366,106 +477,132 @@ const clearSkeletons = () => {
 
   const recentAdv = document.getElementById('recentAdviceList');
   if (recentAdv && recentAdv.textContent.includes('Caricamento')) {
-    recentAdv.innerHTML = '<div class="text-center text-muted py-4 text-xs">Nessuna analisi recente.</div>';
+    recentAdv.innerHTML = failed.advice
+      ? '<div class="text-center text-muted py-4 text-xs">Dati non disponibili.</div>'
+      : '<div class="text-center text-muted py-4 text-xs">Nessuna analisi recente.</div>';
   }
 
   const heatmap = document.getElementById('marketHeatmap');
   if (heatmap && (heatmap.querySelector('.skeleton') || heatmap.textContent.includes('Caricamento'))) {
-    renderHeatmap([]);
+    if (failed.heatmap) {
+      heatmap.innerHTML = '<div class="text-muted text-xs py-6 text-center span-full">Dati non disponibili.</div>';
+    } else {
+      renderHeatmap([]);
+    }
   }
 
   const tbody = document.getElementById('holdingsTableBody');
   if (tbody && (tbody.querySelector('.skeleton') || tbody.textContent.includes('Caricamento'))) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="7" class="text-center text-muted py-6">
-          Nessun titolo nel portafoglio.
-          <div class="mt-2 flex justify-center gap-2">
-            <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
-            <button class="btn btn-ghost btn-sm" id="btnTableSeedDemoFallback" data-action="seed-demo">🚀 Prova Demo</button>
-          </div>
-        </td>
-      </tr>
-    `;
+    if (failed.portfolio) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="7" class="text-center text-muted py-6">Dati non disponibili.</td>
+        </tr>
+      `;
+    } else {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="7" class="text-center text-muted py-6">
+            Nessun titolo nel portafoglio.
+            <div class="mt-2 flex justify-center gap-2">
+              <a href="/static/portfolio.html" class="btn btn-primary btn-sm">➕ Aggiungi Holding</a>
+              <button class="btn btn-ghost btn-sm" id="btnTableSeedDemoFallback" data-action="seed-demo">🚀 Prova Demo</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }
   }
 };
 
 const loadDashboardData = async (isSilentRefresh = false) => {
   try {
-    if (!isSilentRefresh) {
+    if (!isSilentRefresh && !dashboardHasLoaded) {
       renderSkeletons();
     }
     
-    const [dashData, portfolioRes, heatmapRes, adviceRes] = await Promise.all([
-      api.getDashboard().catch(() => ({})),
+    // M11: niente fallback vuoti che mascherano le outage. Ogni call traccia
+    // esito e dato; in caso di errore si mantiene quanto già renderizzato.
+    const settle = (promise) => promise.then(
+      data => ({ ok: true, data }),
+      error => ({ ok: false, error })
+    );
+
+    const [dashRes, portfolioRes, heatmapRes, adviceRes] = await Promise.all([
+      settle(api.getDashboard()),
       // getDashboard restituisce solo il summary aggregato (niente righe holdings):
       // la tabella qui sotto richiede la lista completa, quindi la call resta necessaria.
-      api.getPortfolio().catch(() => []),
-      api.getHeatmap().catch(() => []),
-      api.getLatestAdvice().catch(() => [])
+      settle(api.getPortfolio()),
+      settle(api.getHeatmap()),
+      settle(api.getLatestAdvice())
     ]);
 
+    const dashFailed = !dashRes.ok;
+    const heatmapFailed = !heatmapRes.ok;
+    const dashData = dashRes.ok ? dashRes.data : null;
     const summary = (dashData && dashData.portfolio_summary) ? dashData.portfolio_summary : {};
-    const portfolio = Array.isArray(portfolioRes) ? portfolioRes : [];
-    const heatmap = Array.isArray(heatmapRes) ? heatmapRes : [];
-    const advice = Array.isArray(adviceRes) ? adviceRes : [];
+    const portfolio = (portfolioRes.ok && Array.isArray(portfolioRes.data)) ? portfolioRes.data : null;
+    const heatmap = (heatmapRes.ok && Array.isArray(heatmapRes.data)) ? heatmapRes.data : null;
+    const advice = (adviceRes.ok && Array.isArray(adviceRes.data)) ? adviceRes.data : null;
 
-    // 1. Stat Cards
-    const totalValEl = document.getElementById('statTotalValue');
-    if (totalValEl) totalValEl.textContent = formatCurrency(summary.total_value || 0);
-    
-    const dailyEl = document.getElementById('statDailyPnL');
-    if (dailyEl) {
-      const dPnL = summary.daily_pnl || 0;
-      const dPct = summary.daily_pnl_percent || 0;
-      dailyEl.textContent = `${formatCurrency(dPnL)} (${formatPercent(dPct)})`;
-      dailyEl.className = `stat-value font-mono ${dPnL >= 0 ? 'text-profit' : 'text-loss'}`;
-    }
-    
-    const totalEl = document.getElementById('statTotalPnL');
-    if (totalEl) {
-      const tPnL = summary.total_pnl || 0;
-      const tPct = summary.total_pnl_percent || 0;
-      totalEl.textContent = `${formatCurrency(tPnL)} (${formatPercent(tPct)})`;
-      totalEl.className = `stat-value font-mono ${tPnL >= 0 ? 'text-profit' : 'text-loss'}`;
-    }
+    // 1. Stat Cards (M11: se il summary fallisce non si azzera nulla)
+    if (!dashFailed) {
+      const totalValEl = document.getElementById('statTotalValue');
+      if (totalValEl) totalValEl.textContent = formatCurrency(summary.total_value || 0);
 
-    // Dividends
-    const divEl = document.getElementById('statDividends');
-    if (divEl) divEl.textContent = `${formatCurrency(summary.estimated_annual_dividends || 0)}/anno`;
-    const divYieldEl = document.getElementById('statDividendYield');
-    if (divYieldEl) divYieldEl.textContent = `Yield Stimato: ${(summary.estimated_dividend_yield || 0).toFixed(2)}%`;
+      const dailyEl = document.getElementById('statDailyPnL');
+      if (dailyEl) {
+        const dPnL = summary.daily_pnl || 0;
+        const dPct = summary.daily_pnl_percent || 0;
+        dailyEl.textContent = `${formatCurrency(dPnL)} (${formatPercent(dPct)})`;
+        dailyEl.className = `stat-value font-mono ${dPnL >= 0 ? 'text-profit' : 'text-loss'}`;
+      }
 
-    if (isSilentRefresh && window.flashPriceChange) {
-      if (totalValEl) window.flashPriceChange(totalValEl, (summary.daily_pnl || 0) >= 0);
-      if (dailyEl) window.flashPriceChange(dailyEl, (summary.daily_pnl || 0) >= 0);
-      if (totalEl) window.flashPriceChange(totalEl, (summary.total_pnl || 0) >= 0);
-    }
+      const totalEl = document.getElementById('statTotalPnL');
+      if (totalEl) {
+        const tPnL = summary.total_pnl || 0;
+        const tPct = summary.total_pnl_percent || 0;
+        totalEl.textContent = `${formatCurrency(tPnL)} (${formatPercent(tPct)})`;
+        totalEl.className = `stat-value font-mono ${tPnL >= 0 ? 'text-profit' : 'text-loss'}`;
+      }
 
-    // Top Gainer
-    const tgEl = document.getElementById('statTopGainer');
-    const tgDescEl = document.getElementById('statTopGainerDesc');
-    if (tgEl && summary.top_gainer) {
-      tgEl.textContent = `${summary.top_gainer.ticker} (${formatPercent(summary.top_gainer.pnl_percent)})`;
-      if (tgDescEl) tgDescEl.textContent = `P&L Netto: ${formatCurrency(summary.top_gainer.pnl_absolute)}`;
-    } else if (tgEl) {
-      tgEl.textContent = '--';
-      if (tgDescEl) tgDescEl.textContent = 'Nessuna posizione in utile';
+      // Dividends
+      const divEl = document.getElementById('statDividends');
+      if (divEl) divEl.textContent = `${formatCurrency(summary.estimated_annual_dividends || 0)}/anno`;
+      const divYieldEl = document.getElementById('statDividendYield');
+      if (divYieldEl) divYieldEl.textContent = `Yield Stimato: ${(Number(summary.estimated_dividend_yield) || 0).toFixed(2)}%`;
+
+      if (isSilentRefresh && window.flashPriceChange) {
+        if (totalValEl) window.flashPriceChange(totalValEl, (summary.daily_pnl || 0) >= 0);
+        if (dailyEl) window.flashPriceChange(dailyEl, (summary.daily_pnl || 0) >= 0);
+        if (totalEl) window.flashPriceChange(totalEl, (summary.total_pnl || 0) >= 0);
+      }
+
+      // Top Gainer
+      const tgEl = document.getElementById('statTopGainer');
+      const tgDescEl = document.getElementById('statTopGainerDesc');
+      if (tgEl && summary.top_gainer) {
+        tgEl.textContent = `${summary.top_gainer.ticker} (${formatPercent(summary.top_gainer.pnl_percent)})`;
+        if (tgDescEl) tgDescEl.textContent = `P&L Netto: ${formatCurrency(summary.top_gainer.pnl_absolute)}`;
+      } else if (tgEl) {
+        tgEl.textContent = '--';
+        if (tgDescEl) tgDescEl.textContent = 'Nessuna posizione in utile';
+      }
     }
 
     // 2. Chart & Risk (solo su load manuale/cambio timeframe: il refresh
     //    automatico silente li salta per non pesare sul server ogni ciclo)
     if (!isSilentRefresh) {
-      await loadPerformanceChart(currentChartDays).catch(err => console.debug('Chart error:', err));
+      await loadPerformanceChart(currentChartDays);
       loadRiskMetrics().catch(err => console.debug('Risk error:', err));
     }
 
-    // 3. Heatmap
-    renderHeatmap(heatmap);
+    // 3. Heatmap (mantiene quella precedente se la call è fallita)
+    if (heatmap !== null) renderHeatmap(heatmap);
 
     // 4. Holdings Table
     const tbody = document.getElementById('holdingsTableBody');
-    if (tbody) {
+    if (tbody && portfolio !== null) {
       if (portfolio.length === 0) {
         tbody.innerHTML = `
           <tr>
@@ -519,7 +656,7 @@ const loadDashboardData = async (isSilentRefresh = false) => {
 
     // 5. Recent Advice
     const adviceList = document.getElementById('recentAdviceList');
-    if (adviceList) {
+    if (adviceList && advice !== null) {
       if (advice.length === 0) {
         adviceList.innerHTML = '<div class="text-center text-muted py-6 text-xs">Nessuna analisi recente. Generane una nella sezione Consigli.</div>';
       } else {
@@ -549,11 +686,26 @@ const loadDashboardData = async (isSilentRefresh = false) => {
       }
     }
 
-    if (dashData && dashData.market_status) {
-      updateMarketStatus(dashData.market_status);
-    } else {
-      updateMarketStatus();
+    // 6. Market status (dal summary; se fallito si mantiene quello precedente)
+    if (dashData) {
+      if (dashData.market_status) updateMarketStatus(dashData.market_status);
+      else updateMarketStatus();
     }
+
+    // M11/F1: le outage delle call primarie vengono segnalate solo sul load non
+    // silente; i dati già mostrati restano intatti (skeleton ripuliti). Sul primo
+    // load le sezioni fallite mostrano "Dati non disponibili" senza stati vuoti finti.
+    if (!isSilentRefresh && (!dashRes.ok || !portfolioRes.ok || !heatmapRes.ok || !adviceRes.ok)) {
+      const failedNames = [];
+      if (dashFailed) failedNames.push('riepilogo');
+      if (!portfolioRes.ok) failedNames.push('portafoglio');
+      if (heatmapFailed) failedNames.push('heatmap');
+      if (!adviceRes.ok) failedNames.push('consigli');
+      clearSkeletons({ dash: dashFailed, portfolio: !portfolioRes.ok, heatmap: heatmapFailed, advice: !adviceRes.ok });
+      showToast(`Dati non aggiornati (${failedNames.join(', ')}). Riprova più tardi.`, 'error');
+    }
+
+    dashboardHasLoaded = true;
 
   } catch (error) {
     clearSkeletons();
@@ -608,6 +760,8 @@ const initDashboard = () => {
         currentChartDays = parseInt(btn.dataset.days) || 30;
         localStorage.setItem('dashboard_timeframe', currentChartDays);
         loadPerformanceChart(currentChartDays);
+        // H4b: il benchmark attivo va riallineato al nuovo orizzonte temporale.
+        if (activeBenchmark !== 'none') refreshBenchmarks();
       });
     });
   }
@@ -625,6 +779,9 @@ const initDashboard = () => {
         btn.setAttribute('aria-pressed', 'true');
         currentChartType = btn.dataset.type;
         applyChartData();
+        // Con un benchmark attivo applyChartData riporta la vista assoluta:
+        // riapplica subito la vista % per mantenere coerente il confronto.
+        if (activeBenchmark !== 'none') refreshBenchmarks();
       });
     });
   }
@@ -633,7 +790,7 @@ const initDashboard = () => {
   const benchChips = document.getElementById('benchmarkChips');
   if (benchChips) {
     benchChips.querySelectorAll('.bench-chip').forEach(chip => {
-      chip.addEventListener('click', async () => {
+      chip.addEventListener('click', () => {
         benchChips.querySelectorAll('.bench-chip').forEach(c => {
           c.classList.remove('active');
           c.setAttribute('aria-pressed', 'false');
@@ -641,32 +798,7 @@ const initDashboard = () => {
         chip.classList.add('active');
         chip.setAttribute('aria-pressed', 'true');
         activeBenchmark = chip.dataset.bench;
-
-        if (activeBenchmark === 'none') {
-          benchSeriesMap['^GSPC']?.applyOptions({ visible: false });
-          benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: false });
-        } else {
-          try {
-            const benchData = await api.getBenchmarks(currentChartDays);
-            if (activeBenchmark === '^GSPC' || activeBenchmark === 'both') {
-              const spData = toPointArray(benchData?.benchmarks?.['^GSPC']);
-              benchSeriesMap['^GSPC']?.applyOptions({ visible: true });
-              benchSeriesMap['^GSPC']?.setData(spData.map(p => ({ time: p.date, value: p.value })));
-            } else {
-              benchSeriesMap['^GSPC']?.applyOptions({ visible: false });
-            }
-
-            if (activeBenchmark === 'FTSEMIB.MI' || activeBenchmark === 'both') {
-              const mibData = toPointArray(benchData?.benchmarks?.['FTSEMIB.MI']);
-              benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: true });
-              benchSeriesMap['FTSEMIB.MI']?.setData(mibData.map(p => ({ time: p.date, value: p.value })));
-            } else {
-              benchSeriesMap['FTSEMIB.MI']?.applyOptions({ visible: false });
-            }
-          } catch (e) {
-            console.error('Errore benchmark:', e);
-          }
-        }
+        refreshBenchmarks();
       });
     });
   }

@@ -1,11 +1,11 @@
 import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.future import select
 import uvicorn
 
@@ -108,29 +108,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# GZip compression middleware (riduce i payload JSON pesanti fino al 75-80%)
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# GZip compression middleware (riduce i payload JSON pesanti fino al 75-80%).
+# compresslevel=5 (default 9): con 1 worker sul NAS il livello 9 brucia CPU su
+# asset web multi-MB per un guadagno di size marginale; 5 è il compromesso.
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=5)
 
-# Asset statici versionati (?v=): cache aggressiva; gli altri asset (anche HTML)
-# vanno sempre rivalidati per evitare JS/CSS stantii dopo un deploy.
-_IMMUTABLE_EXTENSIONS = (".css", ".js", ".mjs", ".woff", ".woff2", ".ttf", ".otf", ".eot")
+# La build Flutter web è servita a root `/` con hash routing (nessun fallback SPA).
+# TUTTO l'output web è `no-cache, must-revalidate`: gli asset Flutter non sono
+# content-hashed e il service worker è uno stub deprecato. ETag/Last-Modified
+# restano disponibili per la rivalidazione condizionale. Gli header di API e
+# /health non vengono toccati.
+_WEB_EXEMPT_PREFIXES = ("/api", "/health", "/docs", "/redoc", "/openapi.json")
 
 @app.middleware("http")
 async def add_cache_headers(request, call_next):
     response = await call_next(request)
-    # L17: niente header di cache asset su risposte di errore (404/500).
-    if response.status_code < 400:
-        path = request.url.path
-        if path.startswith("/static"):
-            if path.endswith(_IMMUTABLE_EXTENSIONS) and request.query_params.get("v"):
-                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-            else:
-                # HTML e asset non versionati: rivalidazione obbligatoria
-                response.headers["Cache-Control"] = "no-cache, must-revalidate"
-                response.headers["Pragma"] = "no-cache"
-                response.headers["Expires"] = "0"
-        elif path.endswith(".html"):
-            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    if response.status_code < 400 and not request.url.path.startswith(_WEB_EXEMPT_PREFIXES):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 @app.get("/health", tags=["system"])
@@ -165,16 +161,76 @@ app.include_router(advice_router, dependencies=[Depends(get_current_user)])
 app.include_router(settings_router, dependencies=[Depends(get_current_user)])
 app.include_router(watchlist_router, dependencies=[Depends(get_current_user)])
 
-# Check if frontend exists to mount static files
-frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "frontend")
-if os.path.exists(frontend_dir):
-    app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
-else:
-    logger.warning(f"Frontend directory not found at {frontend_dir}. Static files won't be served.")
+# ---------------------------------------------------------------------------
+# Serving della build Flutter web (P4)
+# ---------------------------------------------------------------------------
+def _resolve_web_dir() -> str | None:
+    """Risolve la web dir: settings.WEB_DIR, poi fallback dev <repo>/app/build/web."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [settings.WEB_DIR, os.path.join(repo_root, "app", "build", "web")]
+    for candidate in candidates:
+        if candidate and os.path.isdir(candidate):
+            return os.path.abspath(candidate)
+    return None
 
-@app.get("/")
-async def root():
-    return RedirectResponse(url="/static/index.html")
+
+# Redirect legacy (302) dal vecchio frontend statico alle route hash della app.
+# F5: la query string originale viene propagata nel target (nel fragment per le
+# route hash), così i prefill del vecchio frontend (?add=, ?redirect=, ...) non
+# vanno persi.
+def _legacy_redirect(target: str, request: Request) -> RedirectResponse:
+    if request.url.query:
+        separator = "&" if "?" in target else "?"
+        target = f"{target}{separator}{request.url.query}"
+    return RedirectResponse(url=target, status_code=302)
+
+
+@app.get("/static", include_in_schema=False)
+async def legacy_static_root(request: Request):
+    return _legacy_redirect("/", request)
+
+@app.get("/static/index.html", include_in_schema=False)
+async def legacy_static_index(request: Request):
+    return _legacy_redirect("/", request)
+
+@app.get("/static/login.html", include_in_schema=False)
+async def legacy_static_login(request: Request):
+    return _legacy_redirect("/#/login", request)
+
+@app.get("/static/watchlist.html", include_in_schema=False)
+async def legacy_static_watchlist(request: Request):
+    return _legacy_redirect("/#/watchlist", request)
+
+@app.get("/static/portfolio.html", include_in_schema=False)
+async def legacy_static_portfolio(request: Request):
+    return _legacy_redirect("/#/portfolio", request)
+
+@app.get("/static/advice.html", include_in_schema=False)
+async def legacy_static_advice(request: Request):
+    return _legacy_redirect("/#/advice", request)
+
+@app.get("/static/settings.html", include_in_schema=False)
+async def legacy_static_settings(request: Request):
+    return _legacy_redirect("/#/settings", request)
+
+web_dir = _resolve_web_dir()
+if web_dir:
+    logger.info(f"Serving Flutter web build from {web_dir}")
+    # Mount a root DOPO router e /health: l'ordine di registrazione garantisce
+    # che /api/* e /health abbiano precedenza sul mount.
+    app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
+else:
+    logger.warning(
+        f"Build web non trovata (WEB_DIR={settings.WEB_DIR!r} e nessun fallback "
+        "app/build/web). GET / risponderà 503."
+    )
+
+    @app.get("/", include_in_schema=False)
+    async def root_no_web():
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Build web non trovata. Esegui 'flutter build web' o imposta WEB_DIR."},
+        )
 
 if __name__ == "__main__":
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     REDDIT_CLIENT_ID: str | None = None
     REDDIT_CLIENT_SECRET: str | None = None
     DB_PATH: str = "data/stock_monitor.db"
+    # Directory della build Flutter web servita dal backend (Docker: /app/web).
+    # In dev, se non esiste, il backend ripiega su <repo>/app/build/web.
+    WEB_DIR: str = "/app/web"
     ALERT_CHECK_INTERVAL_MINUTES: int = 15
     LOG_LEVEL: str = "INFO"
 

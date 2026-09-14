@@ -34,6 +34,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 TEST_DIR = "/tmp/stock_monitor_e2e"
 TEST_DB = os.path.join(TEST_DIR, "stock_monitor_test.db")
+TEST_WEB_DIR = os.path.join(TEST_DIR, "web")
 ADMIN_USER = "admin"
 ADMIN_PASS = "admin123"
 
@@ -46,10 +47,32 @@ os.environ["GEMINI_API_KEY"] = ""
 os.environ["ADMIN_USERNAME"] = ADMIN_USER
 os.environ["ADMIN_PASSWORD"] = ADMIN_PASS
 os.environ["LOG_LEVEL"] = "INFO"
+# Fixture web temporanea: il backend la serve a root `/` (vedi [18]).
+# Deve essere creata PRIMA dell'import di backend.main (vedi run_all).
+os.environ["WEB_DIR"] = TEST_WEB_DIR
 
 PASS = 0
 FAIL = 0
 FAILURES: list[str] = []
+
+
+def _create_web_fixture(root: str) -> None:
+    """Crea una build web fittizia (stessa shape di flutter build web)."""
+    os.makedirs(os.path.join(root, "assets"), exist_ok=True)
+    os.makedirs(os.path.join(root, "canvaskit"), exist_ok=True)
+    files = {
+        "index.html": "<!DOCTYPE html><html><body><div id='fixture-index'>Stock Monitor fixture</div></body></html>",
+        "main.dart.js": "// fixture main.dart.js\n",
+        "flutter_bootstrap.js": "// fixture flutter_bootstrap.js\n",
+        "flutter.js": "// fixture flutter.js\n",
+        "version.json": '{"version": "e2e-fixture"}',
+        "manifest.json": '{"name": "Stock Monitor"}',
+        "assets/AssetManifest.bin": "fixture-asset-manifest",
+        "canvaskit/canvaskit.js": "// fixture canvaskit.js\n",
+    }
+    for rel_path, content in files.items():
+        with open(os.path.join(root, rel_path), "w", encoding="utf-8") as fh:
+            fh.write(content)
 
 
 def check(name: str, condition: bool, detail: str = ""):
@@ -911,33 +934,74 @@ async def test_advice_isolation(c: httpx.AsyncClient, admin_h: dict):
           all(a["id"] != legacy_id for a in r.json()))
 
 
-async def test_cache_headers(c: httpx.AsyncClient):
-    print("\n[18] Cache header asset statici")
-    r = await c.get("/static/index.html")
-    check("HTML -> no-cache, must-revalidate",
-          r.status_code == 200 and r.headers.get("cache-control") == "no-cache, must-revalidate",
+async def test_web_serving_and_cache(c: httpx.AsyncClient):
+    print("\n[18] Serving web Flutter a root + no-cache + redirect legacy")
+    # Root -> index.html della fixture (hash routing, nessun redirect)
+    r = await c.get("/")
+    check("GET / -> 200 con index.html", r.status_code == 200, str(r.status_code))
+    check("/ serve l'index.html della fixture", "fixture-index" in r.text, r.text[:80])
+    check("/ -> no-cache, must-revalidate",
+          r.headers.get("cache-control") == "no-cache, must-revalidate",
           str(r.headers.get("cache-control")))
 
-    r = await c.get("/static/css/style.css?v=e2e")
-    cc_css = r.headers.get("cache-control", "")
-    check("CSS versionato (?v=) -> max-age lungo + immutable",
-          r.status_code == 200 and "max-age=31536000" in cc_css and "immutable" in cc_css, cc_css)
+    # TUTTO l'output web (anche asset non versionati) -> no-cache
+    for path in ["/index.html", "/main.dart.js", "/flutter_bootstrap.js", "/flutter.js",
+                 "/version.json", "/manifest.json", "/assets/AssetManifest.bin",
+                 "/canvaskit/canvaskit.js"]:
+        r = await c.get(path)
+        check(f"{path} -> 200 con no-cache",
+              r.status_code == 200 and r.headers.get("cache-control") == "no-cache, must-revalidate",
+              f"{r.status_code} {r.headers.get('cache-control')}")
 
-    r = await c.get("/static/js/app.js?v=e2e")
-    cc_js = r.headers.get("cache-control", "")
-    check("JS versionato (?v=) -> max-age lungo + immutable",
-          r.status_code == 200 and "max-age=31536000" in cc_js and "immutable" in cc_js, cc_js)
-
-    # Asset NON versionati (es. login.html carica js/api.js): mai cache lunga
-    r = await c.get("/static/js/api.js")
-    check("JS senza ?v= -> no-cache, must-revalidate",
-          r.status_code == 200 and r.headers.get("cache-control") == "no-cache, must-revalidate",
+    # Un eventuale ?v= non deve più abilitare cache immutabile
+    r = await c.get("/main.dart.js?v=e2e")
+    check("main.dart.js?v= -> resta no-cache (niente immutable)",
+          r.status_code == 200 and r.headers.get("cache-control") == "no-cache, must-revalidate"
+          and "immutable" not in r.headers.get("cache-control", ""),
           str(r.headers.get("cache-control")))
 
-    r = await c.get("/static/css/style.css")
-    check("CSS senza ?v= -> no-cache, must-revalidate",
-          r.status_code == 200 and r.headers.get("cache-control") == "no-cache, must-revalidate",
+    # /health e API non ricevono gli header di cache web.
+    # NB: il client della suite accumula il cookie HttpOnly di login, quindi per
+    # il check "senza token" serve un client pulito.
+    r = await c.get("/health")
+    check("/health -> 200 senza header cache web",
+          r.status_code == 200 and "cache-control" not in r.headers,
           str(r.headers.get("cache-control")))
+    from backend.main import app as _app
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app),
+                                 base_url="http://test", timeout=10.0) as fresh:
+        r = await fresh.get("/api/portfolio/")
+    check("API protetta (client senza cookie) -> 401 senza header cache web",
+          r.status_code == 401 and "cache-control" not in r.headers,
+          f"{r.status_code} {r.headers.get('cache-control')}")
+
+    # Redirect legacy (302) verso la app Flutter
+    legacy_redirects = {
+        "/static": "/",
+        "/static/index.html": "/",
+        "/static/login.html": "/#/login",
+        "/static/watchlist.html": "/#/watchlist",
+        "/static/portfolio.html": "/#/portfolio",
+        "/static/advice.html": "/#/advice",
+        "/static/settings.html": "/#/settings",
+    }
+    for path, target in legacy_redirects.items():
+        r = await c.get(path)
+        check(f"{path} -> 302 {target}",
+              r.status_code == 302 and r.headers.get("location") == target,
+              f"{r.status_code} {r.headers.get('location')}")
+
+    # F5: la query string originale viene propagata nel target hash (prefill)
+    legacy_query_redirects = {
+        "/static/portfolio.html?add=AAPL": "/#/portfolio?add=AAPL",
+        "/static/login.html?redirect=/settings": "/#/login?redirect=/settings",
+        "/static/watchlist.html?add=MSFT&src=legacy": "/#/watchlist?add=MSFT&src=legacy",
+    }
+    for path, target in legacy_query_redirects.items():
+        r = await c.get(path)
+        check(f"{path} -> 302 {target} (query propagata)",
+              r.status_code == 302 and r.headers.get("location") == target,
+              f"{r.status_code} {r.headers.get('location')}")
 
 
 async def test_fetch_batch_single_ticker_multiindex():
@@ -2370,6 +2434,9 @@ async def run_all():
 
     shutil.rmtree(TEST_DIR, ignore_errors=True)
     os.makedirs(TEST_DIR, exist_ok=True)
+    # La fixture web deve esistere PRIMA dell'import di backend.main: la web dir
+    # viene risolta all'import (WEB_DIR env -> fixture, vedi test [18]).
+    _create_web_fixture(TEST_WEB_DIR)
 
     from backend.main import app
 
@@ -2398,7 +2465,7 @@ async def run_all():
             await test_retention_cleanup()
             await test_stale_fallback_not_persisted()
             await test_advice_isolation(c, h)
-            await test_cache_headers(c)
+            await test_web_serving_and_cache(c)
             await test_fetch_batch_single_ticker_multiindex()
             await test_alerting_stale_uses_db()
             await test_perf_caches_and_contracts(c, h)

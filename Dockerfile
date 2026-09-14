@@ -20,7 +20,49 @@ RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install -r requirements.txt
 
 # ============================================================================
-# Stage 2 - runtime: slim image, no gcc/build toolchain
+# Stage 2 - webbuilder: compile the Flutter web bundle
+# ============================================================================
+# Flutter is pinned via the official release tarball, not a container tag:
+# ghcr.io/cirruslabs/flutter:3.47.2 does not exist (404, verified 2026-09-14)
+# and :stable may ship a Dart SDK older than the `sdk: ^3.13.2` constraint in
+# app/pubspec.yaml, breaking the build. Keep FLUTTER_VERSION in sync with that
+# constraint when the app SDK requirement changes (Flutter 3.47.2 -> Dart 3.13.2,
+# confirmed via releases_linux.json).
+# Tarball existence verified with:
+#   curl -sI https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.47.2-stable.tar.xz  ->  HTTP/2 200
+# --platform=$BUILDPLATFORM: the web bundle does not depend on the target
+# architecture, so build it once natively instead of emulating arm64 via QEMU.
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS webbuilder
+
+ARG FLUTTER_VERSION=3.47.2
+
+# Minimal download-only toolchain. unzip is required by the Flutter tool to
+# unpack the web engine artifacts; git is needed to inspect the checkout.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        git \
+        unzip \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/opt/flutter/bin:$PATH"
+
+# Flutter refuses to run from a git checkout owned by a different user; harmless
+# as root, required if the build ever runs with a remapped uid.
+RUN curl -fsSL "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz" -o /tmp/flutter.tar.xz \
+    && tar -xJf /tmp/flutter.tar.xz -C /opt \
+    && rm -f /tmp/flutter.tar.xz \
+    && git config --global --add safe.directory /opt/flutter \
+    && flutter --version
+
+COPY app/ /app/app
+RUN cd /app/app \
+    && flutter pub get \
+    && flutter build web --release --no-web-resources-cdn
+
+# ============================================================================
+# Stage 3 - runtime: slim image, no gcc/build toolchain
 # ============================================================================
 FROM python:3.12-slim AS runtime
 
@@ -35,7 +77,9 @@ COPY --from=builder /opt/venv /opt/venv
 
 # Application code
 COPY backend/ ./backend/
-COPY frontend/ ./frontend/
+
+# Flutter web bundle (served by the backend at /, replaces the old frontend/)
+COPY --from=webbuilder /app/app/build/web ./web
 
 # Data directory for SQLite
 RUN mkdir -p /app/data

@@ -11,7 +11,45 @@ env:
   IMAGE_NAME: fabbro96/stockmonitor
 
 jobs:
+  # WUD auto-deploys `latest` ~2 minutes after the push: never publish an image
+  # unless both the Flutter app and the backend are verified on the same commit.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter 3.47.2
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          channel: stable
+          cache: true
+
+      - name: Flutter analyze
+        working-directory: app
+        run: flutter analyze
+
+      - name: Flutter tests
+        working-directory: app
+        run: flutter test
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # The suite starts its own uvicorn instance with an isolated DB in /tmp.
+      - name: Backend e2e tests
+        run: python tests/e2e_test.py
+
   build-and-push:
+    needs: checks
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,5 +90,9 @@ jobs:
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Note: the Flutter web stage runs on $BUILDPLATFORM (native builder),
+          # so only the Python runtime image is built per target architecture.
+          # ignore-error: a full GHA cache (~3 GB Flutter layer) may exceed the
+          # 10 GB quota; never fail a publish because of the cache.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: type=gha,mode=max,ignore-error=true

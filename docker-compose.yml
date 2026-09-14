@@ -8,8 +8,10 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+      # Dev convenience only: live-edit backend code without rebuilding the image.
+      # The Flutter web bundle is baked into the image at /app/web (not mounted):
+      # it must stay in sync with the backend build.
       - ./backend:/app/backend
-      - ./frontend:/app/frontend
     env_file:
       - .env
     environment:

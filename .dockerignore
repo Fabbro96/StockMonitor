@@ -15,6 +15,24 @@ tests/
 # Runtime data (SQLite DB is bind-mounted at runtime)
 data/
 
+# Legacy HTML/JS frontend (no longer copied into the image in P4: the Flutter
+# web bundle is built in the webbuilder stage and baked in at /app/web)
+frontend/
+
+# Flutter app build artifacts & local state (rebuilt inside the webbuilder stage)
+app/build/
+app/.dart_tool/
+app/.idea/
+app/**/.gradle/
+app/android/local.properties
+app/.flutter-plugins-dependencies
+# Never leak local signing material into the image build context
+app/android/key.properties
+app/android/app/upload-keystore.jks
+**/*.jks
+**/*.keystore
+# NOTE: app/pubspec.lock is intentionally NOT ignored (reproducible builds).
+
 # Local tooling / session state
 .slim
 

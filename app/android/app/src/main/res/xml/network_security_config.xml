@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Stock Monitor è un'app self-hosted su LAN: il server (NAS) è raggiungibile in
+  HTTP semplice con IP variabile. Il cleartext è quindi permesso per l'intera
+  app. Se in futuro l'IP/dominio del server è fisso, restringere con
+  <domain-config> invece di <base-config>.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

@@ -1,0 +1,51 @@
+# ==============================================================================
+# Stock Monitor GO — compose minimale per NAS (TerraMaster F2-212, ARM64 2 GB)
+# ==============================================================================
+# Backend Go read-only (stdlib net/http + SQLite pure-Go + web embedded):
+# ~20 MB di immagine, 15-30 MB idle. NIENTE WUD qui (l'Oracle lo ha escluso
+# per F2-212: un watcher in più ruba RAM; gli update restano manuali).
+#
+# Uso:
+#   1. Test in parallelo al Python:  docker compose -f docker-compose.nas-go.yml up -d
+#      (il Go apre lo STESSO ./data in mode=ro; il Python resta writer unico)
+#   2. Verifica su http://<IP-NAS>:8001/health e la dashboard su :8001/
+#   3. Cutover: vedi README-NAS-GO.md (sposta il Go su :8000, spegni il Python)
+# ==============================================================================
+
+services:
+  stock-monitor:
+    image: ghcr.io/fabbro96/stockmonitor-go:latest
+    container_name: stock-monitor-go
+    restart: unless-stopped
+
+    # --- Limiti risorse F2-212 (2 GB RAM condivisa) ---
+    mem_limit: 64m
+    mem_reservation: 32m
+    cpus: 0.5
+
+    ports:
+      # 8001 in fase di test parallelo; in cutover diventa "8000:8000".
+      - "8001:8000"
+    volumes:
+      # Stesso file del backend Python, aperto dal Go in mode=ro.
+      - ./data:/data
+    environment:
+      # DEVE coincidere col SECRET_KEY del backend Python (stessi JWT).
+      - SECRET_KEY=stock-monitor-super-secret-key-2026-nas
+      - PORT=8000
+      - DB_PATH=/data/stock_monitor.db
+      - DB_MODE=ro
+      - TZ=Europe/Rome
+
+    healthcheck:
+      test: ["CMD", "/stockmon", "-healthcheck"]
+      interval: 60s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

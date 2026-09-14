@@ -174,6 +174,39 @@ sqlite3 data/stock_monitor.db ".backup 'data/stock_monitor.db.bak-$(date +%Y%m%d
 Il primo avvio di una nuova versione applica sul DB migrazioni **additive**: il
 backup è la via sicura per tornare indietro.
 
+### 🔐 Cifratura at-rest del database (SQLCipher)
+
+Il DB può essere cifrato at-rest con SQLCipher (driver `sqlcipher3`, wheel
+self-contained: nessuna dipendenza di sistema, anche su ARM64). Senza `DB_KEY`
+il comportamento resta plaintext (dev/CI invariati).
+
+**Attivazione sul NAS** (dati reali: fai PRIMA un backup a freddo come sopra):
+
+1. Genera una chiave: `openssl rand -base64 32`.
+2. Imposta `DB_KEY=<chiave>` nell'environment del compose e riavvia
+   (`docker compose up -d`).
+3. Al restart il backend rileva il plaintext, fa checkpoint WAL ed esegue
+   l'export cifrato con **verifica schema+conteggi+contenuti** (dump
+   `sqlite_master` e hash per tabella): solo dopo sposta gli originali e li
+   sostituisce con un unico swap atomico, rinominandoli in
+   `data/stock_monitor.db.plaintext-bak-<ts>-<pid>` (+ `-wal`/`-shm` se presenti,
+   permessi 0600). Durante la migrazione il backend tiene un **lock esclusivo**
+   sul DB: non avviare due istanze sullo stesso file (single-writer). Verifica
+   i log (`Migrazione cifratura completata`), poi archivia altrove o cancella i
+   backup plaintext.
+4. ⚠️ **Chiave persa = dati persi** (nessun recovery). Conserva `DB_KEY` fuori
+   dal NAS (password manager). Senza chiave l'avvio si blocca **senza toccare**
+   il file (aprire un cifrato senza chiave ne corromperebbe l'header); con chiave
+   errata l'errore è immediato al primo accesso.
+
+**Rollback al plaintext**: ferma il container, ripristina
+`data/stock_monitor.db.plaintext-bak-<ts>-<pid>` (e `-wal`/`-shm` se c'erano) sui nomi
+originali, rimuovi `DB_KEY` dal compose e riavvia. Prima del restore rimuovi
+eventuali residui `data/stock_monitor.db.encrypted-tmp-*` (+ sidecar). Attenzione:
+i delta scritti dopo la migrazione esistono solo nel cifrato — il restore li perde.
+Il backup plaintext contiene dati reali: archivialo cifrato (non lasciarlo in chiaro
+sul NAS).
+
 ## 🚀 Release
 
 Per tagliare una release stabile:

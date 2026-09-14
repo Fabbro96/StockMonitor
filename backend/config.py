@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     REDDIT_CLIENT_ID: str | None = None
     REDDIT_CLIENT_SECRET: str | None = None
     DB_PATH: str = "data/stock_monitor.db"
+    # Chiave di cifratura at-rest del database (SQLCipher). Se assente il DB
+    # resta plaintext (dev/CI invariati); se presente il DB viene creato o
+    # migrato in forma cifrata. MAI loggata. Generazione: openssl rand -base64 32.
+    # Chiave persa = dati persi (nessun recovery possibile).
+    DB_KEY: str | None = None
     # Directory della build Flutter web servita dal backend (Docker: /app/web).
     # In dev, se non esiste, il backend ripiega su <repo>/app/build/web.
     WEB_DIR: str = "/app/web"

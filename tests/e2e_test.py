@@ -40,6 +40,9 @@ ADMIN_PASS = "admin123"
 
 # Imposta variabili ambiente di test prima di qualsiasi import
 os.environ["DB_PATH"] = TEST_DB
+# La suite principale gira sempre in plaintext: una DB_KEY d'ambiente residua
+# (es. shell di sviluppo) romperebbe gli accessi sqlite3 diretti alle fixture.
+os.environ.pop("DB_KEY", None)
 os.environ["TELEGRAM_BOT_TOKEN"] = ""
 os.environ["TELEGRAM_CHAT_ID"] = ""
 os.environ["TELEGRAM_BOT_ENABLED"] = "false"
@@ -426,6 +429,253 @@ async def test_sqlite_integrity():
     check("busy_timeout >= 10000 sulle connessioni app", int(bt) >= 10000, f"(got {bt})")
     check("journal_mode wal sulle connessioni app", str(jm2).lower() == "wal", f"(got {jm2})")
     check("file -wal esiste", os.path.exists(TEST_DB + "-wal") or True)
+
+
+async def test_db_encryption():
+    """Cifratura at-rest SQLCipher: sezione isolata in subdir tmp UNICA.
+
+    Mai la TEST_DIR condivisa (flakiness nota da run concorrenti): usa una
+    mkdtemp dedicata per run e factory engine con path/chiave espliciti, senza
+    toccare le globali della suite principale. Copre: (a) apertura cifrata con
+    chiave, (b) migrazione da fixture plaintext, (c) chiave errata fail-fast,
+    (d) cifrato senza chiave rifiutato, (e) senza chiave resta plaintext,
+    (f) chiave con apice/doppio apice/backslash, (g) permessi 0600,
+    (h) resume fail-closed con tmp/backup orfani, (i) restore rollback.
+    """
+    import tempfile
+
+    print("\n[30] Cifratura at-rest SQLCipher")
+    from sqlalchemy import text as _text
+    from backend.database import (
+        detect_db_state,
+        migrate_plaintext_to_encrypted,
+        ensure_db_encryption,
+        create_db_engine,
+        DbEncryptionError,
+    )
+    import sqlcipher3
+
+    CRYPTO_DIR = tempfile.mkdtemp(prefix="stock_monitor_e2e_crypto_")
+    KEY = "e2e-crypto-key-0123456789abcdef"
+    WRONG_KEY = "e2e-wrong-key-fedcba9876543210"
+    engines = []
+    try:
+        # (e) senza chiave resta plaintext --------------------------------
+        p_plain = os.path.join(CRYPTO_DIR, "plain.db")
+        check("detect assente == missing", detect_db_state(p_plain) == "missing")
+        eng_plain = create_db_engine(p_plain, None)
+        engines.append(eng_plain)
+        async with eng_plain.begin() as conn:
+            await conn.execute(_text("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)"))
+            await conn.execute(_text("INSERT INTO t(v) VALUES ('x'), ('y')"))
+        with open(p_plain, "rb") as fh:
+            check("senza chiave: header resta magic SQLite",
+                  fh.read(16) == b"SQLite format 3\x00")
+        check("detect plaintext", detect_db_state(p_plain) == "plaintext")
+        await ensure_db_encryption(p_plain, None)  # no-op, non solleva
+        check("ensure no-key su plaintext: no-op", True)
+        std = sqlite3.connect(p_plain, timeout=10)
+        check("plaintext leggibile da sqlite3 stdlib",
+              std.execute("SELECT count(*) FROM t").fetchone()[0] == 2)
+        std.close()
+
+        # (a) apertura cifrata con chiave ----------------------------------
+        p_enc = os.path.join(CRYPTO_DIR, "enc.db")
+        eng_enc = create_db_engine(p_enc, KEY)
+        engines.append(eng_enc)
+        async with eng_enc.begin() as conn:
+            await conn.execute(_text("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)"))
+            await conn.execute(_text("INSERT INTO t(v) VALUES ('a'), ('b'), ('c')"))
+        with open(p_enc, "rb") as fh:
+            check("con chiave: header file != magic SQLite",
+                  fh.read(16) != b"SQLite format 3\x00")
+        check("detect cifrato == encrypted", detect_db_state(p_enc) == "encrypted")
+        await ensure_db_encryption(p_enc, KEY)  # no-op idempotente
+        check("ensure con chiave su cifrato: no-op", True)
+        eng_enc2 = create_db_engine(p_enc, KEY)
+        engines.append(eng_enc2)
+        async with eng_enc2.connect() as conn:
+            n = (await conn.execute(_text("SELECT count(*) FROM t"))).scalar()
+            fk = (await conn.execute(_text("PRAGMA foreign_keys"))).scalar()
+            bt = (await conn.execute(_text("PRAGMA busy_timeout"))).scalar()
+        check("round-trip cifrato: 3 righe rilette", n == 3, f"(got {n})")
+        check("pragma foreign_keys sul connector cifrato", fk == 1, f"(got {fk})")
+        check("pragma busy_timeout sul connector cifrato", int(bt) >= 10000, f"(got {bt})")
+
+        # (b) migrazione da fixture plaintext -------------------------------
+        p_mig = os.path.join(CRYPTO_DIR, "mig.db")
+        fix = sqlite3.connect(p_mig, timeout=10)
+        fix.execute("CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)")
+        fix.execute("CREATE TABLE orders(id INTEGER PRIMARY KEY, user_id INTEGER, amount REAL)")
+        fix.executemany("INSERT INTO users(name) VALUES (?)", [("ann",), ("bob",)])
+        fix.executemany("INSERT INTO orders(user_id, amount) VALUES (?, ?)",
+                        [(1, 10.5), (1, 20.0), (2, 7.25)])
+        fix.execute("PRAGMA user_version=13")
+        fix.execute("PRAGMA journal_mode=WAL")
+        fix.executemany("INSERT INTO orders(user_id, amount) VALUES (?, ?)", [(2, 1.0)])
+        fix.commit()
+        fix.close()
+        size_before = os.path.getsize(p_mig)
+        wal_before = os.path.exists(p_mig + "-wal")
+        bak = migrate_plaintext_to_encrypted(p_mig, KEY)
+        check("migrazione: backup plaintext creato", os.path.isfile(bak), f"({bak})")
+        if wal_before:
+            check("migrazione: backup sidecar -wal creato", os.path.isfile(bak + "-wal"))
+        else:
+            check("migrazione: nessun -wal da salvare (skip)", True)
+        with open(p_mig, "rb") as fh:
+            check("migrazione: originale ora cifrato (header != magic)",
+                  fh.read(16) != b"SQLite format 3\x00")
+        with open(bak, "rb") as fh:
+            check("migrazione: backup resta plaintext leggibile",
+                  fh.read(16) == b"SQLite format 3\x00")
+        chk = sqlcipher3.connect(p_mig, timeout=10.0, check_same_thread=False,
+                                 isolation_level=None)
+        chk.execute(f"PRAGMA key='{KEY}'")
+        chk.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        users_n = chk.execute("SELECT count(*) FROM users").fetchone()[0]
+        orders_n = chk.execute("SELECT count(*) FROM orders").fetchone()[0]
+        names = [r[0] for r in chk.execute("SELECT name FROM users ORDER BY id").fetchall()]
+        total = chk.execute("SELECT SUM(amount) FROM orders").fetchone()[0]
+        uv = chk.execute("PRAGMA user_version").fetchone()[0]
+        jm = chk.execute("PRAGMA journal_mode").fetchone()[0]
+        chk.close()
+        check("migrazione: righe preservate (2 users, 4 orders)",
+              users_n == 2 and orders_n == 4, f"({users_n}/{orders_n})")
+        check("migrazione: dati preservati", names == ["ann", "bob"] and abs(total - 38.75) < 1e-9,
+              f"({names}/{total})")
+        check("migrazione: user_version preservato (=13)", uv == 13, f"(got {uv})")
+        check("migrazione: journal_mode WAL reimpostato", str(jm).lower() == "wal", f"(got {jm})")
+        eng_mig = create_db_engine(p_mig, KEY)
+        engines.append(eng_mig)
+        async with eng_mig.connect() as conn:
+            n2 = (await conn.execute(_text("SELECT count(*) FROM orders"))).scalar()
+        check("migrazione: engine cifrato legge i dati migrati", n2 == 4, f"(got {n2})")
+
+        # (b-fail) migrazione su non-plaintext: errore, originale intatto ----
+        size_mig = os.path.getsize(p_mig)
+        try:
+            migrate_plaintext_to_encrypted(p_mig, KEY)
+            check("migrazione su cifrato: solleva errore", False)
+        except DbEncryptionError:
+            check("migrazione su cifrato: solleva errore", True)
+        check("migrazione fallita: originale intatto",
+              os.path.getsize(p_mig) == size_mig and detect_db_state(p_mig) == "encrypted")
+
+        # (c) chiave errata -> fail-fast ------------------------------------
+        eng_bad = create_db_engine(p_mig, WRONG_KEY)
+        engines.append(eng_bad)
+        try:
+            async with eng_bad.connect() as conn:
+                await conn.execute(_text("SELECT 1"))
+            check("chiave errata: fail-fast", False)
+        except Exception as e:
+            check("chiave errata: fail-fast", "not a database" in str(e).lower(), str(e)[:100])
+
+        # (d) cifrato senza chiave -> rifiuto --------------------------------
+        try:
+            await ensure_db_encryption(p_mig, None)
+            check("cifrato senza chiave: rifiuto", False)
+        except DbEncryptionError:
+            check("cifrato senza chiave: rifiuto", True)
+        try:
+            std2 = sqlite3.connect(p_mig, timeout=10)
+            std2.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            std2.close()
+            check("stdlib non apre il cifrato", False)
+        except Exception as e:
+            check("stdlib non apre il cifrato", "not a database" in str(e).lower(),
+                  str(e)[:100])
+        check("rifiuto: file invariato", os.path.getsize(p_mig) == size_mig)
+
+        # (f) chiave con apice/doppio apice/backslash -------------------------
+        QUIRKY_KEY = "a'b\"c\\d"
+        p_q = os.path.join(CRYPTO_DIR, "quirky.db")
+        eng_q = create_db_engine(p_q, QUIRKY_KEY)
+        engines.append(eng_q)
+        async with eng_q.begin() as conn:
+            await conn.execute(_text("CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)"))
+            await conn.execute(_text("INSERT INTO t(v) VALUES ('q1')"))
+        eng_q2 = create_db_engine(p_q, QUIRKY_KEY)
+        engines.append(eng_q2)
+        async with eng_q2.connect() as conn:
+            nq = (await conn.execute(_text("SELECT count(*) FROM t"))).scalar()
+        check("chiave con apice: round-trip cifrato", nq == 1, f"(got {nq})")
+        with open(p_q, "rb") as fh:
+            check("chiave con apice: file cifrato", fh.read(16) != b"SQLite format 3\x00")
+        p_qm = os.path.join(CRYPTO_DIR, "qmig.db")
+        fixq = sqlite3.connect(p_qm, timeout=10)
+        fixq.execute("CREATE TABLE k(id INTEGER PRIMARY KEY, v TEXT)")
+        fixq.execute("INSERT INTO k(v) VALUES ('z')")
+        fixq.commit()
+        fixq.close()
+        bak_q = migrate_plaintext_to_encrypted(p_qm, QUIRKY_KEY)
+        check("chiave con apice: migrazione ok", os.path.isfile(bak_q), f"({bak_q})")
+        eng_qm = create_db_engine(p_qm, QUIRKY_KEY)
+        engines.append(eng_qm)
+        async with eng_qm.connect() as conn:
+            nqm = (await conn.execute(_text("SELECT count(*) FROM k"))).scalar()
+        check("chiave con apice: dati migrati leggibili", nqm == 1, f"(got {nqm})")
+
+        # (g) permessi 0600 ----------------------------------------------------
+        import stat as _stat
+        check("permessi 0600 fresh cifrato",
+              _stat.S_IMODE(os.stat(p_enc).st_mode) == 0o600,
+              oct(_stat.S_IMODE(os.stat(p_enc).st_mode)))
+        check("permessi 0600 migrato",
+              _stat.S_IMODE(os.stat(p_mig).st_mode) == 0o600,
+              oct(_stat.S_IMODE(os.stat(p_mig).st_mode)))
+        check("permessi 0600 backup plaintext",
+              _stat.S_IMODE(os.stat(bak).st_mode) == 0o600,
+              oct(_stat.S_IMODE(os.stat(bak).st_mode)))
+
+        # (h) resume fail-closed con orfani ------------------------------------
+        p_orph = os.path.join(CRYPTO_DIR, "orph.db")
+        with open(p_orph + ".encrypted-tmp-xyz", "wb") as fh:
+            fh.write(b"junk")
+        try:
+            await ensure_db_encryption(p_orph, KEY)
+            check("orfano tmp su missing: fail-closed", False)
+        except DbEncryptionError:
+            check("orfano tmp su missing: fail-closed", True)
+        check("orfano tmp: nessun DB fresco creato", not os.path.exists(p_orph))
+        p_orph2 = os.path.join(CRYPTO_DIR, "orph2.db")
+        with open(p_orph2 + ".plaintext-bak-20240101-000000-000000-1", "wb") as fh:
+            fh.write(b"junk")
+        try:
+            await ensure_db_encryption(p_orph2, KEY)
+            check("orfano backup su missing: fail-closed", False)
+        except DbEncryptionError:
+            check("orfano backup su missing: fail-closed", True)
+        check("orfano backup: nessun DB fresco creato", not os.path.exists(p_orph2))
+        p_orph3 = os.path.join(CRYPTO_DIR, "orph3.db")
+        open(p_orph3, "wb").close()  # file vuoto + orfano tmp
+        with open(p_orph3 + ".encrypted-tmp-xyz", "wb") as fh:
+            fh.write(b"junk")
+        try:
+            await ensure_db_encryption(p_orph3, KEY)
+            check("orfano tmp su empty: fail-closed", False)
+        except DbEncryptionError:
+            check("orfano tmp su empty: fail-closed", True)
+        check("orfano tmp su empty: file invariato", os.path.getsize(p_orph3) == 0)
+
+        # (i) restore rollback -> plaintext senza chiave ------------------------
+        p_rst = os.path.join(CRYPTO_DIR, "restored.db")
+        shutil.copy(bak, p_rst)
+        check("restore: detect plaintext", detect_db_state(p_rst) == "plaintext")
+        await ensure_db_encryption(p_rst, None)  # no-op, non solleva
+        rstd = sqlite3.connect(p_rst, timeout=10)
+        rn = rstd.execute("SELECT count(*) FROM orders").fetchone()[0]
+        rstd.close()
+        check("restore: leggibile senza chiave, dati intatti", rn == 4, f"(got {rn})")
+        _ = size_before  # fixture plaintext consumata dalla migrazione
+    finally:
+        for eng in engines:
+            try:
+                await eng.dispose()
+            except Exception:
+                pass
+        shutil.rmtree(CRYPTO_DIR, ignore_errors=True)
 
 
 async def test_concurrency(c: httpx.AsyncClient, h: dict):
@@ -2589,6 +2839,7 @@ async def run_all():
             await test_market_status_endpoint(c, h)
             await test_candles_cache_ttl()
             await test_sqlite_integrity()
+            await test_db_encryption()
 
     print("\n" + "=" * 60)
     print(f"RISULTATO: {PASS} passati, {FAIL} falliti")

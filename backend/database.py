@@ -1,5 +1,9 @@
 import os
+import glob
+import hashlib
+import sqlite3
 import logging
+from datetime import datetime
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import text, event
@@ -9,13 +13,364 @@ logger = logging.getLogger(__name__)
 
 DATABASE_URL = f"sqlite+aiosqlite:///{settings.DB_PATH}"
 
-# Configurazione ottimizzata engine con timeout esteso e concurrency WAL per SQLite
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=(settings.LOG_LEVEL == "DEBUG"),
-    connect_args={"timeout": 30},
-    pool_pre_ping=True
-)
+# ---------------------------------------------------------------------------
+# Cifratura at-rest (SQLCipher)
+# ---------------------------------------------------------------------------
+# Stato rilevato dai primi 16 byte del file: magic SQLite = plaintext,
+# qualsiasi altro contenuto = cifrato (fail-closed: un file illeggibile o
+# troncato viene trattato come cifrato, mai sovrascritto).
+SQLITE_MAGIC = b"SQLite format 3\x00"
+ENCRYPTED_TMP_SUFFIX = ".encrypted-tmp"
+PLAINTEXT_BACKUP_PREFIX = ".plaintext-bak-"
+_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
+
+
+class DbEncryptionError(Exception):
+    """Errore fatale di cifratura: lo startup deve bloccarsi, niente è stato sovrascritto."""
+
+
+def _escape_sqlite_literal(value: str) -> str:
+    """Escape per letterali stringa SQL (apici singoli raddoppiati)."""
+    return value.replace("'", "''")
+
+
+def _quote_ident(name: str) -> str:
+    """Quota un identificatore SQL (nomi tabella da sqlite_master)."""
+    return '"' + name.replace('"', '""') + '"'
+
+
+def detect_db_state(path: str) -> str:
+    """Rileva lo stato di un file DB: 'missing' | 'empty' | 'plaintext' | 'encrypted'.
+
+    Puro (solo path esplicito, nessuna I/O in scrittura), quindi unit-testabile.
+    Qualunque contenuto non vuoto diverso dal magic SQLite è 'encrypted'
+    (fail-closed: mai aperto/scritto senza chiave).
+    """
+    if not os.path.exists(path):
+        return "missing"
+    try:
+        if os.path.getsize(path) == 0:
+            return "empty"
+    except OSError:
+        return "missing"
+    try:
+        with open(path, "rb") as fh:
+            header = fh.read(16)
+    except OSError:
+        return "encrypted"
+    if header == SQLITE_MAGIC:
+        return "plaintext"
+    return "encrypted"
+
+
+def _utc_stamp() -> str:
+    """Timestamp univoco (microsecondi + PID) per nomi tmp/backup senza collisioni."""
+    return datetime.now().strftime("%Y%m%d-%H%M%S-%f") + f"-{os.getpid()}"
+
+
+def _ensure_parent_dir(path: str) -> None:
+    """Crea la parent dir; OSError wrappato in DbEncryptionError (fail-closed)."""
+    parent = os.path.dirname(os.path.abspath(path))
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except OSError as e:
+            raise DbEncryptionError(f"Creazione directory {parent} fallita: {e}") from e
+
+
+def _find_orphans(db_path: str) -> list:
+    """Residui di migrazione interrotta (`<db>.encrypted-tmp*`, `<db>.plaintext-bak-*`)."""
+    base = glob.escape(db_path)
+    found = []
+    for pattern in (base + ENCRYPTED_TMP_SUFFIX + "*", base + PLAINTEXT_BACKUP_PREFIX + "*"):
+        found.extend(glob.glob(pattern))
+    return sorted(found)
+
+
+def _remove_best_effort(path: str, notes: list) -> None:
+    """Rimozione tmp: gli OSError vengono annotati (non mascherano l'errore primario)."""
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        notes.append(f"{path}: {e}")
+
+
+def _fsync_file(path: str) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(path: str) -> None:
+    fd = os.open(os.path.dirname(os.path.abspath(path)) or ".", os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _table_row_counts(conn) -> dict:
+    """Mappa {tabella: n_righe} per le tabelle utente (esclude sqlite_%)."""
+    tables = [
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' "
+            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        ).fetchall()
+    ]
+    return {
+        table: conn.execute(f"SELECT count(*) FROM {_quote_ident(table)}").fetchone()[0]
+        for table in tables
+    }
+
+
+def _table_content_hash(conn, table: str) -> str:
+    """Checksum sha256 del contenuto ordinato di una tabella (dati, non solo conteggi)."""
+    info = conn.execute(f"PRAGMA table_info({_quote_ident(table)})").fetchall()
+    sql_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    without_rowid = bool(sql_row and sql_row[0] and "WITHOUT ROWID" in sql_row[0].upper())
+    if without_rowid:
+        pk_cols = [r[1] for r in info if len(r) > 5 and r[5]]
+        order_cols = pk_cols or [r[1] for r in info]
+        order_by = "ORDER BY " + ", ".join(_quote_ident(c) for c in order_cols) if order_cols else ""
+    else:
+        order_by = "ORDER BY rowid"
+    h = hashlib.sha256()
+    h.update(f"{table}\0".encode("utf-8"))
+    cur = conn.execute(f"SELECT * FROM {_quote_ident(table)} {order_by}")
+    for row in cur:
+        h.update(repr(tuple(row)).encode("utf-8") + b"\0")
+    return h.hexdigest()
+
+
+def _db_snapshot(conn) -> dict:
+    """Snapshot di verifica: conteggi + dump sqlite_master + hash contenuti per tabella."""
+    counts = _table_row_counts(conn)
+    schema = [
+        tuple(row) for row in conn.execute(
+            "SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name"
+        ).fetchall()
+    ]
+    return {
+        "counts": counts,
+        "schema": schema,
+        "hashes": {table: _table_content_hash(conn, table) for table in counts},
+    }
+
+
+def _open_encrypted(path: str, key: str, timeout: float = 30.0):
+    """Apre un DB cifrato con fail-fast: chiave errata -> DatabaseError immediato."""
+    import sqlcipher3
+    conn = sqlcipher3.connect(path, timeout=timeout, check_same_thread=False, isolation_level=None)
+    try:
+        conn.execute(f"PRAGMA key='{_escape_sqlite_literal(key)}'")
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+    except Exception:
+        conn.close()
+        raise
+    return conn
+
+
+def migrate_plaintext_to_encrypted(db_path: str, db_key: str) -> str:
+    """Migra un DB plaintext in cifrato senza perdita dati. Ritorna il path del backup.
+
+    Procedura sotto lock esclusivo (flock, single-writer): checkpoint WAL sul
+    plaintext, export su file temporaneo `<db>.encrypted-tmp-<ts>-<pid>` via
+    ATTACH + sqlcipher_export(), reimpostazione di user_version e
+    journal_mode=WAL (l'export non li copia), verifica snapshot completo
+    (dump sqlite_master + conteggi + hash contenuti per tabella), fsync di file
+    e directory, spostamento degli originali in `<db>.plaintext-bak-<ts>-<pid>`
+    e commit con un SINGOLO `os.replace` atomico. chmod 0600 ovunque.
+    Qualunque fallimento lascia gli originali intatti e solleva DbEncryptionError
+    (mai OSError grezzo); i tmp orfani non vengono mai cancellati qui, ma
+    bloccano il resume in ensure_db_encryption (fail-closed).
+    """
+    import fcntl
+    import sqlcipher3
+
+    if not db_key:
+        raise DbEncryptionError("Migrazione annullata: DB_KEY assente.")
+    _ensure_parent_dir(db_path)
+    stamp = _utc_stamp()
+    tmp_path = f"{db_path}{ENCRYPTED_TMP_SUFFIX}-{stamp}"
+    if os.path.exists(tmp_path):
+        raise DbEncryptionError(f"Migrazione annullata: tmp {tmp_path} già esistente.")
+
+    logger.info(f"Migrazione cifratura: checkpoint WAL + export di {db_path}")
+    try:
+        lock_fd = os.open(db_path, os.O_RDONLY)
+    except OSError as e:
+        raise DbEncryptionError(f"Migrazione annullata: apertura {db_path} per lock fallita: {e}") from e
+    try:
+        try:
+            # Lock esclusivo per tutta export+swap: single-writer durante la migrazione.
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        except OSError as e:
+            raise DbEncryptionError(f"Migrazione annullata: lock esclusivo su {db_path} fallito: {e}") from e
+
+        # Re-check dentro il lock: un migratore concorrente potrebbe aver già vinto.
+        if detect_db_state(db_path) != "plaintext":
+            raise DbEncryptionError(
+                f"Migrazione annullata: {db_path} non è plaintext (già migrato in concorrenza?)."
+            )
+
+        # L'export DEVE girare su connessione SQLCipher (sqlcipher_export non esiste
+        # in sqlite3 stdlib); SQLCipher apre il plaintext senza chiave.
+        src = sqlcipher3.connect(db_path, timeout=30.0, check_same_thread=False, isolation_level=None)
+        try:
+            src.execute("PRAGMA busy_timeout=30000")
+            src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            user_version = src.execute("PRAGMA user_version").fetchone()[0]
+            snapshot_before = _db_snapshot(src)
+            src.execute(
+                f"ATTACH DATABASE '{_escape_sqlite_literal(tmp_path)}' AS encrypted "
+                f"KEY '{_escape_sqlite_literal(db_key)}'"
+            )
+            try:
+                src.execute("SELECT sqlcipher_export('encrypted')")
+            finally:
+                src.execute("DETACH DATABASE encrypted")
+        except Exception as e:
+            notes: list = []
+            _remove_best_effort(tmp_path, notes)
+            logger.error(f"Migrazione cifratura fallita in export (originali intatti): {e} {notes}")
+            raise DbEncryptionError(f"Export cifrato fallito, originali intatti: {e} {notes}") from e
+        finally:
+            src.close()
+
+        try:
+            dst = _open_encrypted(tmp_path, db_key)
+            try:
+                # L'export non copia user_version né journal_mode: vanno reimpostati.
+                dst.execute(f"PRAGMA user_version={int(user_version)}")
+                dst.execute("PRAGMA journal_mode=WAL")
+                snapshot_after = _db_snapshot(dst)
+                dst.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            finally:
+                dst.close()
+        except Exception as e:
+            notes = []
+            for stale in (tmp_path,) + tuple(tmp_path + s for s in _SIDECAR_SUFFIXES):
+                _remove_best_effort(stale, notes)
+            logger.error(f"Migrazione cifratura fallita in verifica (originali intatti): {e} {notes}")
+            raise DbEncryptionError(f"Verifica export fallita, originali intatti: {e} {notes}") from e
+
+        if snapshot_after != snapshot_before:
+            notes = []
+            for stale in (tmp_path,) + tuple(tmp_path + s for s in _SIDECAR_SUFFIXES):
+                _remove_best_effort(stale, notes)
+            logger.error(
+                "Migrazione cifratura: snapshot divergente pre/post export "
+                "(originali intatti, tmp rimosso)."
+            )
+            raise DbEncryptionError(
+                f"Verifica export fallita: schema/conteggi/contenuti divergenti, originali intatti. {notes}"
+            )
+
+        # Durabilità PRIMA di toccare gli originali: chmod + fsync file e dir.
+        # Dopo TRUNCATE+close non devono restare sidecar del tmp: lo swap resta
+        # un singolo os.replace atomico (niente rename in sequenza sul commit).
+        os.chmod(tmp_path, 0o600)
+        try:
+            _fsync_file(tmp_path)
+            _fsync_dir(tmp_path)
+        except OSError as e:
+            notes = []
+            _remove_best_effort(tmp_path, notes)
+            raise DbEncryptionError(f"fsync tmp fallita, originali intatti: {e} {notes}") from e
+        for suffix in _SIDECAR_SUFFIXES:
+            leftover = tmp_path + suffix
+            if os.path.exists(leftover):
+                logger.warning(f"Sidecar tmp residuo post-checkpoint, rimosso: {leftover}")
+                try:
+                    os.remove(leftover)
+                except OSError as e:
+                    raise DbEncryptionError(
+                        f"Rimozione sidecar tmp {leftover} fallita, originali intatti: {e}"
+                    ) from e
+
+        backup_base = f"{db_path}{PLAINTEXT_BACKUP_PREFIX}{stamp}"
+        try:
+            for suffix in ("",) + _SIDECAR_SUFFIXES:
+                orig = db_path + suffix
+                if os.path.exists(orig):
+                    os.replace(orig, backup_base + suffix)
+            # Commit atomico singolo + fsync della directory.
+            os.replace(tmp_path, db_path)
+            _fsync_dir(db_path)
+        except OSError as e:
+            logger.error(f"Migrazione cifratura fallita nello swap: {e}")
+            raise DbEncryptionError(
+                f"Swap file fallito: {e}. Se {db_path} manca, ripristina "
+                f"{backup_base}* sui nomi originali prima di riavviare."
+            ) from e
+
+        os.chmod(db_path, 0o600)
+        for suffix in ("",) + _SIDECAR_SUFFIXES:
+            if os.path.exists(backup_base + suffix):
+                os.chmod(backup_base + suffix, 0o600)
+        logger.warning(
+            f"Migrazione cifratura completata: {db_path} ora cifrato, "
+            f"originali plaintext in {backup_base}* (verificare e poi archiviare/cancellare)."
+        )
+        return backup_base
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(lock_fd)
+
+
+async def ensure_db_encryption(db_path: str | None = None, db_key: str | None = None) -> None:
+    """Garantisce lo stato di cifratura atteso PRIMA di qualunque uso dell'engine.
+
+    - file assente/vuoto -> niente da fare (verrà creato cifrato se DB_KEY c'è),
+      MA se esistono residui `<db>.encrypted-tmp*` o `<db>.plaintext-bak-*`
+      (migrazione interrotta: MAI creare un DB fresco sopra i dati) -> fail-closed.
+    - plaintext + DB_KEY -> migrazione sicura con backup (converge se un
+      migratore concorrente ha già vinto la corsa).
+    - cifrato + DB_KEY -> niente da fare (fail-fast alla prima connessione se errata).
+    - cifrato senza DB_KEY -> DbEncryptionError, startup bloccato (MAI aprire o
+      scrivere un cifrato senza chiave: corrompe l'header).
+    - plaintext senza DB_KEY -> niente da fare.
+    """
+    path = db_path or settings.DB_PATH
+    key = db_key if db_key is not None else settings.DB_KEY
+    _ensure_parent_dir(path)
+    state = detect_db_state(path)
+    if state in ("missing", "empty"):
+        orphans = _find_orphans(path)
+        if orphans:
+            shown = ", ".join(orphans[:5]) + ("..." if len(orphans) > 5 else "")
+            raise DbEncryptionError(
+                f"Residui di migrazione interrotta rilevati ({shown}): avvio bloccato "
+                f"per non creare un DB vuoto sopra i dati. Ripristina "
+                f"{path}{PLAINTEXT_BACKUP_PREFIX}* sui nomi originali, rimuovi i "
+                f"residui {path}{ENCRYPTED_TMP_SUFFIX}* e riavvia."
+            )
+        return
+    if state == "plaintext":
+        if key:
+            logger.warning(f"Database plaintext rilevato con DB_KEY impostata: avvio migrazione ({path}).")
+            try:
+                migrate_plaintext_to_encrypted(path, key)
+            except DbEncryptionError as e:
+                if "non è plaintext" in str(e) and key and detect_db_state(path) == "encrypted":
+                    logger.warning("Migrazione già completata da un processo concorrente; proseguo.")
+                    return
+                raise
+        return
+    if not key:
+        raise DbEncryptionError(
+            f"Il database {path} è cifrato ma DB_KEY non è impostata: avvio bloccato "
+            "(aprire un cifrato senza chiave ne corrompe l'header). Imposta DB_KEY e riavvia."
+        )
+
 
 def _set_sqlite_pragmas(dbapi_connection, connection_record):
     """Assicura che foreign keys, busy timeout e synchronous siano impostati su ogni connessione SQLite."""
@@ -27,7 +382,71 @@ def _set_sqlite_pragmas(dbapi_connection, connection_record):
     cursor.execute("PRAGMA synchronous=NORMAL;")
     cursor.close()
 
-event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
+
+def create_db_engine(db_path: str | None = None, db_key: str | None = None, echo: bool | None = None):
+    """Factory engine: plaintext invariato senza DB_KEY, SQLCipher via async_creator con DB_KEY.
+
+    Con async_creator il pool non apre più connessioni DBAPI standard, quindi il
+    listener 'connect' riceverebbe il wrapper adattato (verificato): in modalità
+    cifrata NON viene registrato e gli stessi PRAGMA sono applicati nel connector.
+    Mai la chiave nell'URL. Timeout passato dentro sqlcipher3.connect
+    (connect_args viene ignorato con async_creator).
+    """
+    import aiosqlite
+
+    path = db_path or settings.DB_PATH
+    key = db_key if db_key is not None else settings.DB_KEY
+    url = f"sqlite+aiosqlite:///{path}"
+    resolved_echo = (settings.LOG_LEVEL == "DEBUG") if echo is None else echo
+
+    if not key:
+        eng = create_async_engine(
+            url,
+            echo=resolved_echo,
+            connect_args={"timeout": 30},
+            pool_pre_ping=True
+        )
+        event.listen(eng.sync_engine, "connect", _set_sqlite_pragmas)
+        return eng
+
+    def _connector():
+        import sqlcipher3
+        raw = sqlcipher3.connect(path, timeout=30.0, check_same_thread=False, isolation_level=None)
+        try:
+            raw.execute(f"PRAGMA key='{_escape_sqlite_literal(key)}'")
+            # Fail-fast: chiave errata -> errore immediato, mai oltre.
+            raw.execute("SELECT count(*) FROM sqlite_master").fetchone()
+            raw.execute("PRAGMA foreign_keys=ON;")
+            raw.execute("PRAGMA busy_timeout=30000;")
+            raw.execute("PRAGMA synchronous=NORMAL;")
+        except Exception:
+            raw.close()
+            raise
+        # Fresh cifrati a 0600 (main + sidecar quando compaiono), best-effort:
+        # il connector gira a ogni nuova connessione del pool.
+        for candidate in (path, path + "-wal", path + "-shm"):
+            try:
+                if os.path.exists(candidate):
+                    os.chmod(candidate, 0o600)
+            except OSError:
+                pass
+        return raw
+
+    def _async_creator():
+        conn = aiosqlite.Connection(_connector, iter_chunk_size=64)
+        conn.daemon = True
+        return conn
+
+    return create_async_engine(
+        url,
+        async_creator=_async_creator,
+        echo=resolved_echo,
+        pool_pre_ping=True
+    )
+
+
+# Configurazione ottimizzata engine con timeout esteso e concurrency WAL per SQLite
+engine = create_db_engine()
 
 async_session_maker = async_sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
@@ -166,7 +585,20 @@ async def _ensure_user_settings_unique_constraint(conn) -> None:
 async def init_db() -> None:
     """
     Crea tutte le tabelle nel database e abilita modalità WAL ad alta concorrenza.
+    Come PRIMO passo garantisce lo stato di cifratura (migrazione o blocco startup).
     """
+    await ensure_db_encryption()
+    if settings.DB_KEY:
+        # Pre-flight isolato: se il file è cifrato e la chiave è errata, fallisce
+        # qui con messaggio esplicito invece che in una migrazione ambigua.
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+        except Exception as e:
+            raise DbEncryptionError(
+                "Impossibile aprire il database cifrato: DB_KEY errata o file "
+                "danneggiato? Niente è stato sovrascritto: verifica DB_KEY e riavvia."
+            ) from e
     async with engine.begin() as conn:
         # Ottimizzazioni performance SQLite per NAS & SSD
         await conn.execute(text("PRAGMA journal_mode=WAL;"))

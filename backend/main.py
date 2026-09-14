@@ -10,7 +10,7 @@ from sqlalchemy.future import select
 import uvicorn
 
 from backend.config import settings
-from backend.database import init_db, async_session_maker
+from backend.database import init_db, async_session_maker, DbEncryptionError
 from backend.services.scheduler import init_scheduler, shutdown_scheduler
 from backend.models.settings import UserSettings
 from backend.models.user import User
@@ -44,8 +44,16 @@ async def lifespan(app: FastAPI):
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
     
-    # Initialize DB
-    await init_db()
+    # Initialize DB (la cifratura at-rest è garantita come primo passo di init_db)
+    try:
+        await init_db()
+    except DbEncryptionError as e:
+        logger.critical(
+            "FATALE cifratura database: %s (niente è stato sovrascritto; "
+            "verifica DB_KEY — mancante o errata — e riavvia). Startup interrotto.",
+            e,
+        )
+        raise
     
     # Create default settings and initial admin user if none exist
     async with async_session_maker() as session:

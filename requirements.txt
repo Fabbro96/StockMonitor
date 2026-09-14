@@ -12,6 +12,7 @@ python-multipart==0.0.20
 greenlet==3.5.5
 bcrypt==4.3.0
 PyJWT==2.10.1
+sqlcipher3==0.6.2
 requests==2.34.2
 numpy==2.5.3
 pandas==3.0.5

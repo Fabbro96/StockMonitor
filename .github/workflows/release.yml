@@ -1,0 +1,98 @@
+name: Tag Release (APK + Web)
+
+# Solo sui tag `v*`: pubblica la GitHub Release con APK per-ABI e bundle web.
+# Non tocca Docker (vedi docker-publish.yml) e non sposta WUD (resta su latest).
+on:
+  push:
+    tags: [ "v*" ]
+
+# `gh release create` richiede scrittura sui contents.
+permissions:
+  contents: write
+
+jobs:
+  # Stesso gate degli altri workflow: release solo da codice verificato
+  # (analyze + test Flutter + e2e backend, stesso commit del tag).
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  release:
+    needs: checks
+    runs-on: ubuntu-latest
+    # Tag senza `refs/tags/` (es. `v4.1.0`), usato per titoli e nomi file.
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout repository (tag)
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter 3.47.2
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.2'
+          channel: stable
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('app/android/**/*.gradle*', 'app/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      # Stessa logica di android-release.yml: con i secrets il keystore viene
+      # decodificato in app/android/app/upload-keystore.jks + key.properties
+      # (APK release-signed); senza, Gradle ripiega sulla debug key e l'update
+      # sopra una build con firma diversa richiede la disinstallazione.
+      - name: Configure release signing (optional)
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/android/app/upload-keystore.jks
+            {
+              echo "storePassword=$ANDROID_KEYSTORE_PASSWORD"
+              echo "keyPassword=$ANDROID_KEY_PASSWORD"
+              echo "keyAlias=$ANDROID_KEY_ALIAS"
+              echo "storeFile=upload-keystore.jks"
+            } > app/android/key.properties
+            echo "Release keystore configured: the APK will be release-signed."
+          else
+            echo "::warning::ANDROID_KEYSTORE_BASE64 secret not set - the APK will be debug-signed."
+            echo "::warning::An update over a differently-signed build requires uninstalling the previous APK first."
+          fi
+
+      - name: Build release APKs (per-ABI)
+        working-directory: app
+        run: flutter build apk --release --split-per-abi
+
+      # Stesso bundle che l'immagine Docker incorpora in /app/web; zippato
+      # nella root del repo per allegarlo alla release.
+      - name: Build web bundle and zip
+        working-directory: app
+        run: |
+          flutter build web --release --no-web-resources-cdn
+          zip -qr "../stock-monitor-web-${TAG}.zip" build/web
+
+      # `gh` è preinstallato sui runner; allega i 3 APK per-ABI + lo zip web.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" --title "Stock Monitor $TAG" --generate-notes \
+            app/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+            app/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+            app/build/app/outputs/flutter-apk/app-x86_64-release.apk \
+            "stock-monitor-web-${TAG}.zip"

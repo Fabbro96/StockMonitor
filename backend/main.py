@@ -97,7 +97,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"Chiusura client HTTP condiviso non riuscita: {e}")
 
-app = FastAPI(title="Stock Monitor", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Stock Monitor", version="4.0.0", lifespan=lifespan)
 
 # CORS middleware (secure origin regex for local, docker and lan access with credentials)
 app.add_middleware(

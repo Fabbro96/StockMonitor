@@ -3,6 +3,7 @@ name: Build & Publish Multi-Arch Docker Image
 on:
   push:
     branches: [ "main", "master" ]
+    tags: [ "v*" ]
   workflow_dispatch:
 
 env:
@@ -46,8 +47,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
+            type=semver,pattern={{version}}
 
       - name: Build and push Multi-Arch Docker image
         uses: docker/build-push-action@v5

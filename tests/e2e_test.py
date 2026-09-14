@@ -122,6 +122,7 @@ async def test_health_and_auth(c: httpx.AsyncClient) -> str:
     check("GET /health -> 200", r.status_code == 200)
     check("health status ok", r.json().get("status") == "ok")
     check("health database ok", r.json().get("database") == "ok")
+    check("health version 4.0.0", r.json().get("version") == "4.0.0", str(r.json().get("version")))
 
     # Endpoint protetto senza token -> 401
     r = await c.get("/api/portfolio/")

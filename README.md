@@ -174,6 +174,24 @@ sqlite3 data/stock_monitor.db ".backup 'data/stock_monitor.db.bak-$(date +%Y%m%d
 Il primo avvio di una nuova versione applica sul DB migrazioni **additive**: il
 backup è la via sicura per tornare indietro.
 
+## 🚀 Release
+
+Per tagliare una release stabile:
+
+1. Allinea le versioni (`app/pubspec.yaml` → `version: X.Y.Z+N`,
+   `backend/main.py` → `version="X.Y.Z"`), commit e push su `main`.
+2. Crea e pubblica il tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+Il workflow `release.yml` (trigger `v*`, dopo il gate `checks`) pubblica la
+**GitHub Release "Stock Monitor vX.Y.Z"** con i 3 APK per-ABI e lo zip della
+build web (`stock-monitor-web-vX.Y.Z.zip`, stesso bundle dell'immagine Docker).
+
+Il push del tag fa partire anche `docker-publish.yml`, che pubblica il tag
+Docker di versione (`X.Y.Z`, utile come pin immutabile per il rollback) senza
+ripubblicare `latest`.
+**WUD resta su `latest`** e aggiorna automaticamente all'ultima immagine senza
+seguire i tag di versione.
+
 ## 🧪 Test
 
 ```bash

@@ -271,6 +271,10 @@ BENCHMARKS = {
 
 
 def _period_for_days(days: int) -> str:
+    # Periodo yfinance valido più piccolo che copre la finestra (7d/30d NON sono
+    # periodi validi): sotto i 10 giorni basta 1mo; oltre, logica invariata.
+    if days <= 10:
+        return "1mo"
     if days <= 31:
         return "3mo"
     if days <= 120:

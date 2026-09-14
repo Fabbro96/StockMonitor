@@ -173,6 +173,15 @@ DEEP_CACHE_TTL = 180.0 # 3 minutes
 # quando Yahoo è ko, poi si ritenta upstream.
 DEEP_CACHE_STALE_TTL = 10.0 # 10 secondi
 
+# Cache storici Yahoo (fetch_stock_candles): SOLO i download reali vengono
+# cachati (i fallback sintetici NON sono serviti come freschi, mai in cache),
+# con TTL per fascia e tetto FIFO 256 entry.
+CANDLES_CACHE_TTL_INTRADAY = 180.0  # 3 minuti (1d: sessione odierna in movimento)
+CANDLES_CACHE_TTL_WEEK = 300.0      # 5 minuti (1w intraday)
+CANDLES_CACHE_TTL_MONTH = 900.0     # 15 minuti (1m daily)
+CANDLES_CACHE_TTL_LONG = 1800.0     # 30 minuti (6m/1y/5y storici)
+_CANDLES_CACHE: OrderedDict[tuple[str, str], tuple[list, float]] = OrderedDict()
+
 # Budget wall-clock del batch prezzi. Il default (~4.5s) resta per i path
 # user-facing (dashboard/watchlist/alerting); il job orario di background usa
 # un budget dedicato più ampio per tollerare batch lenti senza perdere persistenza.
@@ -207,6 +216,16 @@ def _cache_put(cache: OrderedDict, key: str, value: tuple, max_entries: int = CA
     cache[key] = value
     while len(cache) > max_entries:
         cache.popitem(last=False)
+
+def _candles_ttl_for(timeframe: str) -> float:
+    """TTL per fascia del timeframe candele (chiave normalizzata minuscola)."""
+    if timeframe == "1d":
+        return CANDLES_CACHE_TTL_INTRADAY
+    if timeframe == "1w":
+        return CANDLES_CACHE_TTL_WEEK
+    if timeframe == "1m":
+        return CANDLES_CACHE_TTL_MONTH
+    return CANDLES_CACHE_TTL_LONG
 
 class MarketDataService:
     MARKET_SUFFIXES = {
@@ -997,6 +1016,7 @@ class MarketDataService:
     @staticmethod
     async def fetch_stock_candles(ticker: str, timeframe: str = "1mo") -> list[dict]:
         ticker_up = ticker.strip().upper()
+        tf_key = timeframe.strip().lower()
         tf_mapping = {
             "1d": ("1d", "5m"),
             "1w": ("5d", "15m"),
@@ -1005,7 +1025,17 @@ class MarketDataService:
             "1y": ("1y", "1d"),
             "5y": ("5y", "1wk")
         }
-        period, interval = tf_mapping.get(timeframe.lower(), ("1mo", "1d"))
+        period, interval = tf_mapping.get(tf_key, ("1mo", "1d"))
+
+        # Cache TTL {(ticker, timeframe): (data, ts)}: senza di essa ogni cambio
+        # timeframe/benchmark rifà il download. Hit solo entro il TTL di fascia.
+        cache_key = (ticker_up, tf_key)
+        ttl = _candles_ttl_for(tf_key)
+        now_ts = time.time()
+        if cache_key in _CANDLES_CACHE:
+            cached_data, cached_time = _CANDLES_CACHE[cache_key]
+            if now_ts - cached_time < ttl:
+                return cached_data
 
         def _sync_candles():
             try:
@@ -1049,17 +1079,23 @@ class MarketDataService:
                             "volume": v_val
                         })
                     if results:
-                        return results
+                        return results, True
             except Exception:
                 pass
 
-            return MarketDataService._generate_fallback_candles(ticker_up, timeframe)
+            return MarketDataService._generate_fallback_candles(ticker_up, timeframe), False
 
         try:
-            return await run_blocking_yf(_sync_candles, timeout=10.0)
+            results, fresh = await run_blocking_yf(_sync_candles, timeout=10.0)
         except Exception:
             logger.debug(f"Timeout candele per {ticker_up}, uso fallback deterministico.")
-            return MarketDataService._generate_fallback_candles(ticker_up, timeframe)
+            results, fresh = MarketDataService._generate_fallback_candles(ticker_up, timeframe), False
+
+        # I fallback sintetici non vengono mai cachati (servirli come freschi
+        # corromperebbe grafici e benchmark); solo i download reali, tetto FIFO.
+        if fresh:
+            _cache_put(_CANDLES_CACHE, cache_key, (results, now_ts))
+        return results
 
     @staticmethod
     def _fallback_portfolio_history(holdings: list[dict], days: int) -> list[dict]:

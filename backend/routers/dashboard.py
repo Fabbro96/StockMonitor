@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
@@ -37,22 +38,37 @@ async def get_dashboard(
     )
     recent_advices = [serialize_advice(a, include_stock=True, short_titles=True) for a in advices_result.scalars().all()]
     
-    # 3. Active alerts count (solo le regole dell'utente corrente)
+    # 3. Active alerts count (solo le regole dell'utente corrente): COUNT SQL,
+    # senza caricare le righe.
     alerts_result = await db.execute(
-        select(AlertRule).where(
+        select(func.count()).select_from(AlertRule).where(
             AlertRule.is_active == True,
             AlertRule.user_id == current_user.id,
         )
     )
-    active_alerts_count = len(alerts_result.scalars().all())
+    active_alerts_count = alerts_result.scalar() or 0
     
-    # 4. Market status strutturato con orari italiani
+    # 4. Market status strutturato con orari italiani (builder condiviso)
+    market_status = build_market_status()
+    
+    return {
+        "portfolio_summary": portfolio_summary,
+        "recent_advices": recent_advices,
+        "active_alerts_count": active_alerts_count,
+        "market_status": market_status
+    }
+
+def build_market_status() -> dict:
+    """
+    Builder del blocco `market_status` (IT/US/EU/ANY_OPEN + details): orologi di
+    mercato senza toccare il DB. Riusato da `GET /` e `GET /market-status`.
+    """
     it_open = MarketDataService.is_market_open('IT')
     us_open = MarketDataService.is_market_open('US')
     eu_open = MarketDataService.is_market_open('EU')
     any_open = it_open or us_open or eu_open
 
-    market_status = {
+    return {
         "IT": "OPEN" if it_open else "CLOSED",
         "US": "OPEN" if us_open else "CLOSED",
         "EU": "OPEN" if eu_open else "CLOSED",
@@ -72,13 +88,16 @@ async def get_dashboard(
             }
         }
     }
-    
-    return {
-        "portfolio_summary": portfolio_summary,
-        "recent_advices": recent_advices,
-        "active_alerts_count": active_alerts_count,
-        "market_status": market_status
-    }
+
+@router.get("/market-status")
+async def get_market_status(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Blocco `market_status` leggero (stessa auth JWT): stesso builder di `GET /`,
+    senza ricalcolare summary/advices. Contratto congelato per il client Flutter.
+    """
+    return build_market_status()
 
 @router.get("/indices")
 async def get_indices():

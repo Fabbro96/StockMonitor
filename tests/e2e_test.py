@@ -2424,6 +2424,106 @@ async def test_r3_daily_series_eur(c: httpx.AsyncClient, h: dict):
              (stock_ids["R3SERIEUR.MI"], stock_ids["R3SERIEUSD"]))
 
 
+async def test_market_status_endpoint(c: httpx.AsyncClient, h: dict):
+    print("\n[35] Dashboard market-status leggero (shape + auth)")
+    # Senza token -> 401 (stessa auth JWT). Client pulito: la suite accumula il
+    # cookie HttpOnly di login (vedi [18]).
+    from backend.main import app as _app
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app),
+                                 base_url="http://test", timeout=10.0) as fresh:
+        r = await fresh.get("/api/dashboard/market-status")
+    check("market-status senza token -> 401", r.status_code == 401, str(r.status_code))
+
+    r = await c.get("/api/dashboard/market-status", headers=h)
+    check("market-status con token -> 200", r.status_code == 200, str(r.status_code))
+    body = r.json() if r.status_code == 200 else {}
+    check("market-status ha esattamente IT/US/EU/ANY_OPEN/details",
+          set(body.keys()) == {"IT", "US", "EU", "ANY_OPEN", "details"},
+          str(sorted(body.keys())))
+    vals = [body.get(k) for k in ("IT", "US", "EU", "ANY_OPEN")]
+    check("stati in {OPEN, CLOSED}", all(v in ("OPEN", "CLOSED") for v in vals), str(vals))
+    details = body.get("details", {})
+    check("details ha IT e US con name/flag/status/hours",
+          all(set(details.get(k, {}).keys()) == {"name", "flag", "status", "hours"}
+              for k in ("IT", "US")),
+          str(details))
+    check("details coerenti (status IT/US + orari italiani)",
+          details.get("IT", {}).get("status") == body.get("IT")
+          and details.get("US", {}).get("status") == body.get("US")
+          and details.get("IT", {}).get("hours") == "09:00 - 17:30"
+          and details.get("US", {}).get("hours") == "15:30 - 22:00",
+          str(details))
+    expected_any = "OPEN" if any(body.get(k) == "OPEN" for k in ("IT", "US", "EU")) else "CLOSED"
+    check("ANY_OPEN coerente con IT/US/EU",
+          body.get("ANY_OPEN") == expected_any, str(body.get("ANY_OPEN")))
+
+
+async def test_candles_cache_ttl():
+    print("\n[36] Cache TTL candele storiche (FIFO, no fallback freschi)")
+    import time as _time
+    import pandas as pd
+    from backend.services import market_data as md
+
+    ticker = "E2ECDL.MI"
+    key = (ticker, "1m")
+    md._CANDLES_CACHE.pop(key, None)
+    calls = {"n": 0}
+    original_ticker = md.yf.Ticker
+    idx = pd.to_datetime(["2026-09-10", "2026-09-11"])
+
+    class _FakeTicker:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def history(self, *args, **kwargs):
+            calls["n"] += 1
+            return pd.DataFrame(
+                {"Open": [1.0, 1.1], "High": [1.2, 1.3], "Low": [0.9, 1.0],
+                 "Close": [1.0, 1.2], "Volume": [10, 20]},
+                index=idx,
+            )
+
+    try:
+        md.yf.Ticker = _FakeTicker
+        r1 = await md.MarketDataService.fetch_stock_candles(ticker, "1m")
+        r2 = await md.MarketDataService.fetch_stock_candles(ticker, "1m")
+        check("due chiamate candele 1m -> 1 solo download upstream",
+              calls["n"] == 1 and r1 == r2 and len(r1) == 2,
+              f"calls={calls['n']} len={len(r1)}")
+
+        check("TTL per fascia: 1d breve < 1m < lungo",
+              md.CANDLES_CACHE_TTL_INTRADAY < md.CANDLES_CACHE_TTL_MONTH < md.CANDLES_CACHE_TTL_LONG
+              and md._candles_ttl_for("1d") == md.CANDLES_CACHE_TTL_INTRADAY
+              and md._candles_ttl_for("1w") == md.CANDLES_CACHE_TTL_WEEK
+              and md._candles_ttl_for("1m") == md.CANDLES_CACHE_TTL_MONTH
+              and md._candles_ttl_for("1y") == md.CANDLES_CACHE_TTL_LONG,
+              f"{md.CANDLES_CACHE_TTL_INTRADAY}/{md.CANDLES_CACHE_TTL_WEEK}/"
+              f"{md.CANDLES_CACHE_TTL_MONTH}/{md.CANDLES_CACHE_TTL_LONG}")
+
+        # Scadenza TTL -> nuovo download upstream
+        ttl = md._candles_ttl_for("1m")
+        cached, _ = md._CANDLES_CACHE[key]
+        md._CANDLES_CACHE[key] = (cached, _time.time() - ttl - 1)
+        r3 = await md.MarketDataService.fetch_stock_candles(ticker, "1m")
+        check("entry scaduta -> nuovo download upstream",
+              calls["n"] == 2 and r3 == r1, f"calls={calls['n']}")
+
+        # Fallback sintetici mai cachati (Yahoo ko)
+        def _boom(*args, **kwargs):
+            raise RuntimeError("Yahoo down (mock e2e)")
+
+        md.yf.Ticker = _boom
+        md._CANDLES_CACHE.pop(key, None)
+        f1 = await md.MarketDataService.fetch_stock_candles(ticker, "1m")
+        f2 = await md.MarketDataService.fetch_stock_candles(ticker, "1m")
+        check("fallback Yahoo-ko NON cachato (mai servito come fresco)",
+              len(f1) > 0 and len(f1) == len(f2) and key not in md._CANDLES_CACHE,
+              f"len={len(f1)} cached={key in md._CANDLES_CACHE}")
+    finally:
+        md.yf.Ticker = original_ticker
+        md._CANDLES_CACHE.pop(key, None)
+
+
 # ===========================================================================
 # MAIN RUNNER
 # ===========================================================================
@@ -2484,6 +2584,9 @@ async def run_all():
             await test_r3_null_legacy_ownership(c, h)
             await test_r3_user_settings_unique()
             await test_r3_daily_series_eur(c, h)
+            # Ottimizzazione backend: endpoint market-status + cache candele
+            await test_market_status_endpoint(c, h)
+            await test_candles_cache_ttl()
             await test_sqlite_integrity()
 
     print("\n" + "=" * 60)

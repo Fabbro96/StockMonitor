@@ -89,6 +89,12 @@ flutter build apk --release
 
 ## 📱 App Android
 
+- **Quale APK installare**: la CI compila con `--split-per-abi` e pubblica i
+  3 APK per-ABI nell'artifact `stock-monitor-apk`. Sui telefoni moderni
+  installa `app-arm64-v8a-release.apk` (`armeabi-v7a` solo per dispositivi
+  vecchi a 32 bit, `x86_64` per emulatori). Non mescolare ABI diverse tra update
+  successivi: ogni ABI ha un versionCode dedicato, quindi aggiorna sempre con un
+  APK della stessa ABI già installata.
 - **Primo avvio**: inserisci l'indirizzo del backend (es. `http://<IP-NAS>:8000`)
   nel campo mostrato quando la build non ha un `API_BASE_URL` di default.
 - L'indirizzo si può modificare dalla sezione **Server** delle Impostazioni; il
@@ -103,6 +109,8 @@ flutter build apk --release
 - **Android 17**: la rete locale richiederà il permesso runtime
   `ACCESS_LOCAL_NETWORK`; il `targetSdk` attuale è 36 e non va alzato senza gestire
   quel permesso.
+- **Export CSV**: il salvataggio su file è supportato su **Android 10+**; su
+  versioni precedenti usa la versione web.
 
 ## 📦 Deploy su NAS (file unico)
 

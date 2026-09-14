@@ -61,6 +61,9 @@ RUN cd /app/app \
     && flutter pub get \
     && flutter build web --release --no-web-resources-cdn
 
+# Trim Flutter web debug artifacts not served at runtime (*.symbols, NOTICES).
+RUN find /app/app/build/web -name '*.symbols' -delete && rm -f /app/app/build/web/assets/NOTICES
+
 # ============================================================================
 # Stage 3 - runtime: slim image, no gcc/build toolchain
 # ============================================================================

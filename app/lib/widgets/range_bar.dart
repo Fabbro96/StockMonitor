@@ -10,7 +10,7 @@ import '../theme/tokens.dart';
 /// clampata). I label [lowLabel]/[highLabel] sono tipicamente i prezzi min/max
 /// formattati; [showPosition] mostra anche `Posizione: N%`.
 ///
-/// Per partire da prezzi grezzi usare [RangeBar.fromValues].
+/// Per posizioni già calcolate usare direttamente il costruttore.
 class RangeBar extends StatelessWidget {
   /// Crea una barra range con posizione percentuale esplicita.
   const RangeBar({
@@ -21,29 +21,6 @@ class RangeBar extends StatelessWidget {
     this.showPosition = false,
     this.minWidth = 140,
   });
-
-  /// Crea una barra range calcolando posizione e label dai valori.
-  factory RangeBar.fromValues({
-    Key? key,
-    required double low,
-    required double high,
-    required double current,
-    String Function(double value)? formatValue,
-    bool showPosition = false,
-    double minWidth = 140,
-  }) {
-    final double range = high - low;
-    final double percent = range <= 0 ? 50 : ((current - low) / range * 100).clamp(0, 100).toDouble();
-    final String Function(double) format = formatValue ?? (double value) => value.toStringAsFixed(2);
-    return RangeBar(
-      key: key,
-      positionPercent: percent,
-      lowLabel: format(low),
-      highLabel: format(high),
-      showPosition: showPosition,
-      minWidth: minWidth,
-    );
-  }
 
   /// Posizione del pin in percentuale (0–100).
   final double positionPercent;

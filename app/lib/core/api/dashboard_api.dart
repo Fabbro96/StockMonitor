@@ -28,6 +28,14 @@ class DashboardApi {
     return asMapList(data).map(HeatmapItem.fromJson).toList();
   }
 
+  /// `GET /api/dashboard/market-status`
+  ///
+  /// Solo il blocco `market_status`, identico a quello di `dashboard()`.
+  Future<MarketStatusInfo> marketStatus() async {
+    final data = await _client.get('/dashboard/market-status');
+    return MarketStatusInfo.fromJson(asMap(data));
+  }
+
   /// `GET /api/dashboard/performance?days=`
   Future<PerformanceSeries> performance(int days) async {
     final data = await _client.get(

@@ -8,39 +8,7 @@ on:
 jobs:
   # Same gate as docker-publish: build the APK only from verified code.
   checks:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Flutter 3.47.2
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.2'
-          channel: stable
-          cache: true
-
-      - name: Flutter analyze
-        working-directory: app
-        run: flutter analyze
-
-      - name: Flutter tests
-        working-directory: app
-        run: flutter test
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Install Python dependencies
-        run: pip install -r requirements.txt
-
-      # The suite starts its own uvicorn instance with an isolated DB in /tmp.
-      - name: Backend e2e tests
-        run: python tests/e2e_test.py
+    uses: ./.github/workflows/checks.yml
 
   build-apk:
     needs: checks
@@ -102,13 +70,13 @@ jobs:
 
       - name: Build release APK
         working-directory: app
-        run: flutter build apk --release
+        run: flutter build apk --release --split-per-abi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: stock-monitor-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          path: app/build/app/outputs/flutter-apk/
           if-no-files-found: error
 
   # Convenience artifact for manual/static hosting: same bundle the Docker

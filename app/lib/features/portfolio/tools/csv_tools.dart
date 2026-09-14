@@ -47,7 +47,9 @@ Future<void> exportPortfolioCsv(BuildContext context) async {
     if (!context.mounted) return;
     showAppToast(
       context,
-      message: 'Errore durante l\'esportazione CSV',
+      message: kIsWeb
+          ? 'Errore durante l\'esportazione CSV'
+          : 'Esportazione non riuscita: il salvataggio CSV è supportato su Android 10+. Riprova o usa la versione web.',
       type: AppToastType.error,
     );
   }

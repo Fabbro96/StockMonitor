@@ -114,6 +114,7 @@ Admin only (`403` for non-admin users).
 | Endpoint | Method | Required Parameters | Response Format | Usage |
 |---|---|---|---|---|
 | `/dashboard/` | **GET** | None (needs auth token) | `{ portfolio_summary, recent_advices, active_alerts_count, market_status: { IT, US, EU, ANY_OPEN, details } }` | Main dashboard data; used by `dashboard_api.dart` |
+| `/dashboard/market-status` | **GET** | None (needs auth token) | `{ IT, US, EU, ANY_OPEN, details }` — stesso blocco `market_status` di `/dashboard/`, senza summary/advices | Lightweight market clocks; used by `dashboard_api.dart` |
 | `/dashboard/indices` | **GET** | None (needs auth token) | `[{ ticker, name, price, change_percent, ... }]` (real-time) | Marquee ticker; used by `dashboard_api.dart` |
 | `/dashboard/heatmap` | **GET** | None (needs auth token) | `[{ ticker, name, market, currency, current_price, change_percent, change_abs, day_high, day_low, volume, stale }]` | Heatmap; used by `dashboard_api.dart` |
 | `/dashboard/performance?days=` | **GET** | `days` (query, default 30), needs auth token | `{ data: [{ date, value }], source, points }` | Performance chart data; used by `dashboard_api.dart` |
@@ -149,8 +150,8 @@ Admin only (`403` for non-admin users).
 
 1. **Export CSV** — nessuna fetch fuori dal client: `portfolio_api.dart`
    (`exportCsv()`) scarica i byte e il 401 è gestito da `ApiClient`.
-2. **Watchlist per ticker** — `DELETE /api/watchlist/ticker/{ticker}` è esposto da
-   `watchlist_api.dart` (`removeByTicker()`); la UI normalmente rimuove per id
+2. **Watchlist per ticker** — `DELETE /api/watchlist/ticker/{ticker}` esiste nel
+   backend ma non è usato dal client Flutter; la UI rimuove sempre per id
    (`404` se l'elemento non appartiene all'utente).
 3. **Reset password admin** — endpoint e UI Flutter disponibili (`auth_api.dart`
    + schermata Impostazioni).
@@ -172,8 +173,8 @@ Admin only (`403` for non-admin users).
 |---|---|
 | **auth_api.dart** | login, logout, me, changePassword, users, createUser, deleteUser, resetUserPassword |
 | **stocks_api.dart** | search, details, candles, updateMarket |
-| **watchlist_api.dart** | list, add, updateAlert, remove, removeByTicker |
-| **portfolio_api.dart** | holdings, summary, riskMetrics, benchmarks, seedDemo, addHolding, updateHolding, deleteHolding, batchUpdateHoldings, transactions, createTransaction, deleteTransaction, realizedPnl, dividends, rebalanceTargets, addRebalanceTarget, deleteRebalanceTarget, rebalancePreview, importCsv, exportCsv |
+| **watchlist_api.dart** | list, add, updateAlert, remove |
+| **portfolio_api.dart** | holdings, summary, riskMetrics, benchmarks, seedDemo, addHolding, deleteHolding, batchUpdateHoldings, transactions, createTransaction, deleteTransaction, realizedPnl, dividends, rebalanceTargets, addRebalanceTarget, deleteRebalanceTarget, rebalancePreview, importCsv, exportCsv |
 | **dashboard_api.dart** | dashboard, indices, heatmap, performance |
 | **advice_api.dart** | list, latest, toggleFollow, generate, analyzeStock |
 | **settings_api.dart** | getSettings, updateSettings, getAlertRules, addAlertRule, deleteAlertRule, testTelegram |

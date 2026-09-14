@@ -148,6 +148,11 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
   bool _candlesFailed = false;
   int _chartGeneration = 0;
 
+  /// Cache candele per timeframe API (`1d`, `1w`, ...): il cambio pill mostra
+  /// subito l'ultimo dato noto (niente spinner) e rifresha in silenzio.
+  /// Memoria trascurabile (6 serie al massimo per l'apertura del modal).
+  final Map<String, List<Candle>> _candleCache = <String, List<Candle>>{};
+
   int _tabIndex = 0;
   late final List<FocusNode> _tabFocusNodes = List<FocusNode>.generate(
     _tabLabels.length,
@@ -224,15 +229,34 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
     }
   }
 
+  /// Carica le candele del timeframe selezionato con cache per-timeframe.
+  ///
+  /// Se il timeframe è già in cache lo mostra subito (niente spinner) e
+  /// rifresha in silenzio; altrimenti mostra lo spinner. La generation guard
+  /// scarta le risposte stale (cambio pill durante il fetch), come prima.
   Future<void> _loadCandles() async {
     final int generation = ++_chartGeneration;
     final String timeframe = _timeframes[_timeframe]!;
-    setState(() => _candlesLoading = true);
+    final List<Candle>? cached = _candleCache[timeframe];
+    if (cached != null) {
+      setState(() {
+        _candles = cached;
+        _candlesLoading = false;
+        _candlesFailed = false;
+      });
+    } else {
+      setState(() {
+        _candles = const <Candle>[];
+        _candlesLoading = true;
+        _candlesFailed = false;
+      });
+    }
     try {
       final List<Candle> data = await ref
           .read(stocksApiProvider)
           .candles(widget.ticker, timeframe);
       if (!mounted || generation != _chartGeneration) return;
+      _candleCache[timeframe] = data;
       setState(() {
         _candles = data;
         _candlesLoading = false;
@@ -241,9 +265,13 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
     } catch (_) {
       if (!mounted || generation != _chartGeneration) return;
       setState(() {
-        _candles = const <Candle>[];
+        // Con un cached visibile non si entra in stato failed: resta il dato
+        // precedente e il prossimo cambio pill riprova in silenzio.
+        if (cached == null) {
+          _candles = const <Candle>[];
+          _candlesFailed = true;
+        }
         _candlesLoading = false;
-        _candlesFailed = true;
       });
     }
   }

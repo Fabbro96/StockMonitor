@@ -88,28 +88,6 @@ class PortfolioApi {
     return Holding.fromJson(asMap(data));
   }
 
-  /// `PUT /api/portfolio/holdings/{id}`
-  ///
-  /// Omitted (null) fields are left unchanged server side.
-  Future<Holding> updateHolding(
-    int id, {
-    double? quantity,
-    double? avgPurchasePrice,
-    DateTime? purchaseDate,
-    String? notes,
-  }) async {
-    final data = await _client.put(
-      '/portfolio/holdings/$id',
-      body: {
-        'quantity': ?quantity,
-        'avg_purchase_price': ?avgPurchasePrice,
-        if (purchaseDate != null) 'purchase_date': dateToApi(purchaseDate),
-        'notes': ?notes,
-      },
-    );
-    return Holding.fromJson(asMap(data));
-  }
-
   /// `DELETE /api/portfolio/holdings/{id}`
   Future<void> deleteHolding(int id) async {
     await _client.delete('/portfolio/holdings/$id');

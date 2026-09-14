@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -37,9 +38,16 @@ typedef UnauthorizedCallback = void Function();
 /// - Web: base URL = stessa origine del backend (`Uri.base.resolve('/api')`).
 /// - Android/desktop: origin salvato in [AppStorage] + `/api`; la variabile di
 ///   build `API_BASE_URL` fa da fallback. Non configurato finché assente.
+/// Backoff di default tra i tentativi GET (400ms → 1200ms) + jitter.
+const List<Duration> _defaultRetryDelays = <Duration>[
+  Duration(milliseconds: 400),
+  Duration(milliseconds: 1200),
+];
+
 class ApiClient {
-  ApiClient({this.tokenProvider, this.onUnauthorized, Dio? dio})
-    : _dio = dio ?? Dio() {
+  ApiClient({this.tokenProvider, this.onUnauthorized, Dio? dio, List<Duration>? retryDelays})
+    : _dio = dio ?? Dio(),
+      _retryDelays = retryDelays ?? _defaultRetryDelays {
     _dio.options
       ..connectTimeout = const Duration(seconds: 10)
       ..receiveTimeout = const Duration(seconds: 20)
@@ -53,6 +61,15 @@ class ApiClient {
   final Dio _dio;
   AppStorage? _storage;
   String? _origin;
+
+  /// Numero massimo di tentativi totali per le GET ritentabili.
+  static const int maxGetAttempts = 2;
+
+  /// Backoff tra i tentativi (indice = numero del retry, clampato).
+  final List<Duration> _retryDelays;
+
+  /// Jitter aggiunto a ogni attesa (0–99ms).
+  final math.Random _jitter = math.Random();
 
   /// Provider del Bearer token (fornito in costruzione o riassegnato dopo
   /// `init`); se null/assente nessun header Authorization viene inviato.
@@ -91,11 +108,22 @@ class ApiClient {
   ///
   /// [receiveTimeout] opzionale sovrascrive il timeout di ricezione globale
   /// (20s): usarlo per le chiamate lente (es. generazione AI).
+  ///
+  /// Le GET sono ritentate una volta ([maxGetAttempts] tentativi totali,
+  /// backoff 400ms→1200ms + jitter) solo su timeout, errori di connessione e
+  /// 5xx; mai su 401/404/422/429. POST/PUT/DELETE/upload/download non sono
+  /// mai ritentati (rischio doppia transazione).
   Future<dynamic> get(
     String path, {
     Map<String, dynamic>? query,
     Duration? receiveTimeout,
-  }) => _send('GET', path, query: query, receiveTimeout: receiveTimeout);
+  }) => _send(
+    'GET',
+    path,
+    query: query,
+    receiveTimeout: receiveTimeout,
+    retry: true,
+  );
 
   /// Richiesta POST. Vedi [get] per [receiveTimeout].
   Future<dynamic> post(
@@ -196,19 +224,61 @@ class ApiClient {
     Map<String, dynamic>? query,
     Object? body,
     Duration? receiveTimeout,
+    bool retry = false,
   }) async {
     _ensureConfigured();
-    try {
-      final response = await _dio.request<dynamic>(
-        _resolvePath(path),
-        data: body,
-        queryParameters: query,
-        options: Options(method: method, receiveTimeout: receiveTimeout),
-      );
-      return _normalize(response.data);
-    } on DioException catch (error) {
-      throw _toApiException(error);
+    final int attempts = retry ? maxGetAttempts : 1;
+    DioException? lastError;
+    for (int attempt = 0; attempt < attempts; attempt++) {
+      try {
+        final response = await _dio.request<dynamic>(
+          _resolvePath(path),
+          data: body,
+          queryParameters: query,
+          options: Options(method: method, receiveTimeout: receiveTimeout),
+        );
+        return _normalize(response.data);
+      } on DioException catch (error) {
+        lastError = error;
+        final bool hasMore = attempt + 1 < attempts;
+        if (!retry || !hasMore || !_isGetRetryable(error)) {
+          throw _toApiException(error);
+        }
+        await Future<void>.delayed(_retryDelay(attempt));
+      }
     }
+    throw _toApiException(lastError!);
+  }
+
+  /// True se l'errore merita un retry della GET: timeout, errore di
+  /// connessione o 5xx. Mai 4xx (401/404/422/429 inclusi) e mai cancellazioni.
+  bool _isGetRetryable(DioException error) {
+    switch (error.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.connectionError:
+        return true;
+      case DioExceptionType.badResponse:
+        final int? status = error.response?.statusCode;
+        return status != null && status >= 500;
+      case DioExceptionType.cancel:
+      case DioExceptionType.badCertificate:
+      case DioExceptionType.transformTimeout:
+      case DioExceptionType.unknown:
+        return false;
+    }
+  }
+
+  /// Attesa prima del retry numero [retryIndex] (backoff + jitter).
+  Duration _retryDelay(int retryIndex) {
+    final List<Duration> delays = _retryDelays.isEmpty
+        ? const <Duration>[Duration.zero]
+        : _retryDelays;
+    final Duration base = delays[retryIndex < delays.length
+        ? retryIndex
+        : delays.length - 1];
+    return base + Duration(milliseconds: _jitter.nextInt(100));
   }
 
   void _ensureConfigured() {

@@ -260,13 +260,15 @@ final adviceLatestProvider = FutureProvider<List<Advice>>(
 
 /// Stato dei mercati per i pallini in topbar.
 ///
-/// In errore restituisce `null`: [MarketStatusView] ricade sull'orologio
-/// locale, come il `checkMarketStatus` legacy che falliva silenziosamente.
+/// Usa l'endpoint leggero `GET /api/dashboard/market-status` invece della
+/// dashboard completa. In errore restituisce `null`: [MarketStatusView] ricade
+/// sull'orologio locale, come il `checkMarketStatus` legacy che falliva
+/// silenziosamente.
 final adviceMarketStatusProvider = FutureProvider<MarketStatusInfo?>((
   Ref ref,
 ) async {
   try {
-    return (await ref.watch(dashboardApiProvider).dashboard()).marketStatus;
+    return await ref.watch(dashboardApiProvider).marketStatus();
   } catch (_) {
     return null;
   }

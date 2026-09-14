@@ -87,11 +87,6 @@ class WatchlistApi {
     return WatchlistMutationResult.fromJson(asMap(data));
   }
 
-  /// `DELETE /api/watchlist/ticker/{ticker}`
-  Future<WatchlistMutationResult> removeByTicker(String ticker) async {
-    final data = await _client.delete('/watchlist/ticker/$ticker');
-    return WatchlistMutationResult.fromJson(asMap(data));
-  }
 }
 
 final watchlistApiProvider = Provider<WatchlistApi>(

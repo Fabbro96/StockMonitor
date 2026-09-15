@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: str | None = None
     TELEGRAM_BOT_ENABLED: bool = True
     GEMINI_API_KEY: str | None = None
-    GEMINI_MODEL: str = "gemini-3.7-flash"
+    GEMINI_MODEL: str = "gemini-3.8-flash"
     REDDIT_CLIENT_ID: str | None = None
     REDDIT_CLIENT_SECRET: str | None = None
     DB_PATH: str = "data/stock_monitor.db"

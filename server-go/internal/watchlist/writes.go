@@ -15,6 +15,7 @@ import (
 	"stockmon/internal/auth"
 	"stockmon/internal/dashboard"
 	"stockmon/internal/db"
+	"stockmon/internal/stocks"
 	"stockmon/internal/writelock"
 )
 
@@ -81,17 +82,35 @@ func Create(read, wdb *sql.DB) http.HandlerFunc {
 		lk.Lock()
 		defer lk.Unlock()
 
-		stockID, err := db.EnsureStock(wdb, ticker)
+		// Anti-zombie: se il ticker non è in DB, 1 resolve Yahoo best-effort
+		// (es. MEDIOLANUM→MED.MI con nome reale). Fallback invariato: testo
+		// libero, mai 422 (Flutter non deve rompersi).
+		effTicker, effName, resolvedFrom := ticker, "", ""
+		var knownID int64
+		if err := wdb.QueryRow(`SELECT id FROM stocks WHERE ticker = ?`, ticker).Scan(&knownID); err != nil {
+			if sym, name, ok := stocks.ResolveTicker(ticker); ok && sym != "" {
+				effTicker, effName, resolvedFrom = sym, name, ticker
+			}
+		}
+		var stockID int64
+		var err error
+		if resolvedFrom != "" {
+			mkt, cur := db.DetectMarketCurrency(effTicker)
+			stockID, err = db.EnsureStockNamed(wdb, effTicker, effName, mkt, cur)
+		} else {
+			stockID, err = db.EnsureStock(wdb, effTicker)
+		}
 		if err != nil {
 			if db.IsConflict(err) {
 				writeJSON(w, http.StatusConflict, map[string]string{
-					"detail": "Conflitto concorrente sulla creazione di " + ticker + ".",
+					"detail": "Conflitto concorrente sulla creazione di " + effTicker + ".",
 				})
 				return
 			}
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"detail": "Errore interno."})
 			return
 		}
+		ticker = effTicker
 		var existingID int64
 		err = wdb.QueryRow(
 			`SELECT id FROM watchlist_items WHERE stock_id = ? AND user_id = ?`,
@@ -170,9 +189,13 @@ func Create(read, wdb *sql.DB) http.HandlerFunc {
 		}
 		Invalidate(u.ID)
 		dashboard.InvalidateUser(u.ID)
-		writeJSON(w, http.StatusCreated, map[string]any{
+		created := map[string]any{
 			"status": "success", "message": ticker + " aggiunto alla Watchlist", "id": newID,
-		})
+		}
+		if resolvedFrom != "" {
+			created["resolved_from"] = resolvedFrom
+		}
+		writeJSON(w, http.StatusCreated, created)
 	}
 }
 

@@ -8,7 +8,7 @@ from sqlalchemy.future import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.models.stock import Stock, PriceHistory
 from backend.models.portfolio import Holding
-from backend.models.settings import UserSettings
+from backend.models.settings import UserSettings, decrypt_gemini_key
 from backend.models.advice import Advice
 from backend.models.user import User
 from backend.services.sentiment import SentimentService
@@ -20,14 +20,201 @@ logger = logging.getLogger(__name__)
 # Concurrency semaphore for Gemini API
 _gemini_semaphore = asyncio.Semaphore(2)
 
+# Modello di default (allineato a backend/config.py e .env.example).
+GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
+
+# Cache memoria delle chiavi DB decifrate per utente (user_id -> chiave in
+# chiaro). Popolata dal lazy-getter, invalidata al save della chiave
+# (vedi invalidate_gemini_key_cache, chiamata da PUT /api/settings/gemini-key).
+# Solo chiavi DB: il fallback env GEMINI_API_KEY è letto ogni volta da settings.
+_db_gemini_key_cache: dict[int, str] = {}
+
+
+def invalidate_gemini_key_cache(user_id: int | None = None) -> None:
+    """Invalida la cache della chiave DB (singolo utente o intera)."""
+    if user_id is None:
+        _db_gemini_key_cache.clear()
+    else:
+        _db_gemini_key_cache.pop(user_id, None)
+
+
+def get_env_gemini_key() -> str | None:
+    """Chiave da env (retrocompat): None se assente/vuota."""
+    raw = (settings.GEMINI_API_KEY or "").strip()
+    return raw or None
+
+
+def get_effective_gemini_model() -> str:
+    """Modello effettivo (env o default 3.8)."""
+    return (settings.GEMINI_MODEL or GEMINI_DEFAULT_MODEL).strip() or GEMINI_DEFAULT_MODEL
+
+
+async def resolve_gemini_key(
+    db_session: AsyncSession, user_id: int | None
+) -> tuple[str | None, str]:
+    """Ritorna (chiave_effettiva, source) con precedenza DB > env > none.
+
+    Legge la riga UserSettings dell'utente e decifra la colonna
+    gemini_api_key_encrypted (cache in memoria). Mai loggare la chiave.
+    """
+    if user_id is not None and user_id in _db_gemini_key_cache:
+        return _db_gemini_key_cache[user_id], "db"
+    if user_id is not None:
+        try:
+            res = await db_session.execute(
+                select(UserSettings).where(UserSettings.user_id == user_id).limit(1)
+            )
+            row = res.scalars().first()
+            enc = getattr(row, "gemini_api_key_encrypted", None) if row else None
+            plain = decrypt_gemini_key(enc)
+            if plain and plain.strip():
+                key = plain.strip()
+                _db_gemini_key_cache[user_id] = key
+                return key, "db"
+        except Exception:
+            logger.warning("Risoluzione chiave Gemini DB fallita, fallback env.")
+    env_key = get_env_gemini_key()
+    if env_key:
+        return env_key, "env"
+    return None, "none"
+
+
+def _classify_gemini_error(exc: Exception) -> tuple[int | None, str]:
+    """Estrae (status_http, testo) da un'eccezione SDK/HTTP senza mai la chiave."""
+    status: int | None = None
+    for attr in ("status_code", "status", "code"):
+        val = getattr(exc, attr, None)
+        if isinstance(val, int) and 100 <= val < 600:
+            status = val
+            break
+        if isinstance(val, str) and val.isdigit():
+            try:
+                status = int(val)
+                break
+            except ValueError:
+                pass
+    text = f"{type(exc).__name__}: {exc}"
+    # Alcuni errori google-genai espongono la risposta HTTP annidata.
+    for attr in ("response", "error"):
+        nested = getattr(exc, attr, None)
+        if nested is not None and nested is not exc:
+            try:
+                text += f" | {nested}"
+            except Exception:
+                pass
+    # Status anche nel testo ("Error 401", "status: 404", ...).
+    if status is None:
+        import re
+        m = re.search(r"\b(401|403|404|429|5\d{2})\b", text)
+        if m:
+            try:
+                status = int(m.group(1))
+            except ValueError:
+                pass
+    return status, text
+
+
+def _map_gemini_test_failure(status: int | None, text: str) -> str:
+    """Mappa un fallimento del ping a reason: key | model | transient."""
+    lowered = text.lower()
+    if status in (401, 403):
+        return "key"
+    if status == 404:
+        return "model"
+    if status == 400 and any(
+        s in lowered for s in ("api key", "api_key", "key not valid", "invalid key", "permission", "unauthorized", "unauthenticated")
+    ):
+        return "key"
+    if status == 400 and any(s in lowered for s in ("model", "not found", "not supported")):
+        return "model"
+    if "not found" in lowered and "model" in lowered:
+        return "model"
+    if any(s in lowered for s in ("api key", "apikey", "api_key_invalid", "invalid key", "key not valid")):
+        return "key"
+    return "transient"
+
+
+async def ping_gemini(api_key: str, model: str | None = None, timeout: float = 10.0) -> dict:
+    """Ping minimo a Gemini (maxOutputTokens=1, thinking low, timeout 10s).
+
+    Ritorna {ok: True, model} oppure {ok: False, reason: key|model|transient, model}.
+    429/5xx: 1 retry, poi transient. Mai loggare la chiave.
+    """
+    target_model = (model or get_effective_gemini_model()).strip() or GEMINI_DEFAULT_MODEL
+    key = (api_key or "").strip()
+    if not key:
+        return {"ok": False, "reason": "key", "model": target_model}
+
+    def _build_config():
+        try:
+            from google.genai import types as genai_types
+
+            return genai_types.GenerateContentConfig(
+                maxOutputTokens=1,
+                thinkingConfig=genai_types.ThinkingConfig(thinkingBudget=0),
+            )
+        except Exception:
+            return {"maxOutputTokens": 1}
+
+    async def _once() -> dict | None:
+        try:
+            client = genai.Client(api_key=key)
+            cfg = _build_config()
+            coro = None
+            if hasattr(client, "aio") and hasattr(client.aio, "models"):
+                coro = client.aio.models.generate_content(
+                    model=target_model, contents="ping", config=cfg
+                )
+                return await asyncio.wait_for(coro, timeout=timeout)
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    client.models.generate_content,
+                    model=target_model,
+                    contents="ping",
+                    config=cfg,
+                ),
+                timeout=timeout,
+            )
+        except Exception as e:
+            return e  # type: ignore[return-value]
+
+    last_exc: Exception | None = None
+    for attempt in (1, 2):
+        result = await _once()
+        if not isinstance(result, Exception):
+            return {"ok": True, "model": target_model}
+        last_exc = result
+        status, text = _classify_gemini_error(result)
+        reason = _map_gemini_test_failure(status, text)
+        # Solo 429/5xx Meritano il retry unico; gli altri sono definitivi.
+        should_retry = (status == 429) or (status is not None and 500 <= status <= 599)
+        # Timeout/asyncio senza status: transient senza retry (rete lenta).
+        if attempt == 1 and should_retry:
+            logger.warning(f"Ping Gemini {target_model} tentativo 1 fallito (status={status}), retry...")
+            await asyncio.sleep(0.5)
+            continue
+        logger.warning(f"Ping Gemini {target_model} fallito: reason={reason} status={status}")
+        return {"ok": False, "reason": reason, "model": target_model}
+    status, text = _classify_gemini_error(last_exc) if last_exc else (None, "")
+    return {"ok": False, "reason": _map_gemini_test_failure(status, text), "model": target_model}
+
+
 class AdvisorService:
     def __init__(self):
+        # Lazy: nessun accesso a GEMINI_API_KEY a import-time/costruttore.
+        # Il client è creato per-chiamata con la chiave effettiva (DB > env).
         self.client = None
-        if settings.GEMINI_API_KEY:
-            self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        else:
-            logger.warning("GEMINI_API_KEY non configurata.")
         self.sentiment_service = SentimentService()
+
+    def _make_client(self, api_key: str | None):
+        """Crea un client genai on-demand (None se chiave assente)."""
+        if not api_key or not api_key.strip():
+            return None
+        try:
+            return genai.Client(api_key=api_key.strip())
+        except Exception as e:
+            logger.error(f"Creazione client Gemini fallita: {e}")
+            return None
 
     async def generate_advice(self, db_session: AsyncSession, force: bool = False, user_id: int | None = None) -> list[dict]:
         """
@@ -109,12 +296,25 @@ class AdvisorService:
 
             prompt = self._build_macro_prompt(italian_stocks, us_stocks, settings_summary)
 
+            # Chiave effettiva per-utente (DB > env) con cache memoria.
+            # Usa la riga user_settings già letta: nessuna query extra.
+            if user.id in _db_gemini_key_cache:
+                _api_key = _db_gemini_key_cache[user.id]
+            else:
+                _enc = getattr(user_settings, "gemini_api_key_encrypted", None) if user_settings else None
+                _plain = decrypt_gemini_key(_enc) if _enc else None
+                if _plain and _plain.strip():
+                    _api_key = _plain.strip()
+                    _db_gemini_key_cache[user.id] = _api_key
+                else:
+                    _api_key = get_env_gemini_key()
+
             # H4: chiude la transazione di lettura (holdings/settings) prima
             # della chiamata di rete a Gemini.
             await db_session.commit()
 
             async with _gemini_semaphore:
-                response_json = await self._call_gemini(prompt)
+                response_json = await self._call_gemini(prompt, api_key=_api_key)
 
             if not response_json or not ('borsa_italiana' in response_json or 'borsa_americana' in response_json):
                 logger.info(f"Risposta Gemini non disponibile (utente {user.id}), generazione consigli quantitativi di fallback...")
@@ -227,7 +427,7 @@ class AdvisorService:
 
     async def analyze_single_stock(self, ticker: str, db_session: AsyncSession, user_id: int | None = None) -> dict:
         """
-        Genera un'analisi approfondita istantanea su richiesta per un singolo titolo con Google Gemini 3.7 Flash,
+        Genera un'analisi approfondita istantanea su richiesta per un singolo titolo con Google Gemini 3.8 Flash,
         incorporando il contesto reale delle posizioni in portafoglio dell'utente.
         """
         ticker_up = ticker.strip().upper()
@@ -272,6 +472,17 @@ class AdvisorService:
         strategy = user_settings.strategy if user_settings else "mixed"
 
         # H4: chiude la lettura del profilo utente prima della chiamata Gemini.
+        # Chiave effettiva per-utente (DB > env) con cache memoria.
+        if user_id is not None and user_id in _db_gemini_key_cache:
+            _single_api_key = _db_gemini_key_cache[user_id]
+        else:
+            _enc = getattr(user_settings, "gemini_api_key_encrypted", None) if user_settings else None
+            _plain = decrypt_gemini_key(_enc) if _enc else None
+            if user_id is not None and _plain and _plain.strip():
+                _single_api_key = _plain.strip()
+                _db_gemini_key_cache[user_id] = _single_api_key
+            else:
+                _single_api_key = get_env_gemini_key()
         await db_session.commit()
 
         portfolio_context_str = "L'utente NON possiede attualmente questo titolo in portafoglio."
@@ -338,8 +549,8 @@ Rispondi ESCLUSIVAMENTE in formato JSON con questo schema:
 }}
 """
         async with _gemini_semaphore:
-            response_json = await self._call_gemini(prompt)
-        
+            response_json = await self._call_gemini(prompt, api_key=_single_api_key)
+
         if response_json and "action" in response_json:
             if holding_info:
                 response_json['holding_context'] = holding_info
@@ -559,21 +770,29 @@ Rispondi ESCLUSIVAMENTE in formato JSON con la seguente struttura:
 }}
 """
 
-    async def _call_gemini(self, prompt: str) -> dict:
-        if not self.client:
+    async def _call_gemini(self, prompt: str, api_key: str | None = None) -> dict:
+        # Lazy-getter: chiave per-chiamata (DB > env), mai a __init__.
+        # api_key esplicita (per-utente) o fallback env per retrocompat
+        # (es. chiamate legacy senza sessione e mock esistenti).
+        effective_key = (api_key.strip() if api_key and api_key.strip() else None) or get_env_gemini_key()
+        if not effective_key:
             return {}
-        model_name = settings.GEMINI_MODEL or 'gemini-3.7-flash'
+        client = self._make_client(effective_key)
+        if client is None:
+            return {}
+        model_name = get_effective_gemini_model()
         try:
             logger.info(f"Chiamata asincrona a Google Gemini con modello: {model_name}")
-            if hasattr(self.client, 'aio') and hasattr(self.client.aio, 'models'):
-                response = await self.client.aio.models.generate_content(
+            # Gemini 3.8: solo response_mime_type (niente temperature/top_p/top_k/candidate_count).
+            if hasattr(client, 'aio') and hasattr(client.aio, 'models'):
+                response = await client.aio.models.generate_content(
                     model=model_name,
                     contents=prompt,
                     config={'response_mime_type': 'application/json'}
                 )
             else:
                 response = await asyncio.to_thread(
-                    self.client.models.generate_content,
+                    client.models.generate_content,
                     model=model_name,
                     contents=prompt,
                     config={'response_mime_type': 'application/json'}

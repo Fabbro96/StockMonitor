@@ -247,6 +247,7 @@ func main() {
 	mux.HandleFunc("PUT /api/settings/alerts/{id}", authed(alerts.Update(read, wdb)))
 	mux.HandleFunc("DELETE /api/settings/alerts/{id}", authed(alerts.Delete(read, wdb)))
 
+	mux.HandleFunc("GET /api/stocks/search", authed(stocks.Search()))
 	mux.HandleFunc("GET /api/stocks/{ticker}/candles", authed(stocks.Candles(conn)))
 
 	// Build web embedded (server-go/web/dist): registrata DOPO /api/* e

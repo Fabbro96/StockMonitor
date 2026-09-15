@@ -81,6 +81,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   String _currentServer = '';
   bool _serverLoaded = false;
 
+  // --- Gemini AI ---------------------------------------------------------
+  final TextEditingController _geminiKeyController = TextEditingController();
+  bool _geminiObscured = true;
+  String? _geminiTestMessage;
+  bool _geminiTestOk = false;
+
   // --- Stati di caricamento dei pulsanti ---------------------------------
   bool _savingSettings = false;
   bool _testingTelegram = false;
@@ -88,6 +94,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _changingPassword = false;
   bool _creatingUser = false;
   bool _serverSaving = false;
+  bool _savingGemini = false;
+  bool _testingGemini = false;
 
   /// Ultime impostazioni applicate al form (evita ri-applicazioni a ogni build).
   UserSettings? _appliedSettings;
@@ -110,6 +118,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _newPasswordController.dispose();
     _newUsernameController.dispose();
     _newUserPasswordController.dispose();
+    _geminiKeyController.dispose();
     _serverController.dispose();
     for (final TextEditingController controller in _timeControllers) {
       controller.dispose();
@@ -273,6 +282,92 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       );
     } finally {
       if (mounted) setState(() => _testingTelegram = false);
+    }
+  }
+
+  Future<void> _saveGeminiKey() async {
+    final String key = _geminiKeyController.text.trim();
+    if (key.isEmpty) {
+      showAppToast(
+        context,
+        message: 'Inserisci una chiave Gemini valida',
+        type: AppToastType.error,
+      );
+      return;
+    }
+    setState(() => _savingGemini = true);
+    try {
+      await ref.read(settingsApiProvider).saveGeminiKey(key: key);
+      _geminiKeyController.clear();
+      if (!mounted) return;
+      setState(() => _geminiTestMessage = null);
+      await ref.read(settingsProvider.notifier).reload();
+      if (!mounted) return;
+      showAppToast(
+        context,
+        message: 'Chiave Gemini salvata!',
+        type: AppToastType.success,
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      showAppToast(context, message: error.message, type: AppToastType.error);
+    } catch (_) {
+      if (!mounted) return;
+      showAppToast(
+        context,
+        message: 'Errore durante il salvataggio della chiave Gemini',
+        type: AppToastType.error,
+      );
+    } finally {
+      if (mounted) setState(() => _savingGemini = false);
+    }
+  }
+
+  Future<void> _testGemini() async {
+    setState(() {
+      _testingGemini = true;
+      _geminiTestMessage = null;
+    });
+    try {
+      final result = await ref.read(settingsApiProvider).testGemini();
+      if (!mounted) return;
+      final String message;
+      if (result.ok) {
+        message =
+            'Gemini OK${result.model.isNotEmpty ? ' (${result.model})' : ''}';
+      } else {
+        message = switch (result.reason) {
+          'key' => 'Chiave non valida: verifica la chiave Gemini salvata.',
+          'model' => 'Modello non trovato: verifica gemini_model sul server.',
+          _ => 'Errore transitorio: riprova tra poco.',
+        };
+      }
+      setState(() {
+        _geminiTestOk = result.ok;
+        _geminiTestMessage = message;
+      });
+      showAppToast(
+        context,
+        message: message,
+        type: result.ok ? AppToastType.success : AppToastType.error,
+      );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _geminiTestOk = false;
+        _geminiTestMessage = error.message;
+      });
+      showAppToast(context, message: error.message, type: AppToastType.error);
+    } catch (_) {
+      if (!mounted) return;
+      const String message = 'Errore transitorio: riprova tra poco.';
+      setState(() {
+        _geminiTestOk = false;
+        _geminiTestMessage = message;
+      });
+      showAppToast(context, message: message, type: AppToastType.error);
+    } finally {
+      if (mounted) setState(() => _testingGemini = false);
     }
   }
 
@@ -591,6 +686,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         const SizedBox(height: AppSpacing.s16),
                         _adminUsersSection(usersAsync!),
                       ],
+                      const SizedBox(height: AppSpacing.s16),
+                      _geminiSection(loaded),
                       const SizedBox(height: AppSpacing.s16),
                       _integrationsSection(loaded),
                       const SizedBox(height: AppSpacing.s16),
@@ -1576,6 +1673,151 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   // -------------------------------------------------------------------------
+  // 6b. Chiave Gemini AI (salva + testa, badge invariato altrove)
+  // -------------------------------------------------------------------------
+
+  Widget _geminiSection(UserSettings settings) {
+    final ApiStatus? status = settings.apiStatus;
+    final String model = (status?.geminiModel.isNotEmpty ?? false)
+        ? status!.geminiModel
+        : 'gemini-3.8-flash';
+    final String source = status?.geminiKeySource ?? 'none';
+    final String masked = status?.geminiKeyMasked ?? '';
+    final String sourceLabel = switch (source) {
+      'db' => 'salvata da UI',
+      'env' => 'da variabile .env',
+      _ => 'non configurata',
+    };
+    final String hint = masked.isNotEmpty
+        ? 'Attuale: $masked ($sourceLabel)'
+        : 'Nessuna chiave salvata ($sourceLabel)';
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SectionHeader(
+            title: '🤖 Chiave Gemini AI ($model)',
+            subtitle:
+                'La chiave è cifrata sul server e non viene mai mostrata '
+                'intera. Se salvata qui ha precedenza sulla variabile '
+                'GEMINI_API_KEY. $hint.',
+          ),
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              final Widget keyField = _LabeledControl(
+                label: 'Chiave API Gemini',
+                child: TextField(
+                  controller: _geminiKeyController,
+                  obscureText: _geminiObscured,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (String _) => _saveGeminiKey(),
+                  decoration: InputDecoration(
+                    hintText: masked.isNotEmpty ? masked : 'AIza...',
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _geminiObscured
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      tooltip: _geminiObscured
+                          ? 'Mostra chiave'
+                          : 'Nascondi chiave',
+                      onPressed: () => setState(
+                        () => _geminiObscured = !_geminiObscured,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+              final Widget actions = Wrap(
+                spacing: AppSpacing.s8,
+                runSpacing: AppSpacing.s8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: <Widget>[
+                  AppButton(
+                    label: 'Salva Chiave',
+                    loading: _savingGemini,
+                    loadingLabel: 'Salvataggio...',
+                    onPressed: _saveGeminiKey,
+                  ),
+                  AppButton(
+                    label: 'Testa Chiave',
+                    variant: AppButtonVariant.ghost,
+                    loading: _testingGemini,
+                    loadingLabel: 'Test...',
+                    onPressed: _testGemini,
+                  ),
+                ],
+              );
+              if (constraints.maxWidth < AppBreakpoints.compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    keyField,
+                    const SizedBox(height: AppSpacing.s12),
+                    actions,
+                    if (_geminiTestMessage != null) ...<Widget>[
+                      const SizedBox(height: AppSpacing.s10),
+                      _geminiTestAlert(),
+                    ],
+                  ],
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      Expanded(child: keyField),
+                      const SizedBox(width: AppSpacing.s14),
+                      actions,
+                    ],
+                  ),
+                  if (_geminiTestMessage != null) ...<Widget>[
+                    const SizedBox(height: AppSpacing.s10),
+                    _geminiTestAlert(),
+                  ],
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _geminiTestAlert() {
+    final AppTokens t = context.tokens;
+    final bool ok = _geminiTestOk;
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: ok ? t.successBg : t.dangerBg,
+          border: Border.all(color: ok ? t.successBorder : t.dangerBorder),
+          borderRadius: BorderRadius.circular(AppRadii.input),
+        ),
+        child: Text(
+          _geminiTestMessage ?? '',
+          style: TextStyle(
+            color: ok ? t.success : t.danger,
+            fontSize: 13.6,
+            fontWeight: FontWeight.w500,
+            height: 1.4,
+            fontFamilyFallback: AppTokens.fontFallback,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // 7. Stato integrazioni
   // -------------------------------------------------------------------------
 
@@ -1585,7 +1827,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final bool telegram = status?.telegram ?? false;
     final String model = (status?.geminiModel.isNotEmpty ?? false)
         ? status!.geminiModel
-        : 'gemini-3.7-flash';
+        : 'gemini-3.8-flash';
 
     return AppCard(
       child: Column(

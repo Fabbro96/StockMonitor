@@ -669,6 +669,14 @@ async def init_db() -> None:
                 logger.error(f"Migrazione target_allocations.user_id fallita: {e}")
                 raise
 
+        # Migrazione chiave Gemini per-utente cifrata (Fernet, vedi
+        # backend/models/settings.py): pattern idempotente esistente
+        # (ALTER TABLE best-effort, colonna già presente -> no-op).
+        try:
+            await conn.execute(text("ALTER TABLE user_settings ADD COLUMN gemini_api_key_encrypted TEXT"))
+        except Exception:
+            pass
+
         # Backfill advice storici orfani all'admin configurato (fallback: id minimo)
         try:
             admin_id = (await conn.execute(

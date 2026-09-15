@@ -8,7 +8,13 @@ from typing import List, Optional, Union
 from pydantic import BaseModel
 
 from backend.database import get_db
-from backend.models.settings import UserSettings, AlertRule
+from backend.models.settings import (
+    UserSettings,
+    AlertRule,
+    encrypt_gemini_key,
+    decrypt_gemini_key,
+    mask_gemini_key,
+)
 from backend.models.stock import Stock
 from backend.models.user import User
 from backend.services.auth import get_current_user
@@ -59,6 +65,29 @@ class AlertRuleCreate(BaseModel):
     threshold: Optional[float] = None
     direction: str = "BOTH"
     active: Optional[bool] = True
+
+
+class GeminiKeyUpdate(BaseModel):
+    """Payload per PUT /api/settings/gemini-key (chiave mai restituita intera)."""
+
+    key: str
+
+
+def _effective_gemini_for_settings(user_settings: UserSettings | None) -> tuple[str | None, str]:
+    """Ritorna (chiave_effettiva, source) con precedenza DB > env > none.
+
+    Legge la colonna cifrata della riga già caricata (nessuna query extra).
+    Mai loggare la chiave.
+    """
+    if user_settings is not None:
+        enc = getattr(user_settings, "gemini_api_key_encrypted", None)
+        plain = decrypt_gemini_key(enc) if enc else None
+        if plain and plain.strip():
+            return plain.strip(), "db"
+    env_key = (app_settings.GEMINI_API_KEY or "").strip() or None
+    if env_key:
+        return env_key, "env"
+    return None, "none"
 
 from backend.config import settings as app_settings
 
@@ -134,7 +163,9 @@ async def get_settings(
 ):
     # H8: lettura o creazione idempotente e race-safe (lock + IntegrityError re-select).
     user_settings = await _get_or_create_user_settings(db, current_user.id)
-        
+
+    effective_key, key_source = _effective_gemini_for_settings(user_settings)
+
     return {
         "id": user_settings.id,
         "strategy": user_settings.strategy,
@@ -145,8 +176,10 @@ async def get_settings(
         "reportTimes": user_settings.advice_times.split(",") if user_settings.advice_times else ["09:00", "18:00"],
         "apiStatus": {
             "telegram": bool(is_valid_api_key(app_settings.TELEGRAM_BOT_TOKEN) and is_valid_api_key(app_settings.TELEGRAM_CHAT_ID)),
-            "gemini": is_valid_api_key(app_settings.GEMINI_API_KEY),
+            "gemini": is_valid_api_key(effective_key),
             "gemini_model": app_settings.GEMINI_MODEL,
+            "gemini_key_source": key_source,
+            "gemini_key_masked": mask_gemini_key(effective_key),
             "reddit": bool(is_valid_api_key(app_settings.REDDIT_CLIENT_ID) and is_valid_api_key(app_settings.REDDIT_CLIENT_SECRET))
         }
     }
@@ -283,6 +316,84 @@ async def delete_alert(
     await db.delete(rule)
     await db.commit()
     return {"status": "success"}
+
+@router.put("/gemini-key")
+async def save_gemini_key(
+    payload: GeminiKeyUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Salva la chiave Gemini cifrata (Fernet) per l'utente corrente.
+
+    Valida formato non-vuoto, salva cifrata, invalida la cache memoria.
+    Non restituisce mai la chiave intera (solo masked + source).
+    """
+    raw = (payload.key or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Chiave Gemini non valida: valore vuoto.")
+    if len(raw) > 500:
+        raise HTTPException(status_code=400, detail="Chiave Gemini non valida: valore troppo lungo.")
+
+    user_settings = await _get_or_create_user_settings(db, current_user.id)
+    user_settings.gemini_api_key_encrypted = encrypt_gemini_key(raw)
+    await db.commit()
+    await db.refresh(user_settings)
+
+    # Invalidazione cache del lazy-getter (AdvisorService).
+    try:
+        from backend.services.advisor import invalidate_gemini_key_cache
+
+        invalidate_gemini_key_cache(current_user.id)
+    except Exception:
+        pass
+
+    return {
+        "status": "success",
+        "source": "db",
+        "masked": mask_gemini_key(raw),
+        "gemini_model": app_settings.GEMINI_MODEL,
+    }
+
+
+@router.post("/gemini/test")
+async def test_gemini(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ping minimo a Gemini con la chiave effettiva (DB > env).
+
+    Sempre 200 con {ok, reason?, model}; mai 500 e mai la chiave nei log.
+    Mappa 401/403 -> key, 404 -> model, 429/5xx (1 retry) -> transient.
+    """
+    from backend.services.advisor import ping_gemini
+
+    user_settings = await _get_or_create_user_settings(db, current_user.id)
+    effective_key, _source = _effective_gemini_for_settings(user_settings)
+    model = app_settings.GEMINI_MODEL
+    stripped = (effective_key or "").strip()
+    if not stripped:
+        return {"ok": False, "reason": "key", "model": model}
+    lowered = stripped.lower()
+    # Placeholder/finta (env di default, curl manuale con key finta, e2e):
+    # esito deterministico reason:key senza rete, mai 500.
+    if (
+        not is_valid_api_key(stripped)
+        or "fake" in lowered
+        or "dummy" in lowered
+        or lowered.startswith("test")
+        or len(stripped) < 10
+    ):
+        return {"ok": False, "reason": "key", "model": model}
+    try:
+        result = await ping_gemini(stripped, model=model, timeout=10.0)
+        # Garantisce shape {ok, model} anche se il ping evolve.
+        if not isinstance(result, dict) or "ok" not in result:
+            return {"ok": False, "reason": "transient", "model": model}
+        result.setdefault("model", model)
+        return result
+    except Exception:
+        return {"ok": False, "reason": "transient", "model": model}
+
 
 @router.post("/telegram/test")
 async def test_telegram():

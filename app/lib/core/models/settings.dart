@@ -1,16 +1,24 @@
 import 'parse_utils.dart';
 
 /// API credentials status nested in `GET /api/settings/`.
+///
+/// `geminiKeySource` è `db` (chiave salvata da UI), `env` (variabile
+/// d'ambiente) o `none`; `geminiKeyMasked` è la chiave mascherata
+/// (`••••abcd`) o stringa vuota quando assente (mai la chiave intera).
 class ApiStatus {
   final bool telegram;
   final bool gemini;
   final String geminiModel;
+  final String geminiKeySource;
+  final String geminiKeyMasked;
   final bool reddit;
 
   const ApiStatus({
     this.telegram = false,
     this.gemini = false,
     this.geminiModel = '',
+    this.geminiKeySource = 'none',
+    this.geminiKeyMasked = '',
     this.reddit = false,
   });
 
@@ -19,7 +27,29 @@ class ApiStatus {
       telegram: asBool(json['telegram']),
       gemini: asBool(json['gemini']),
       geminiModel: asString(json['gemini_model']),
+      geminiKeySource: asString(
+        json['gemini_key_source'],
+        fallback: 'none',
+      ),
+      geminiKeyMasked: asString(json['gemini_key_masked']),
       reddit: asBool(json['reddit']),
+    );
+  }
+}
+
+/// Esito del test chiave Gemini (`POST /api/settings/gemini/test`).
+class GeminiTestResult {
+  final bool ok;
+  final String reason;
+  final String model;
+
+  const GeminiTestResult({required this.ok, this.reason = '', this.model = ''});
+
+  factory GeminiTestResult.fromJson(Map<String, dynamic> json) {
+    return GeminiTestResult(
+      ok: asBool(json['ok']),
+      reason: asString(json['reason']),
+      model: asString(json['model']),
     );
   }
 }

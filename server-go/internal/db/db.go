@@ -207,10 +207,29 @@ func EnsureStock(wdb *sql.DB, ticker string) (int64, error) {
 		return 0, err
 	}
 	mkt, cur := DetectMarketCurrency(ticker)
-	err = WithRetry(func() error {
+	return EnsureStockNamed(wdb, ticker, ticker, mkt, cur)
+}
+
+// EnsureStockNamed come EnsureStock ma con nome/market/currency espliciti
+// (usato dal resolve Yahoo anti-zombie: salva symbol+nome reali).
+func EnsureStockNamed(wdb *sql.DB, ticker, name, market, currency string) (int64, error) {
+	ticker = strings.TrimSpace(strings.ToUpper(ticker))
+	if ticker == "" {
+		return 0, fmt.Errorf("db: ticker vuoto")
+	}
+	var id int64
+	if err := wdb.QueryRow(`SELECT id FROM stocks WHERE ticker = ?`, ticker).Scan(&id); err == nil {
+		return id, nil
+	} else if err != sql.ErrNoRows {
+		return 0, err
+	}
+	if strings.TrimSpace(name) == "" {
+		name = ticker
+	}
+	err := WithRetry(func() error {
 		res, e := wdb.Exec(
 			`INSERT INTO stocks(ticker, name, market, currency, is_active, created_at)
-			 VALUES(?, ?, ?, ?, 1, ?)`, ticker, ticker, mkt, cur, NowUTC())
+			 VALUES(?, ?, ?, ?, 1, ?)`, ticker, name, market, currency, NowUTC())
 		if e != nil {
 			return e
 		}

@@ -75,6 +75,22 @@ class SettingsApi {
   Future<void> testTelegram() async {
     await _client.post('/settings/telegram/test');
   }
+
+  /// `PUT /api/settings/gemini-key`
+  ///
+  /// Salva la chiave Gemini cifrata (mai restituita intera dal server).
+  Future<Map<String, dynamic>> saveGeminiKey({required String key}) async {
+    final data = await _client.put('/settings/gemini-key', body: {'key': key});
+    return asMap(data);
+  }
+
+  /// `POST /api/settings/gemini/test`
+  ///
+  /// Sempre 200 con `{ok, reason?, model}`; mai eccezione per chiave invalida.
+  Future<GeminiTestResult> testGemini() async {
+    final data = await _client.post('/settings/gemini/test');
+    return GeminiTestResult.fromJson(asMap(data));
+  }
 }
 
 final settingsApiProvider = Provider<SettingsApi>(

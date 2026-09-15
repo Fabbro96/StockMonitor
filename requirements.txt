@@ -11,6 +11,7 @@ httpx==0.28.1
 python-multipart==0.0.20
 greenlet==3.5.5
 bcrypt==4.3.0
+cryptography==50.0.0
 PyJWT==2.10.1
 sqlcipher3==0.6.2
 requests==2.34.2

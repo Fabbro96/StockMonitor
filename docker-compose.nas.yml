@@ -26,9 +26,9 @@ services:
       # Cartella locale persistente per il database SQLite (utenti, portafoglio, storico)
       - ./data:/app/data
     environment:
-      # --- Google Gemini 3.7 Flash ---
+      # --- Google Gemini 3.8 Flash ---
       - GEMINI_API_KEY=your_gemini_api_key_here
-      - GEMINI_MODEL=gemini-3.7-flash
+      - GEMINI_MODEL=gemini-3.8-flash
 
 
       # --- Autenticazione & Sicurezza ---

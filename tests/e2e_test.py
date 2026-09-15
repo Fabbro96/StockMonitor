@@ -374,6 +374,139 @@ async def test_settings_and_alerts(c: httpx.AsyncClient, h: dict):
     check("POST alert threshold negativo -> 400", r.status_code == 400)
 
 
+async def test_gemini_key_storage_and_test(c: httpx.AsyncClient, h: dict):
+    print("\n[8b] Gemini 3.8: chiave DB cifrata + test (mock coerenti)")
+    from backend.config import settings as _cfg
+    from backend.models.settings import decrypt_gemini_key
+
+    check("GEMINI_MODEL default 3.8-flash", _cfg.GEMINI_MODEL == "gemini-3.8-flash", str(_cfg.GEMINI_MODEL))
+
+    # GET iniziale: apiStatus con modello + key_source (mai chiave intera)
+    r = await c.get("/api/settings/", headers=h)
+    check("GET settings con apiStatus gemini -> 200", r.status_code == 200)
+    api = r.json().get("apiStatus", {}) if r.status_code == 200 else {}
+    check("apiStatus gemini_model 3.8-flash", api.get("gemini_model") == "gemini-3.8-flash", str(api.get("gemini_model")))
+    check("apiStatus ha gemini_key_source", api.get("gemini_key_source") in ("env", "db", "none"), str(api))
+    initial_source = api.get("gemini_key_source")
+
+    # PUT senza auth -> 401 (client pulito, niente cookie accumulato)
+    from backend.main import app as _app
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app),
+                                 base_url="http://test", timeout=10.0) as fresh:
+        rr = await fresh.put("/api/settings/gemini-key", json={"key": "test-fake-key-1234"})
+    check("PUT gemini-key senza token -> 401", rr.status_code == 401, str(rr.status_code))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=_app),
+                                 base_url="http://test", timeout=10.0) as fresh:
+        rr = await fresh.post("/api/settings/gemini/test")
+    check("POST gemini/test senza token -> 401", rr.status_code == 401, str(rr.status_code))
+
+    # PUT vuota -> 400
+    r = await c.put("/api/settings/gemini-key", headers=h, json={"key": "   "})
+    check("PUT gemini-key vuota -> 400", r.status_code == 400, str(r.status_code))
+
+    # PUT chiave finta -> 200 con masked, mai intera
+    fake_key = "test-fake-key-1234"
+    r = await c.put("/api/settings/gemini-key", headers=h, json={"key": fake_key})
+    check("PUT gemini-key finta -> 200", r.status_code == 200, str(r.status_code))
+    body = r.json() if r.status_code == 200 else {}
+    check("PUT ritorna masked ••••1234 (mai intera)",
+          body.get("masked") == "••••1234" and fake_key not in str(body), str(body))
+    check("PUT ritorna source db", body.get("source") == "db", str(body))
+
+    # GET: masked + source db, mai chiave intera nel body
+    r = await c.get("/api/settings/", headers=h)
+    api = r.json().get("apiStatus", {}) if r.status_code == 200 else {}
+    check("GET dopo save: source db", api.get("gemini_key_source") == "db", str(api))
+    check("GET dopo save: masked ••••1234",
+          api.get("gemini_key_masked") == "••••1234", str(api))
+    check("GET non espone mai la chiave intera", fake_key not in r.text, r.text[:200])
+
+    # DB: colonna cifrata, mai plaintext
+    rows = _db_query(
+        "SELECT gemini_api_key_encrypted FROM user_settings WHERE user_id=("
+        "SELECT id FROM users WHERE username=?)", (ADMIN_USER,))
+    enc = rows[0][0] if rows and rows[0] else None
+    check("DB: colonna cifrata presente e diversa dal plaintext",
+          bool(enc) and enc != fake_key, str(enc)[:60] if enc else "None")
+    check("DB: decrypt ritrova la chiave finta",
+          decrypt_gemini_key(enc) == fake_key if enc else False)
+
+    # POST test con chiave finta -> 200 {ok:false, reason:key}, mai 500
+    r = await c.post("/api/settings/gemini/test", headers=h)
+    check("POST gemini/test finta -> 200", r.status_code == 200, str(r.status_code))
+    tb = r.json() if r.status_code == 200 else {}
+    check("POST gemini/test finta -> ok False reason key",
+          tb.get("ok") is False and tb.get("reason") == "key", str(tb))
+    check("POST gemini/test ritorna model 3.8", tb.get("model") == "gemini-3.8-flash", str(tb))
+    check("POST gemini/test non espone la chiave", fake_key not in r.text, r.text[:200])
+
+    # Isolamento: nuovo utente non vede la chiave admin
+    uid2, uh2 = await _new_user_headers(c, h, "gemini_iso")
+    if uh2:
+        r2 = await c.get("/api/settings/", headers=uh2)
+        api2 = r2.json().get("apiStatus", {}) if r2.status_code == 200 else {}
+        check("isolamento: nuovo utente non eredita la chiave admin (source != db)",
+              api2.get("gemini_key_source") != "db" or api2.get("gemini_key_masked") != "••••1234",
+              str(api2))
+        # Il nuovo utente salva la propria chiave: masked coerente, admin intatto
+        r2 = await c.put("/api/settings/gemini-key", headers=uh2, json={"key": "test-fake-altro-9999"})
+        check("isolamento: PUT chiave secondo utente -> 200", r2.status_code == 200, str(r2.status_code))
+        r2 = await c.get("/api/settings/", headers=uh2)
+        api2 = r2.json().get("apiStatus", {}) if r2.status_code == 200 else {}
+        check("isolamento: masked secondo utente ••••9999",
+              api2.get("gemini_key_masked") == "••••9999", str(api2))
+        r = await c.get("/api/settings/", headers=h)
+        api = r.json().get("apiStatus", {}) if r.status_code == 200 else {}
+        check("isolamento: chiave admin intatta dopo save altrui",
+              api.get("gemini_key_masked") == "••••1234", str(api))
+    else:
+        check("isolamento: setup secondo utente", False)
+
+    # Lazy-getter + cache: resolve usa DB, invalidazione al re-save
+    from backend.database import async_session_maker
+    from backend.services import advisor as advisor_mod
+
+    admin_row = _db_query("SELECT id FROM users WHERE username=?", (ADMIN_USER,))
+    admin_id = admin_row[0][0] if admin_row else None
+    if admin_id is not None:
+        async with async_session_maker() as session:
+            k1, s1 = await advisor_mod.resolve_gemini_key(session, admin_id)
+        check("resolve: chiave DB con cache (source db)",
+              k1 == fake_key and s1 == "db", f"k1={'***' if k1 else None} s1={s1}")
+        check("resolve: cache popolata per admin",
+              advisor_mod._db_gemini_key_cache.get(admin_id) == fake_key)
+        # Re-save invalida la cache: la GET successiva ripopola col nuovo valore
+        r = await c.put("/api/settings/gemini-key", headers=h, json={"key": "test-fake-key-5678"})
+        check("re-save invalida cache admin",
+              advisor_mod._db_gemini_key_cache.get(admin_id) is None, str(bool(advisor_mod._db_gemini_key_cache.get(admin_id))))
+        async with async_session_maker() as session:
+            k2, s2 = await advisor_mod.resolve_gemini_key(session, admin_id)
+        check("resolve dopo re-save: nuova chiave DB",
+              k2 == "test-fake-key-5678" and s2 == "db")
+        # Ripristina la finta originale per idempotenza suite
+        await c.put("/api/settings/gemini-key", headers=h, json={"key": fake_key})
+    else:
+        check("resolve: admin id trovato", False)
+
+    # _call_gemini mockato con firma lazy (prompt, api_key): nessun 500, fallback ok
+    svc = advisor_mod.AdvisorService()
+
+    async def fake_call(prompt, api_key=None):
+        _ = prompt
+        assert api_key == fake_key, f"api_key={str(api_key)[:8]}..."
+        return {}
+
+    svc._call_gemini = fake_call  # type: ignore[assignment]
+    try:
+        async with async_session_maker() as session:
+            out = await svc._call_gemini("ping", api_key=fake_key)
+        check("_call_gemini mockato con api_key non dà 500", out == {})
+    except AssertionError as e:
+        check("_call_gemini riceve la chiave DB effettiva", False, str(e))
+
+    _ = initial_source
+
+
 async def test_dashboard(c: httpx.AsyncClient, h: dict):
     print("\n[9] Dashboard")
     r = await c.get("/api/dashboard/", headers=h)
@@ -2132,7 +2265,10 @@ async def test_be2_watchlist_alignment_and_advisor_notnull():
     async def fake_ctx(ticker, name):
         return []
 
-    async def fake_gemini(prompt):
+    async def fake_gemini(prompt, api_key=None):
+        # Mock coerente con la firma lazy (prompt, api_key opzionale):
+        # chiave finta, mai rete.
+        _ = api_key
         return {
             "borsa_italiana": {"overview": "Quadro IT", "action": None, "strategy": None,
                                "confidence": None, "stocks_analysis": []},
@@ -2809,6 +2945,7 @@ async def run_all():
             await test_benchmarks_and_performance(c, h)
             await test_rebalancer(c, h)
             await test_settings_and_alerts(c, h)
+            await test_gemini_key_storage_and_test(c, h)
             await test_dashboard(c, h)
             await test_advice_fallback(c, h)
             await test_multi_user_isolation(c, h)

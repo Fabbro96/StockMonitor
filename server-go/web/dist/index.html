@@ -3,85 +3,50 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="StockMon Go — dashboard leggera read-only (F2-212).">
 <title>StockMon Go</title>
 <link rel="stylesheet" href="style.css?v=1">
 </head>
 <body>
 <header class="top">
-  <div class="brand">📈 StockMon <span class="tag">Go</span></div>
-  <div class="top-right">
-    <span id="mkt" class="mkt" aria-live="polite"></span>
-    <button id="refresh" type="button" title="Aggiorna ora">↻</button>
-    <button id="logout" type="button" hidden>Esci</button>
-  </div>
+<div class="brand">StockMon <span class="tag">Go</span></div>
+<div class="top-right">
+<span id="mkt" class="mkt"></span>
+<button id="refresh" type="button" title="Aggiorna">↻</button>
+<button id="logout" type="button" hidden>Esci</button>
+</div>
 </header>
-
-<noscript><p class="err">Serve JavaScript per questa dashboard.</p></noscript>
-
 <section id="login" class="card login">
-  <h1>Accedi</h1>
-  <p class="muted">Stesse credenziali del backend (JWT, 7 giorni).</p>
-  <form id="loginForm" autocomplete="on">
-    <label>Utente
-      <input id="user" name="username" type="text" autocomplete="username" required>
-    </label>
-    <label>Password
-      <input id="pass" name="password" type="password" autocomplete="current-password" required>
-    </label>
-    <button type="submit">Login</button>
-  </form>
-  <p id="loginErr" class="err" role="alert"></p>
+<h1>Accedi</h1>
+<form id="loginForm">
+<label>Utente<input id="user" name="username" type="text" autocomplete="username" required></label>
+<label>Password<input id="pass" name="password" type="password" autocomplete="current-password" required></label>
+<button type="submit">Login</button>
+</form>
+<p id="loginErr" class="err" role="alert"></p>
 </section>
-
 <main id="app" hidden>
-  <p id="status" class="muted" aria-live="polite"></p>
-
-  <section class="grid" id="cards" aria-label="Portafoglio">
-    <div class="card"><h2>Controvalore</h2><p id="cVal" class="big">—</p><p id="cInv" class="muted"></p></div>
-    <div class="card"><h2>P&amp;L totale</h2><p id="cPnl" class="big">—</p><p id="cPnlP" class="muted"></p></div>
-    <div class="card"><h2>P&amp;L giorno</h2><p id="cDay" class="big">—</p><p id="cDayP" class="muted"></p></div>
-    <div class="card"><h2>Posizioni / Alert</h2><p id="cPos" class="big">—</p><p id="cAlert" class="muted"></p></div>
-  </section>
-
-  <section class="card">
-    <div class="row">
-      <h2>Watchlist</h2>
-      <span id="wlCount" class="muted"></span>
-    </div>
-    <div class="tbl-wrap">
-    <table id="wl">
-      <thead><tr>
-        <th>Ticker</th><th class="num">Prezzo</th><th class="num">Δ %</th>
-        <th class="num">RSI</th><th>Alert</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="row wrap">
-      <h2>Grafico</h2>
-      <select id="ticker" aria-label="Titolo"></select>
-      <select id="tf" aria-label="Timeframe">
-        <option value="1d">1d</option><option value="1w">1w</option>
-        <option value="1m" selected>1m</option><option value="6m">6m</option>
-        <option value="1y">1y</option><option value="5y">5y</option>
-      </select>
-      <span id="stale" class="badge" hidden>cache DB</span>
-    </div>
-    <canvas id="chart" height="220"></canvas>
-    <p id="chartInfo" class="muted"></p>
-  </section>
-
-  <section class="card">
-    <h2>Consigli recenti</h2>
-    <ul id="adv" class="adv"></ul>
-  </section>
+<p id="status" class="muted"></p>
+<section class="grid" id="cards">
+<div class="card"><h2>Controvalore</h2><p id="cVal" class="big">—</p><p id="cInv" class="muted"></p></div>
+<div class="card"><h2>P&amp;L totale</h2><p id="cPnl" class="big">—</p><p id="cPnlP" class="muted"></p></div>
+<div class="card"><h2>P&amp;L giorno</h2><p id="cDay" class="big">—</p><p id="cDayP" class="muted"></p></div>
+<div class="card"><h2>Posizioni / Alert</h2><p id="cPos" class="big">—</p><p id="cAlert" class="muted"></p></div>
+</section>
+<section class="card">
+<div class="row"><h2>Watchlist</h2><span id="wlCount" class="muted"></span></div>
+<div class="tbl-wrap"><table id="wl">
+<thead><tr><th>Ticker</th><th class="num">Prezzo</th><th class="num">Δ %</th><th class="num">RSI</th><th>Alert</th></tr></thead>
+<tbody></tbody>
+</table></div>
+</section>
+<section class="card">
+<div class="row"><h2>Grafico 1m</h2><select id="ticker" aria-label="Titolo"></select><span id="stale" class="badge" hidden>cache</span></div>
+<canvas id="chart" height="220"></canvas>
+<p id="chartInfo" class="muted"></p>
+</section>
+<section class="card"><h2>Consigli</h2><ul id="adv" class="adv"></ul></section>
 </main>
-
-<footer class="muted">StockMon Go · read-only · auto-refresh 300s · ETag attivo</footer>
+<footer>StockMon Go · read-only</footer>
 <script src="app.js?v=1" defer></script>
 </body>
 </html>

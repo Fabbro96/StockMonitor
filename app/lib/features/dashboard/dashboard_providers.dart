@@ -175,15 +175,18 @@ enum ChartTimeframe {
 }
 
 /// Benchmark del grafico (come i chip `.bench-chip` del frontend).
+///
+/// Nel linguaggio Registro l'etichetta non contiene emoji: il mercato degli
+/// indici è reso da [AppMarketTag] nel chip (`US`, `IT`).
 enum ChartBenchmark {
-  /// [Solo Portafoglio] — vista assoluta in valuta.
-  portfolio('Solo Portafoglio'),
+  /// [Solo portafoglio] — vista assoluta in valuta.
+  portfolio('Solo portafoglio'),
 
-  /// [🇺🇸 S&P 500].
-  sp500('🇺🇸 S&P 500'),
+  /// [S&P 500].
+  sp500('S&P 500'),
 
-  /// [🇮🇹 FTSE MIB].
-  ftseMib('🇮🇹 FTSE MIB'),
+  /// [FTSE MIB].
+  ftseMib('FTSE MIB'),
 
   /// [Entrambi] i benchmark in vista crescita %.
   both('Entrambi');

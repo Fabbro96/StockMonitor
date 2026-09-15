@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stock_monitor/features/portfolio/portfolio_screen.dart'
     show PortfolioSaveBar;
-import 'package:stock_monitor/features/stock_detail/stock_detail_modal.dart'
-    show StockDetailCallout;
+import 'package:stock_monitor/widgets/app_callout.dart';
 
 /// Widget test di paint per i bordi accent dei miei file: un [Border]
 /// asimmetrico combinato con `borderRadius` lancia
@@ -27,16 +26,17 @@ void main() {
     },
   );
 
-  testWidgets('StockDetailCallout con accent non lancia eccezioni di paint', (
+  testWidgets('AppCallout con accent non lancia eccezioni di paint', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
       _host(
-        const StockDetailCallout(
-          background: Color(0x1A2563EB),
-          borderColor: Color(0xFF2563EB),
-          accentColor: Color(0xFFF59E0B),
-          child: Text('💼 Posizione nel tuo Portafoglio'),
+        const AppCallout(
+          tone: AppCalloutTone.info,
+          accent: true,
+          icon: Icon(Icons.work_outline),
+          title: 'Posizione in portafoglio',
+          body: 'Righe di registro e badge.',
         ),
       ),
     );

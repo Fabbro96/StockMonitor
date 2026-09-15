@@ -11,22 +11,24 @@ import '../features/stock_detail/stock_detail_modal.dart';
 import '../theme/app_theme.dart';
 import '../theme/theme_controller.dart';
 import '../theme/tokens.dart';
+import '../widgets/app_market_tag.dart';
 import '../widgets/badges.dart';
 import '../widgets/skeleton.dart';
-import '../widgets/ticker_flag.dart';
 import 'shortcuts_help.dart';
 
 /// Apre la Command Palette globale (ricerca titoli, indici e navigazione
 /// rapida; scorciatoia `Ctrl/Cmd+K` o `/`).
 ///
-/// Parità con la palette del frontend HTML:
+/// Linguaggio Registro: pannello `surfaceRaised` con raggio 10, campo di
+/// ricerca a 42px con anello d'accento, gruppi `NAVIGAZIONE` / `AZIONI` /
+/// `TITOLI`, righe a 44px con tag di mercato e scorciatoie a destra.
+///
+/// Comportamento invariato rispetto alla palette storica:
 /// - backdrop cliccabile e `esc` chiudono; card max 620px allineata in alto
 ///   (10vh, 6vh sotto 640px), corpo max 380px (60vh su mobile);
 /// - input autofocus con debounce 300ms su `GET /stocks/search` e guardia
 ///   anti-stale; i risultati locali restano visibili se la ricerca remota
 ///   fallisce (fallback silenzioso, merge max 8);
-/// - categorie `⚡ Navigazione & Azioni Rapide` e `📈 Titoli Corrispondenti`
-///   (query) / `⭐ Titoli & Indici Chiave` (vuota);
 /// - ↑/↓ con wrap, ↵ esegue, esc chiude, click esegue;
 /// - stock → `showStockDetail`, nav → `context.go`, tema →
 ///   [themeControllerProvider], help → [showShortcutsHelp].
@@ -73,12 +75,16 @@ Future<void> showAppCommandPalette(BuildContext context) {
 /// Azione associata a una voce della palette.
 enum _PaletteAction { navigate, themeToggle, shortcutsHelp, stock }
 
+/// Gruppo di appartenenza della voce (guida le intestazioni e l'ordine).
+enum _PaletteGroup { navigation, action, stock }
+
 /// Voce selezionabile della palette (navigazione, azione rapida o titolo).
 class _PaletteEntry {
   const _PaletteEntry({
     required this.action,
-    required this.icon,
+    required this.group,
     required this.title,
+    this.icon,
     this.description = '',
     this.shortcut,
     this.path,
@@ -88,7 +94,8 @@ class _PaletteEntry {
   });
 
   final _PaletteAction action;
-  final String icon;
+  final _PaletteGroup group;
+  final IconData? icon;
   final String title;
   final String description;
   final String? shortcut;
@@ -106,19 +113,19 @@ class _PopularStock {
     required this.ticker,
     required this.name,
     required this.market,
-    required this.icon,
   });
 
   final String ticker;
   final String name;
   final String market;
-  final String icon;
 }
 
-const List<_PaletteEntry> _navEntries = <_PaletteEntry>[
+/// Destinazioni di navigazione, nello stesso ordine della sidebar.
+const List<_PaletteEntry> _navigationEntries = <_PaletteEntry>[
   _PaletteEntry(
     action: _PaletteAction.navigate,
-    icon: '🏠',
+    group: _PaletteGroup.navigation,
+    icon: Icons.space_dashboard_outlined,
     title: 'Dashboard',
     description: 'Panoramica patrimonio, indici globali e heatmap',
     shortcut: 'D',
@@ -126,97 +133,87 @@ const List<_PaletteEntry> _navEntries = <_PaletteEntry>[
   ),
   _PaletteEntry(
     action: _PaletteAction.navigate,
-    icon: '⭐',
-    title: 'Watchlist & Radar',
-    description: 'Monitoraggio titoli osservati e alert prezzi',
+    group: _PaletteGroup.navigation,
+    icon: Icons.travel_explore,
+    title: 'Mercati',
+    description: 'Watchlist e radar: titoli osservati e alert prezzi',
     shortcut: 'W',
     path: '/watchlist',
   ),
   _PaletteEntry(
     action: _PaletteAction.navigate,
-    icon: '💼',
-    title: 'Portafoglio & Ledger',
+    group: _PaletteGroup.navigation,
+    icon: Icons.account_balance_wallet_outlined,
+    title: 'Portafoglio',
     description: 'Holdings, trade ledger, dividendi e ribilanciamento',
     shortcut: 'P',
     path: '/portfolio',
   ),
   _PaletteEntry(
     action: _PaletteAction.navigate,
-    icon: '🧠',
-    title: 'Consigli IA & Sentiment',
-    description: 'Report di intelligence e raccomandazioni operative',
+    group: _PaletteGroup.navigation,
+    icon: Icons.insights_outlined,
+    title: 'Analisi',
+    description: 'Consigli IA, report di intelligence e sentiment',
     shortcut: 'C',
     path: '/advice',
   ),
   _PaletteEntry(
     action: _PaletteAction.navigate,
-    icon: '⚙️',
-    title: 'Impostazioni & Alert',
-    description: 'Configurazione budget, notifiche Telegram e profilo',
+    group: _PaletteGroup.navigation,
+    icon: Icons.tune,
+    title: 'Impostazioni',
+    description: 'Budget, strategia, notifiche e configurazione',
     shortcut: 'S',
     path: '/settings',
   ),
+];
+
+/// Azioni rapide (non navigano): tema e guida scorciatoie.
+const List<_PaletteEntry> _actionEntries = <_PaletteEntry>[
   _PaletteEntry(
     action: _PaletteAction.themeToggle,
-    icon: '🌓',
-    title: 'Alterna Tema (Dark/Light)',
+    group: _PaletteGroup.action,
+    icon: Icons.brightness_6_outlined,
+    title: 'Alterna Tema (Chiaro/Scuro)',
     description: 'Passa al tema chiaro o scuro',
     shortcut: 'T',
   ),
   _PaletteEntry(
     action: _PaletteAction.shortcutsHelp,
-    icon: '❓',
+    group: _PaletteGroup.action,
+    icon: Icons.keyboard_outlined,
     title: 'Scorciatoie Tastiera',
     description: 'Visualizza tutte le scorciatoie disponibili',
     shortcut: '?',
   ),
 ];
 
+/// Voci cercabili: navigazione prima delle azioni, come nell'ordine mostrato.
+const List<_PaletteEntry> _navEntries = <_PaletteEntry>[
+  ..._navigationEntries,
+  ..._actionEntries,
+];
+
 const List<_PopularStock> _popularStocks = <_PopularStock>[
-  _PopularStock(
-    ticker: 'FTSEMIB.MI',
-    name: 'FTSE MIB',
-    market: 'IT',
-    icon: '🇮🇹',
-  ),
-  _PopularStock(ticker: '^GSPC', name: 'S&P 500', market: 'US', icon: '🇺🇸'),
-  _PopularStock(ticker: '^IXIC', name: 'NASDAQ', market: 'US', icon: '🇺🇸'),
-  _PopularStock(
-    ticker: 'BTC-USD',
-    name: 'Bitcoin',
-    market: 'CRYPTO',
-    icon: '🪙',
-  ),
-  _PopularStock(
-    ticker: 'GC=F',
-    name: 'Oro (Futures)',
-    market: 'COMMODITY',
-    icon: '🥇',
-  ),
-  _PopularStock(
-    ticker: 'RACE.MI',
-    name: 'Ferrari N.V.',
-    market: 'IT',
-    icon: '🏎️',
-  ),
-  _PopularStock(
-    ticker: 'ENEL.MI',
-    name: 'Enel S.p.A.',
-    market: 'IT',
-    icon: '⚡',
-  ),
-  _PopularStock(ticker: 'AAPL', name: 'Apple Inc.', market: 'US', icon: '🍏'),
-  _PopularStock(ticker: 'NVDA', name: 'NVIDIA Corp.', market: 'US', icon: '🟢'),
+  _PopularStock(ticker: 'FTSEMIB.MI', name: 'FTSE MIB', market: 'IT'),
+  _PopularStock(ticker: '^GSPC', name: 'S&P 500', market: 'US'),
+  _PopularStock(ticker: '^IXIC', name: 'NASDAQ', market: 'US'),
+  _PopularStock(ticker: 'BTC-USD', name: 'Bitcoin', market: 'CRYPTO'),
+  _PopularStock(ticker: 'GC=F', name: 'Oro (Futures)', market: 'COMMODITY'),
+  _PopularStock(ticker: 'RACE.MI', name: 'Ferrari N.V.', market: 'IT'),
+  _PopularStock(ticker: 'ENEL.MI', name: 'Enel S.p.A.', market: 'IT'),
+  _PopularStock(ticker: 'AAPL', name: 'Apple Inc.', market: 'US'),
+  _PopularStock(ticker: 'NVDA', name: 'NVIDIA Corp.', market: 'US'),
 ];
 
 _PaletteEntry _stockEntry({
   required String ticker,
   required String name,
   required String market,
-  required String icon,
 }) => _PaletteEntry(
   action: _PaletteAction.stock,
-  icon: icon,
+  group: _PaletteGroup.stock,
   title: ticker,
   name: name,
   ticker: ticker,
@@ -247,6 +244,7 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
   int _searchSeq = 0;
   String _queryText = '';
   bool _searchPending = false;
+  bool _inputFocused = false;
   List<_PaletteEntry> _navMatches = const <_PaletteEntry>[];
   List<_PaletteEntry> _stockMatches = const <_PaletteEntry>[];
   List<_PaletteEntry> _entries = const <_PaletteEntry>[];
@@ -255,16 +253,23 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
   @override
   void initState() {
     super.initState();
+    _inputFocus.addListener(_onInputFocusChanged);
     _showEmptyQuery();
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _inputFocus.removeListener(_onInputFocusChanged);
     _query.dispose();
     _inputFocus.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  void _onInputFocusChanged() {
+    if (_inputFocus.hasFocus == _inputFocused) return;
+    setState(() => _inputFocused = _inputFocus.hasFocus);
   }
 
   void _showEmptyQuery() {
@@ -277,7 +282,6 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
             ticker: s.ticker,
             name: s.name,
             market: s.market,
-            icon: s.icon,
           ),
         )
         .toList(growable: false);
@@ -325,7 +329,6 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
             ticker: s.ticker,
             name: s.name,
             market: s.market,
-            icon: s.icon,
           ),
         )
         .take(_maxResults)
@@ -367,7 +370,6 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
               ticker: result.ticker,
               name: result.name,
               market: result.market,
-              icon: TickerFlags.forTicker(result.ticker, market: result.market),
             ),
           );
         }
@@ -487,9 +489,9 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
               },
               child: Container(
                 decoration: BoxDecoration(
-                  color: t.surface,
+                  color: t.surfaceRaised,
                   border: Border.all(color: t.border),
-                  borderRadius: BorderRadius.circular(AppRadii.card),
+                  borderRadius: BorderRadius.circular(AppRadii.sheet),
                   boxShadow: t.shadowLg,
                 ),
                 clipBehavior: Clip.antiAlias,
@@ -515,49 +517,73 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
 
   Widget _header(AppTokens t) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.border)),
       ),
       child: Row(
         children: <Widget>[
-          Icon(Icons.search, size: 17, color: t.textMuted),
-          const SizedBox(width: AppSpacing.s10),
           Expanded(
-            child: TextField(
-              controller: _query,
-              focusNode: _inputFocus,
-              autofocus: true,
-              onChanged: _onQueryChanged,
-              onSubmitted: (_) => _executeActive(),
-              textInputAction: TextInputAction.done,
-              style: TextStyle(
-                color: t.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.w400,
-                fontFamilyFallback: AppTokens.fontFallback,
-              ),
-              decoration: InputDecoration(
-                isDense: true,
-                filled: false,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                hintText: 'Cerca titolo, ticker o naviga (es. AAPL, RACE, Portafoglio)...',
-                hintStyle: TextStyle(
-                  color: t.textMuted,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w400,
-                  fontFamilyFallback: AppTokens.fontFallback,
+            child: AnimatedContainer(
+              duration: AppMotion.effective(context, AppMotion.fast),
+              curve: AppMotion.ease,
+              height: AppSizes.controlLg,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: t.surface,
+                border: Border.all(
+                  color: _inputFocused ? t.primary : t.border,
                 ),
-                contentPadding: EdgeInsets.zero,
+                borderRadius: BorderRadius.circular(AppRadii.control),
+                boxShadow: _inputFocused
+                    ? <BoxShadow>[
+                        BoxShadow(
+                          color: t.focusRing,
+                          blurRadius: 0,
+                          spreadRadius: 2,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Row(
+                children: <Widget>[
+                  Icon(
+                    Icons.search,
+                    size: AppSizes.icon,
+                    color: _inputFocused ? t.primary : t.textMuted,
+                  ),
+                  const SizedBox(width: AppSpacing.s10),
+                  Expanded(
+                    child: TextField(
+                      controller: _query,
+                      focusNode: _inputFocus,
+                      autofocus: true,
+                      onChanged: _onQueryChanged,
+                      onSubmitted: (_) => _executeActive(),
+                      textInputAction: TextInputAction.done,
+                      style: AppText.bodyFor(t).copyWith(fontSize: 15),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        filled: false,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        hintText:
+                            'Cerca titolo, ticker o naviga (es. AAPL, RACE, Portafoglio)...',
+                        hintStyle: AppText.bodyFor(t)
+                            .copyWith(fontSize: 15, color: t.textMuted),
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.s10),
+                  MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: GestureDetector(onTap: _close, child: const AppKbd('esc')),
+                  ),
+                ],
               ),
             ),
-          ),
-          const SizedBox(width: AppSpacing.s10),
-          MouseRegion(
-            cursor: SystemMouseCursors.click,
-            child: GestureDetector(onTap: _close, child: const AppKbd('esc')),
           ),
         ],
       ),
@@ -609,27 +635,31 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
   }
 
   Widget _results(AppTokens t) {
+    final List<_PaletteEntry> navigation = _navMatches
+        .where((_PaletteEntry e) => e.group == _PaletteGroup.navigation)
+        .toList(growable: false);
+    final List<_PaletteEntry> actions = _navMatches
+        .where((_PaletteEntry e) => e.group == _PaletteGroup.action)
+        .toList(growable: false);
+
     final List<Widget> children = <Widget>[];
     int index = 0;
-    if (_navMatches.isNotEmpty) {
-      children.add(_category(t, '⚡ Navigazione & Azioni Rapide'));
-      for (final _PaletteEntry entry in _navMatches) {
+    void addCategory(String label, List<_PaletteEntry> entries) {
+      if (entries.isEmpty) return;
+      if (children.isNotEmpty) children.add(const SizedBox(height: AppSpacing.s6));
+      children.add(_category(t, label));
+      for (final _PaletteEntry entry in entries) {
         children.add(_item(entry, index++));
       }
     }
-    if (_stockMatches.isNotEmpty) {
-      children.add(
-        _category(
-          t,
-          _queryText.isEmpty
-              ? '⭐ Titoli & Indici Chiave'
-              : '📈 Titoli Corrispondenti',
-        ),
-      );
-      for (final _PaletteEntry entry in _stockMatches) {
-        children.add(_item(entry, index++));
-      }
-    }
+
+    addCategory('NAVIGAZIONE', navigation);
+    addCategory('AZIONI', actions);
+    addCategory(
+      _queryText.isEmpty ? 'TITOLI' : 'TITOLI CORRISPONDENTI',
+      _stockMatches,
+    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -640,17 +670,7 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
   Widget _category(AppTokens t, String label) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-      child: Text(
-        label.toUpperCase(),
-        style: TextStyle(
-          color: t.textMuted,
-          fontSize: 11.2,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.67,
-          height: 1.3,
-          fontFamilyFallback: AppTokens.fontFallback,
-        ),
-      ),
+      child: Text(label, style: AppText.microFor(t).copyWith(color: t.textFaint)),
     );
   }
 
@@ -666,9 +686,9 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
 
   Widget _footer(AppTokens t) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: t.bgSecondary,
+        color: t.surfaceSunken,
         border: Border(top: BorderSide(color: t.border)),
       ),
       child: Row(
@@ -688,14 +708,7 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
           const SizedBox(width: AppSpacing.s10),
           Text(
             'Stock Monitor Spotlight',
-            style: TextStyle(
-              color: t.textMuted,
-              fontSize: 11.8,
-              fontWeight: FontWeight.w400,
-              height: 1.4,
-              fontFamily: AppTokens.monoFontFamily,
-              fontFamilyFallback: AppTokens.monoFontFallback,
-            ),
+            style: AppText.mono(context, size: 11.5, weight: FontWeight.w400, color: t.textFaint),
           ),
         ],
       ),
@@ -710,21 +723,15 @@ class _CommandPaletteState extends ConsumerState<_CommandPalette> {
         const SizedBox(width: 5),
         Text(
           label,
-          style: TextStyle(
-            color: t.textMuted,
-            fontSize: 11.8,
-            fontWeight: FontWeight.w400,
-            height: 1.4,
-            fontFamilyFallback: AppTokens.fontFallback,
-          ),
+          style: AppText.captionFor(t).copyWith(fontSize: 11.8),
         ),
       ],
     );
   }
 }
 
-/// Riga della palette: sfondo/bordo `surface-hover` su hover o selezione,
-/// barra inset primary (2px) quando è la voce attiva.
+/// Riga della palette: fondo `surfaceHover` su hover o selezione, barra
+/// d'accento da 2px clippata a sinistra quando è la voce attiva.
 class _PaletteItemTile extends StatefulWidget {
   const _PaletteItemTile({
     super.key,
@@ -757,7 +764,7 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
           border: Border.all(
             color: highlighted ? t.border : Colors.transparent,
           ),
-          borderRadius: BorderRadius.circular(AppRadii.input),
+          borderRadius: BorderRadius.circular(AppRadii.control),
         ),
         clipBehavior: Clip.antiAlias,
         child: Stack(
@@ -770,15 +777,18 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
                 // niente focus traversal invisibile sugli item.
                 canRequestFocus: false,
                 onHover: (bool value) => setState(() => _hovered = value),
-                borderRadius: BorderRadius.circular(AppRadii.input),
+                borderRadius: BorderRadius.circular(AppRadii.control),
                 hoverColor: Colors.transparent,
                 focusColor: Colors.transparent,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 9,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 44),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    child: widget.entry.isStock ? _stockRow(t) : _navRow(t),
                   ),
-                  child: widget.entry.isStock ? _stockRow(t) : _navRow(t),
                 ),
               ),
             ),
@@ -787,7 +797,7 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
                 left: 0,
                 top: 0,
                 bottom: 0,
-                width: 2,
+                width: AppSizes.accentStrip,
                 child: ColoredBox(color: t.primary),
               ),
           ],
@@ -803,7 +813,11 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
       children: <Widget>[
         SizedBox(
           width: 22,
-          child: Text(entry.icon, textAlign: TextAlign.center),
+          child: Icon(
+            entry.icon ?? Icons.chevron_right,
+            size: AppSizes.icon,
+            color: t.textSecondary,
+          ),
         ),
         const SizedBox(width: AppSpacing.s10),
         Expanded(
@@ -813,12 +827,9 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
             children: <Widget>[
               Text(
                 entry.title,
-                style: TextStyle(
-                  color: t.textPrimary,
-                  fontSize: 14.4,
+                style: AppText.bodyFor(t).copyWith(
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
-                  height: 1.35,
-                  fontFamilyFallback: AppTokens.fontFallback,
                 ),
               ),
               Text(
@@ -840,16 +851,19 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
 
   Widget _stockRow(AppTokens t) {
     final _PaletteEntry entry = widget.entry;
-    final String market = (entry.market?.isNotEmpty ?? false)
-        ? entry.market!.toUpperCase()
-        : (entry.title.endsWith('.MI') ? 'IT' : 'US');
-    final bool isIt = market == 'IT';
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: <Widget>[
         SizedBox(
-          width: 22,
-          child: Text(entry.icon, textAlign: TextAlign.center),
+          width: 58,
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: AppMarketTag.forTicker(
+              entry.ticker ?? entry.title,
+              market: entry.market,
+              tooltip: entry.market,
+            ),
+          ),
         ),
         const SizedBox(width: AppSpacing.s10),
         Expanded(
@@ -862,14 +876,7 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
                   children: <InlineSpan>[
                     TextSpan(
                       text: entry.title,
-                      style: TextStyle(
-                        color: t.textPrimary,
-                        fontSize: 14.4,
-                        fontWeight: FontWeight.w600,
-                        height: 1.35,
-                        fontFamily: AppTokens.monoFontFamily,
-                        fontFamilyFallback: AppTokens.monoFontFallback,
-                      ),
+                      style: AppText.mono(context, size: 14, weight: FontWeight.w600),
                     ),
                     TextSpan(
                       text: entry.name == null ? '' : '  —  ${entry.name}',
@@ -890,12 +897,7 @@ class _PaletteItemTileState extends State<_PaletteItemTile> {
           ),
         ),
         const SizedBox(width: AppSpacing.s10),
-        AppBadge(
-          label: market,
-          tone: isIt ? BadgeTone.primary : BadgeTone.warning,
-        ),
-        const SizedBox(width: AppSpacing.s8),
-        Text('↵', style: AppText.caption(context)),
+        const AppKbd('↵'),
       ],
     );
   }

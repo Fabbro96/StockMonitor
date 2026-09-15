@@ -2,31 +2,33 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// Tinte disponibili per [AppBadge], allineate alle classi `.badge-*` del CSS.
+/// Tinte disponibili per [AppBadge].
 enum BadgeTone {
-  /// Verde: buy, opportunità, successo.
+  /// Verde: buy, guadagno, successo.
   success,
 
-  /// Rosso: sell, scattato, alta priorità.
+  /// Rosso: sell, perdita, errore.
   danger,
 
   /// Ambra: hold, alert, rischio.
   warning,
 
-  /// Ciano su alone primary (`.badge-cyan`).
+  /// Ciano informativo: mercati non italiani, dati ausiliari.
   cyan,
 
-  /// Blu su alone primary (`.badge-primary`).
+  /// Accento: stato informativo neutro.
   primary,
 
-  /// Viola: admin (`.badge-admin`).
+  /// Viola: admin.
   purple,
 
   /// Neutro: superfici e testi secondari.
   neutral,
 }
 
-/// Badge pill del design system (`.badge`, 2×8, radius 999, `.72rem/600`).
+/// Tag di stato del design system: geometria squadrata (raggio 3), mono
+/// maiuscolo, 11px/600. Le tinte semantiche descrivono solo il significato del
+/// dato, mai la marca.
 ///
 /// Costruttori rapidi: [AppBadge.buy], [AppBadge.sell], [AppBadge.hold],
 /// [AppBadge.cyan], [AppBadge.primary], [AppBadge.admin], più la factory
@@ -56,15 +58,15 @@ class AppBadge extends StatelessWidget {
       : label = 'HOLD',
         tone = BadgeTone.warning;
 
-  /// Badge ciano (`.badge-cyan`), di norma per mercati non italiani.
+  /// Badge ciano, di norma per mercati non italiani.
   const AppBadge.cyan({super.key, required this.label, this.icon, this.tooltip})
       : tone = BadgeTone.cyan;
 
-  /// Badge blu (`.badge-primary`).
+  /// Badge di accento.
   const AppBadge.primary({super.key, required this.label, this.icon, this.tooltip})
       : tone = BadgeTone.primary;
 
-  /// Badge viola admin (`.badge-admin`).
+  /// Badge viola admin.
   const AppBadge.admin({super.key, required this.label, this.icon, this.tooltip})
       : tone = BadgeTone.purple;
 
@@ -74,7 +76,7 @@ class AppBadge extends StatelessWidget {
   /// Tinta.
   final BadgeTone tone;
 
-  /// Icona/emoji opzionale a sinistra.
+  /// Icona opzionale a sinistra (Material, non emoji).
   final Widget? icon;
 
   /// Tooltip opzionale.
@@ -99,17 +101,17 @@ class AppBadge extends StatelessWidget {
       BadgeTone.cyan => (t.primaryGlow, t.primary, t.cyan),
       BadgeTone.primary => (t.primaryGlow, t.primary, t.primary),
       BadgeTone.purple => (t.purpleBg, t.purple, t.purple),
-      BadgeTone.neutral => (t.surfaceHover, t.border, t.textSecondary),
+      BadgeTone.neutral => (t.surfaceSunken, t.border, t.textSecondary),
     };
 
     final int labelLines = '\n'.allMatches(label).length + 1;
 
     Widget badge = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
       decoration: BoxDecoration(
         color: background,
         border: Border.all(color: border),
-        borderRadius: BorderRadius.circular(AppRadii.pill),
+        borderRadius: BorderRadius.circular(AppRadii.tag),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -126,10 +128,10 @@ class AppBadge extends StatelessWidget {
               label,
               style: TextStyle(
                 color: foreground,
-                fontSize: 11.5,
+                fontSize: 11,
                 fontWeight: FontWeight.w600,
-                letterSpacing: 0.23,
-                height: 1.3,
+                letterSpacing: 0.4,
+                height: 1.35,
                 fontFamilyFallback: AppTokens.fontFallback,
               ),
               maxLines: labelLines,
@@ -147,10 +149,11 @@ class AppBadge extends StatelessWidget {
   }
 }
 
-/// Pill cliccabile (`.chart-type-btn`, `.bench-chip`, filtri): bordo 1px,
-/// radius 999, `.76rem/500`; selezionata = alone primary + testo primary.
+/// Chip selezionabile (filtri, timeframe, benchmark): bordo 1px, raggio 3,
+/// 12.5px/500. Selezionata = fondo `primaryGlow` + bordo e testo d'accento.
+/// Con [squared] = false usa il raggio pill per i contatori.
 class AppPill extends StatefulWidget {
-  /// Crea una pill.
+  /// Crea un chip.
   const AppPill({
     super.key,
     required this.label,
@@ -158,22 +161,26 @@ class AppPill extends StatefulWidget {
     this.onPressed,
     this.icon,
     this.tooltip,
+    this.squared = true,
   });
 
-  /// Testo della pill.
+  /// Testo del chip.
   final String label;
 
-  /// True = stato attivo (`.active`).
+  /// True = stato attivo.
   final bool selected;
 
-  /// Callback di tap; `null` rende la pill non interattiva.
+  /// Callback di tap; `null` rende il chip non interattivo.
   final VoidCallback? onPressed;
 
-  /// Icona/emoji opzionale a sinistra.
+  /// Icona opzionale a sinistra (Material, non emoji).
   final Widget? icon;
 
   /// Tooltip opzionale.
   final String? tooltip;
+
+  /// True = raggio squadrato (3), false = raggio pill (999).
+  final bool squared;
 
   @override
   State<AppPill> createState() => _AppPillState();
@@ -187,11 +194,15 @@ class _AppPillState extends State<AppPill> {
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
     final bool enabled = widget.onPressed != null;
+    final BorderRadius radius =
+        BorderRadius.circular(widget.squared ? AppRadii.tag : AppRadii.pill);
 
-    final Color background = widget.selected ? t.primaryGlow : t.surface;
+    final Color background = widget.selected
+        ? t.primaryGlow
+        : (_hovered && enabled ? t.surfaceHover : t.surface);
     final Color border = widget.selected || _focused
         ? t.primary
-        : (_hovered ? t.borderStrong : t.border);
+        : (_hovered && enabled ? t.borderStrong : t.border);
     final Color foreground = widget.selected
         ? t.primary
         : (_hovered || _focused ? t.textPrimary : t.textSecondary);
@@ -199,11 +210,16 @@ class _AppPillState extends State<AppPill> {
     Widget pill = AnimatedContainer(
       duration: AppMotion.effective(context, AppMotion.fast),
       curve: AppMotion.ease,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
         color: background,
         border: Border.all(color: border),
-        borderRadius: BorderRadius.circular(AppRadii.pill),
+        borderRadius: radius,
+        boxShadow: _focused && enabled
+            ? <BoxShadow>[
+                BoxShadow(color: t.focusRing, blurRadius: 0, spreadRadius: 2),
+              ]
+            : null,
       ),
       child: Material(
         color: Colors.transparent,
@@ -212,7 +228,7 @@ class _AppPillState extends State<AppPill> {
           canRequestFocus: enabled,
           onHover: (bool value) => setState(() => _hovered = value),
           onFocusChange: (bool value) => setState(() => _focused = value),
-          borderRadius: BorderRadius.circular(AppRadii.pill),
+          borderRadius: radius,
           hoverColor: Colors.transparent,
           focusColor: Colors.transparent,
           child: Row(
@@ -220,7 +236,7 @@ class _AppPillState extends State<AppPill> {
             children: <Widget>[
               if (widget.icon != null) ...<Widget>[
                 IconTheme.merge(
-                  data: IconThemeData(color: foreground, size: 12),
+                  data: IconThemeData(color: foreground, size: AppSizes.iconXs),
                   child: widget.icon!,
                 ),
                 const SizedBox(width: AppSpacing.s6),
@@ -230,7 +246,7 @@ class _AppPillState extends State<AppPill> {
                   widget.label,
                   style: TextStyle(
                     color: foreground,
-                    fontSize: 12.2,
+                    fontSize: 12.5,
                     fontWeight: widget.selected ? FontWeight.w600 : FontWeight.w500,
                     height: 1.3,
                     fontFamilyFallback: AppTokens.fontFallback,
@@ -256,7 +272,7 @@ class _AppPillState extends State<AppPill> {
   }
 }
 
-/// Badge tastiera (`.kbd-badge`): monocromo, bordo tenue, `.7rem`.
+/// Badge tastiera: monocromo, bordo 1px, raggio 2, font mono 10.5px.
 class AppKbd extends StatelessWidget {
   /// Crea un badge tastiera.
   const AppKbd(this.label, {super.key});
@@ -270,15 +286,15 @@ class AppKbd extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
       decoration: BoxDecoration(
-        color: t.surfaceHover,
+        color: t.surfaceSunken,
         border: Border.all(color: t.border),
-        borderRadius: BorderRadius.circular(AppRadii.small),
+        borderRadius: BorderRadius.circular(AppRadii.xs),
       ),
       child: Text(
         label,
         style: TextStyle(
           color: t.textMuted,
-          fontSize: 11.2,
+          fontSize: 10.5,
           fontWeight: FontWeight.w500,
           height: 1.5,
           fontFamily: AppTokens.monoFontFamily,
@@ -289,11 +305,11 @@ class AppKbd extends StatelessWidget {
   }
 }
 
-/// Pallino di stato (`.status-dot`): verde = aperto, rosso = chiuso,
-/// grigio = sconosciuto.
+/// Pallino di stato: verde = aperto, rosso = chiuso, grigio = sconosciuto.
+/// Sempre accompagnato da un'etichetta accessibile.
 class AppStatusDot extends StatelessWidget {
   /// Crea un pallino di stato.
-  const AppStatusDot({super.key, required this.open, this.size = 8, this.statusLabel});
+  const AppStatusDot({super.key, required this.open, this.size = 7, this.statusLabel});
 
   /// True = aperto, false = chiuso, null = stato sconosciuto.
   final bool? open;
@@ -317,7 +333,13 @@ class AppStatusDot extends StatelessWidget {
       child: Container(
         width: size,
         height: size,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          boxShadow: <BoxShadow>[
+            BoxShadow(color: color.withValues(alpha: 0.28), blurRadius: 0, spreadRadius: 3),
+          ],
+        ),
       ),
     );
   }

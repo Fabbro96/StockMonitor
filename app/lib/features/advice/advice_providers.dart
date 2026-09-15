@@ -85,7 +85,7 @@ class AdviceFiltersController extends Notifier<AdviceFilters> {
   /// Imposta la ricerca client-side.
   void setQuery(String value) => state = state.copyWith(query: value);
 
-  /// Azzera tutti i filtri (`↺ Mostra Tutta la Settimana`).
+  /// Azzera tutti i filtri (`Mostra tutta la settimana`).
   void reset() => state = const AdviceFilters();
 }
 

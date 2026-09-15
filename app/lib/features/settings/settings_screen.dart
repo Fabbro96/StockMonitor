@@ -17,7 +17,11 @@ import '../../core/storage.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/app_callout.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_confirm_dialog.dart';
+import '../../widgets/app_key_value.dart';
+import '../../widgets/app_segmented.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/page_content.dart';
@@ -27,6 +31,37 @@ import '../../widgets/stepper_input.dart';
 import '../../widgets/toast.dart';
 import 'settings_dialogs.dart';
 import 'settings_providers.dart';
+
+/// Gruppi della pagina Impostazioni.
+///
+/// Sopra 1024px il gruppo attivo si sceglie da una rail verticale; sotto,
+/// da un [AppSegmented] pinnato in alto. In entrambi i casi il contenuto è
+/// un'unica pagina con ancore: il tap scorre al gruppo, lo scroll aggiorna
+/// la selezione.
+enum _SettingsGroup {
+  /// Budget di investimento.
+  capitale(label: 'Capitale', icon: Icons.savings_outlined),
+
+  /// Profilo di investimento e regole alert.
+  strategia(label: 'Strategia', icon: Icons.explore_outlined),
+
+  /// Report programmati e stato integrazioni.
+  notifiche(label: 'Notifiche', icon: Icons.notifications_none),
+
+  /// Password e gestione utenti.
+  accesso(label: 'Accesso', icon: Icons.lock_outline),
+
+  /// Chiave Gemini e indirizzo server.
+  sistema(label: 'Sistema', icon: Icons.dns_outlined);
+
+  const _SettingsGroup({required this.label, required this.icon});
+
+  /// Etichetta mostrata nella rail e nel controllo segmentato.
+  final String label;
+
+  /// Icona Material del gruppo.
+  final IconData icon;
+}
 
 /// Impostazioni con parità funzionale con `settings.html` / `settings.js`:
 /// budget, strategia e mercati, notifiche report, regole alert (con BOTH),
@@ -99,6 +134,59 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   /// Ultime impostazioni applicate al form (evita ri-applicazioni a ogni build).
   UserSettings? _appliedSettings;
+
+  /// Gruppo evidenziato dalla rail/segmenti: segue lo scroll (spy sulle ancore).
+  _SettingsGroup _activeGroup = _SettingsGroup.capitale;
+
+  /// Ancore di scroll dei gruppi.
+  final Map<_SettingsGroup, GlobalKey> _groupKeys = <_SettingsGroup, GlobalKey>{
+    for (final _SettingsGroup group in _SettingsGroup.values)
+      group: GlobalKey(),
+  };
+
+  /// Scorre all'ancora del gruppo [group] ed evidenzia la voce.
+  void _jumpTo(_SettingsGroup group) {
+    setState(() => _activeGroup = group);
+    final BuildContext? anchor = _groupKeys[group]?.currentContext;
+    if (anchor == null) return;
+    Scrollable.ensureVisible(
+      anchor,
+      alignment: 0,
+      duration: AppMotion.effective(context, AppMotion.medium),
+      curve: AppMotion.ease,
+    );
+  }
+
+  /// Evidenzia il gruppo con l'area visibile maggiore nel viewport
+  /// ("table of contents" scroll-spy): l'ultimo gruppo corto non arriverebbe
+  /// mai in cima, quindi il criterio è la porzione effettivamente visibile.
+  bool _onScroll(ScrollNotification notification) {
+    final RenderObject? viewport = notification.context?.findRenderObject();
+    if (viewport is! RenderBox) return false;
+    final double viewportTop = viewport.localToGlobal(Offset.zero).dy;
+    final double viewportBottom = viewportTop + viewport.size.height;
+    _SettingsGroup? current;
+    double best = 0;
+    for (final _SettingsGroup group in _SettingsGroup.values) {
+      final RenderObject? anchor = _groupKeys[group]?.currentContext
+          ?.findRenderObject();
+      if (anchor is! RenderBox) continue;
+      final double top = anchor.localToGlobal(Offset.zero).dy;
+      final double bottom = top + anchor.size.height;
+      final double visible =
+          (bottom < viewportBottom ? bottom : viewportBottom) -
+          (top > viewportTop ? top : viewportTop);
+      if (visible > best) {
+        best = visible;
+        current = group;
+      }
+    }
+    if (current != null && current != _activeGroup && mounted) {
+      final _SettingsGroup next = current;
+      setState(() => _activeGroup = next);
+    }
+    return false;
+  }
 
   @override
   void initState() {
@@ -416,12 +504,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _deleteAlertRule(AlertRule rule) async {
-    final bool confirmed = await showSettingsConfirmDialog(
+    final bool confirmed = await showAppConfirm(
       context,
       title: 'Elimina regola alert',
       message: 'Sei sicuro di voler eliminare questa regola di alert?',
       confirmLabel: 'Elimina',
-      danger: true,
+      destructive: true,
     );
     if (!confirmed || !mounted) return;
 
@@ -553,12 +641,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Future<void> _deleteUser(AuthUser user) async {
-    final bool confirmed = await showSettingsConfirmDialog(
+    final bool confirmed = await showAppConfirm(
       context,
       title: 'Elimina utente',
       message: 'Sei sicuro di voler eliminare l\'utente "${user.username}"?',
       confirmLabel: 'Elimina',
-      danger: true,
+      destructive: true,
     );
     if (!confirmed || !mounted) return;
 
@@ -592,7 +680,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final String normalized = AppConfig.normalizeOrigin(raw);
     if (normalized == _currentServer) return;
 
-    final bool confirmed = await showSettingsConfirmDialog(
+    final bool confirmed = await showAppConfirm(
       context,
       title: 'Modifica indirizzo server',
       message:
@@ -669,36 +757,195 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         Expanded(
           child: loaded == null
               ? _buildLoadState(settingsAsync)
-              : PageContent(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      _budgetSection(),
-                      const SizedBox(height: AppSpacing.s16),
-                      _strategySection(),
-                      const SizedBox(height: AppSpacing.s16),
-                      _notificationsSection(),
-                      const SizedBox(height: AppSpacing.s16),
-                      _alertRulesSection(alertsAsync),
-                      const SizedBox(height: AppSpacing.s16),
-                      _securitySection(),
-                      if (isAdmin) ...<Widget>[
-                        const SizedBox(height: AppSpacing.s16),
-                        _adminUsersSection(usersAsync!),
-                      ],
-                      const SizedBox(height: AppSpacing.s16),
-                      _geminiSection(loaded),
-                      const SizedBox(height: AppSpacing.s16),
-                      _integrationsSection(loaded),
-                      const SizedBox(height: AppSpacing.s16),
-                      _serverSection(),
-                    ],
-                  ),
-                ),
+              : _buildGroupedBody(loaded, alertsAsync, usersAsync, me, isAdmin),
         ),
         _buildSaveBar(loaded != null),
       ],
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Layout a gruppi (rail ≥1024, segmenti + ancore sotto)
+  // -------------------------------------------------------------------------
+
+  /// Corpo della pagina: cinque gruppi in un'unica pagina con ancore.
+  ///
+  /// Le sezioni restano quelle storiche (stessa logica e stessi provider),
+  /// solo raggruppate: `Capitale` · `Strategia` · `Notifiche` · `Accesso` ·
+  /// `Sistema`.
+  Widget _buildGroupedBody(
+    UserSettings settings,
+    AsyncValue<List<AlertRule>> alertsAsync,
+    AsyncValue<List<AuthUser>>? usersAsync,
+    AuthUser? me,
+    bool isAdmin,
+  ) {
+    final List<Widget> groups = <Widget>[
+      _groupBlock(_SettingsGroup.capitale, <Widget>[
+        _budgetSection(settings),
+      ]),
+      _groupBlock(_SettingsGroup.strategia, <Widget>[
+        _strategySection(settings),
+        const SizedBox(height: AppSpacing.s16),
+        _alertRulesSection(alertsAsync),
+      ]),
+      _groupBlock(_SettingsGroup.notifiche, <Widget>[
+        _notificationsSection(settings),
+        const SizedBox(height: AppSpacing.s16),
+        _integrationsSection(settings),
+      ]),
+      _groupBlock(_SettingsGroup.accesso, <Widget>[
+        _securitySection(me),
+        if (isAdmin && usersAsync != null) ...<Widget>[
+          const SizedBox(height: AppSpacing.s16),
+          _adminUsersSection(usersAsync),
+        ],
+      ]),
+      _groupBlock(_SettingsGroup.sistema, <Widget>[
+        _geminiSection(settings),
+        const SizedBox(height: AppSpacing.s16),
+        _serverSection(),
+      ]),
+    ];
+
+    final Widget scrollable = NotificationListener<ScrollNotification>(
+      onNotification: _onScroll,
+      child: PageContent(
+        padding: _bodyPadding(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            for (int i = 0; i < groups.length; i++) ...<Widget>[
+              if (i > 0) const SizedBox(height: AppSpacing.s22),
+              groups[i],
+            ],
+          ],
+        ),
+      ),
+    );
+
+    if (context.isNarrow) {
+      return Column(
+        children: <Widget>[
+          _buildGroupSegmented(),
+          Expanded(child: scrollable),
+        ],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        _buildGroupRail(),
+        Expanded(child: scrollable),
+      ],
+    );
+  }
+
+  /// Blocco di un gruppo: il primo widget è l'ancora di scroll.
+  Widget _groupBlock(_SettingsGroup group, List<Widget> children) {
+    return Column(
+      key: _groupKeys[group],
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+  }
+
+  /// Rail verticale dei gruppi (desktop ≥1024).
+  Widget _buildGroupRail() {
+    final double pagePadding = AppSpacing.pagePadding(context.windowWidth);
+    return SizedBox(
+      width: 236,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          pagePadding,
+          pagePadding,
+          AppSpacing.s8,
+          pagePadding,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.only(
+                left: 10,
+                bottom: AppSpacing.s10,
+              ),
+              child: Text(
+                'Sezioni',
+                style: AppText.micro(
+                  context,
+                ).copyWith(color: context.tokens.textMuted),
+              ),
+            ),
+            for (final _SettingsGroup group in _SettingsGroup.values) ...<Widget>[
+              _SettingsRailItem(
+                group: group,
+                selected: group == _activeGroup,
+                onTap: () => _jumpTo(group),
+              ),
+              const SizedBox(height: AppSpacing.s4),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Selettore dei gruppi pinnato in alto (layout stretto <1024).
+  Widget _buildGroupSegmented() {
+    final AppTokens t = context.tokens;
+    final double pagePadding = AppSpacing.pagePadding(context.windowWidth);
+    // Sotto 420px cinque etichette non stanno: il controllo diventa
+    // scorrevole orizzontalmente, così resta leggibile per intero.
+    final bool scrollable = context.isTiny;
+    final Widget control = AppSegmented<_SettingsGroup>(
+      segments: <AppSegment<_SettingsGroup>>[
+        for (final _SettingsGroup group in _SettingsGroup.values)
+          AppSegment<_SettingsGroup>(value: group, label: group.label),
+      ],
+      selected: _activeGroup,
+      dense: true,
+      expand: !scrollable,
+      semanticsLabel: 'Sezioni impostazioni',
+      onSelected: _jumpTo,
+    );
+    return Container(
+      padding: EdgeInsets.fromLTRB(
+        pagePadding,
+        AppSpacing.s12,
+        pagePadding,
+        AppSpacing.s12,
+      ),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.border)),
+      ),
+      child: scrollable
+          ? SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: control,
+            )
+          : control,
+    );
+  }
+
+  EdgeInsets _bodyPadding() {
+    final double pagePadding = AppSpacing.pagePadding(context.windowWidth);
+    return EdgeInsets.fromLTRB(
+      pagePadding,
+      AppSpacing.s14,
+      pagePadding,
+      context.isCompact ? 28 : pagePadding,
+    );
+  }
+
+  /// Orari pianificati mostrati come valore corrente (primi [UserSettings.reportFreq]).
+  String _plannedTimes(UserSettings settings) {
+    final List<String> times = settings.reportTimes
+        .take(settings.reportFreq)
+        .map(normalizeTimeValue)
+        .whereType<String>()
+        .toList(growable: false);
+    return times.isEmpty ? '—' : times.join(' · ');
   }
 
   /// Ascolta un provider e mostra il messaggio dell'errore una sola volta.
@@ -730,7 +977,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             message: 'Errore nel caricamento delle impostazioni.',
             actions: <Widget>[
               AppButton(
-                label: '↻ Riprova',
+                label: 'Riprova',
+                icon: const Icon(Icons.refresh),
                 variant: AppButtonVariant.ghost,
                 size: AppButtonSize.sm,
                 onPressed: () => ref.read(settingsProvider.notifier).reload(),
@@ -769,11 +1017,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.end,
           children: <Widget>[
-            AppButton(
-              label: 'Salva Impostazioni',
-              loading: _savingSettings,
-              loadingLabel: 'Salvataggio...',
-              onPressed: enabled ? _saveSettings : null,
+            // Flexible: su schermi molto stretti il label va a capo con
+            // ellissi invece di sbordare dalla barra.
+            Flexible(
+              child: AppButton(
+                label: 'Salva Impostazioni',
+                loading: _savingSettings,
+                loadingLabel: 'Salvataggio...',
+                onPressed: enabled ? _saveSettings : null,
+              ),
             ),
           ],
         ),
@@ -785,7 +1037,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // 1. Budget
   // -------------------------------------------------------------------------
 
-  Widget _budgetSection() {
+  Widget _budgetSection(UserSettings settings) {
     final AppTokens t = context.tokens;
     final Widget budgetField = _LabeledControl(
       label: 'Capitale da Investire (€)',
@@ -838,13 +1090,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           const SectionHeader(
-            title: '💶 Quanti soldi vuoi investire? (Capitale / Budget Totale)',
+            variant: SectionHeaderVariant.rule,
+            overline: 'Capitale',
+            icon: Icons.savings_outlined,
+            title: 'Budget di investimento',
             subtitle:
-                'Indica la somma complessiva (in Euro) che intendi investire '
-                'o allocare. Questo valore permette al Rebalancer Intelligente '
-                'di calcolare le percentuali target e la liquidità residua, e '
-                'all\'IA di Gemini di modulare le quote suggerite.',
+                'Somma complessiva in euro che intendi investire o allocare: '
+                'il Rebalancer calcola le percentuali target e la liquidità '
+                'residua, l\'IA modula le quote suggerite.',
           ),
+          AppKeyValue(
+            icon: Icons.account_balance_wallet_outlined,
+            label: 'Budget salvato',
+            value: formatCurrency(settings.budget),
+          ),
+          const SizedBox(height: AppSpacing.s14),
           LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
               if (constraints.maxWidth < AppBreakpoints.compact) {
@@ -884,7 +1144,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // 2. Strategia & mercati
   // -------------------------------------------------------------------------
 
-  Widget _strategySection() {
+  Widget _strategySection(UserSettings settings) {
     final Widget strategyField = _LabeledControl(
       label: 'Orizzonte Temporale',
       child: DropdownButtonFormField<String>(
@@ -932,10 +1192,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const SectionHeader(
-            title: '🎯 Strategia di Investimento & Rischio',
-            subtitle: 'Personalizza il comportamento dell\'IA nell\'elaborazione dei consigli',
+          SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            overline: 'Strategia',
+            icon: Icons.explore_outlined,
+            title: 'Strategia di investimento',
+            subtitle:
+                'Orizzonte attuale: '
+                '${strategyLabel(normalizeStrategyValue(settings.strategy))}. '
+                'Personalizza il comportamento dell\'IA nell\'elaborazione '
+                'dei consigli.',
           ),
+          AppKeyValue(
+            icon: Icons.public,
+            label: 'Mercati attivi',
+            value: settings.markets.isEmpty
+                ? 'Nessuno'
+                : settings.markets.join(' · '),
+          ),
+          const SizedBox(height: AppSpacing.s14),
           LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
               if (constraints.maxWidth < AppBreakpoints.compact) {
@@ -977,15 +1252,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // 3. Notifiche & report
   // -------------------------------------------------------------------------
 
-  Widget _notificationsSection() {
+  Widget _notificationsSection(UserSettings settings) {
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           const SectionHeader(
-            title: '🔔 Notifiche & Invio Report',
-            subtitle: 'Configura gli orari di ricezione dei riassunti giornalieri su Telegram',
+            variant: SectionHeaderVariant.rule,
+            overline: 'Notifiche',
+            icon: Icons.notifications_none,
+            title: 'Report programmati',
+            subtitle:
+                'Configura gli orari di ricezione dei riassunti giornalieri '
+                'su Telegram.',
           ),
+          AppKeyValue(
+            icon: Icons.schedule,
+            label: 'Orari pianificati',
+            value: _plannedTimes(settings),
+          ),
+          const SizedBox(height: AppSpacing.s14),
           _LabeledControl(
             label: 'Frequenza Giornaliera Report',
             child: SizedBox(
@@ -1055,14 +1341,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Widget _alertRulesSection(AsyncValue<List<AlertRule>> alertsAsync) {
     final List<AlertRule> rules = alertsAsync.value ?? const <AlertRule>[];
+    final int activeRules = rules.where((AlertRule rule) => rule.active).length;
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           const SectionHeader(
-            title: '⚡ Regole Alert Istantanee (Take Profit / Stop Loss)',
-            subtitle: 'Ricevi una notifica immediata quando un titolo supera una certa soglia di variazione',
+            variant: SectionHeaderVariant.rule,
+            overline: 'Strategia',
+            icon: Icons.notifications_active_outlined,
+            title: 'Regole alert',
+            subtitle:
+                'Ricevi una notifica immediata quando un titolo supera una '
+                'certa soglia di variazione.',
           ),
+          if (alertsAsync.hasValue && rules.isNotEmpty) ...<Widget>[
+            AppKeyValue(
+              icon: Icons.rule_outlined,
+              label: 'Regole configurate',
+              value: '$activeRules attive su ${rules.length}',
+            ),
+            const SizedBox(height: AppSpacing.s14),
+          ],
           Wrap(
             spacing: AppSpacing.s8,
             runSpacing: AppSpacing.s8,
@@ -1144,7 +1444,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           message: 'Errore nel caricamento delle regole alert.',
           actions: <Widget>[
             AppButton(
-              label: '↻ Riprova',
+              label: 'Riprova',
+              icon: const Icon(Icons.refresh),
               variant: AppButtonVariant.ghost,
               size: AppButtonSize.sm,
               onPressed: () => ref.read(alertRulesProvider.notifier).reload(),
@@ -1211,6 +1512,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     tooltip: 'Elimina regola',
                     size: 28,
                     iconSize: 15,
+                    minTargetSize: AppSizes.touchTarget,
                     bordered: false,
                     danger: true,
                     onPressed: () => _deleteAlertRule(rule),
@@ -1228,20 +1530,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Column(
       children: <Widget>[
         for (final AlertRule rule in rules)
-          Container(
+          AppCard(
+            variant: AppCardVariant.inset,
+            dense: true,
             margin: const EdgeInsets.only(bottom: AppSpacing.s8),
-            padding: const EdgeInsets.all(AppSpacing.s12),
-            decoration: BoxDecoration(
-              border: Border.all(color: context.tokens.border),
-              borderRadius: BorderRadius.circular(AppRadii.input),
-            ),
             child: Row(
               children: <Widget>[
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Row(
+                      Wrap(
+                        spacing: AppSpacing.s8,
+                        runSpacing: AppSpacing.s4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: <Widget>[
                           Text(
                             rule.ticker,
@@ -1252,7 +1554,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                               color: context.tokens.primary,
                             ),
                           ),
-                          const SizedBox(width: AppSpacing.s8),
                           AlertDirectionBadge(direction: rule.direction),
                         ],
                       ),
@@ -1271,6 +1572,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   tooltip: 'Elimina regola',
                   size: 28,
                   iconSize: 15,
+                  minTargetSize: AppSizes.touchTarget,
                   bordered: false,
                   danger: true,
                   onPressed: () => _deleteAlertRule(rule),
@@ -1286,7 +1588,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // 5. Sicurezza & password
   // -------------------------------------------------------------------------
 
-  Widget _securitySection() {
+  Widget _securitySection(AuthUser? me) {
     final Widget currentField = _LabeledControl(
       label: 'Password Attuale',
       child: TextField(
@@ -1318,9 +1620,29 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const SectionHeader(title: '🔒 Sicurezza & Password'),
+          const SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            overline: 'Accesso',
+            icon: Icons.lock_outline,
+            title: 'Sicurezza e password',
+            subtitle: 'Aggiorna la password del tuo account.',
+          ),
+          AppKeyValue(
+            icon: Icons.person_outline,
+            label: 'Profilo',
+            value: me == null
+                ? '—'
+                : '${me.username} · '
+                      '${me.isAdmin ? 'Amministratore' : 'Utente'}',
+          ),
+          const SizedBox(height: AppSpacing.s14),
           if (_passwordError != null) ...<Widget>[
-            _ErrorAlert(message: _passwordError!),
+            AppCallout(
+              tone: AppCalloutTone.danger,
+              icon: const Icon(Icons.error_outline),
+              body: _passwordError!,
+              liveRegion: true,
+            ),
             const SizedBox(height: AppSpacing.s14),
           ],
           LayoutBuilder(
@@ -1398,7 +1720,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
     );
     final Widget createButton = AppButton(
-      label: 'Crea Utente',
+      label: 'Crea utente',
       loading: _creatingUser,
       loadingLabel: 'Creazione...',
       onPressed: _createUser,
@@ -1409,22 +1731,38 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           const SectionHeader(
-            title: '👥 Gestione Utenti (Solo Amministratore)',
+            variant: SectionHeaderVariant.rule,
+            overline: 'Accesso',
+            icon: Icons.manage_accounts_outlined,
+            title: 'Utenti e accessi',
+            subtitle:
+                'Crea account e gestisci i ruoli (solo amministratore).',
           ),
-          Container(
-            padding: const EdgeInsets.all(AppSpacing.s16),
-            decoration: BoxDecoration(
-              color: t.surfaceHover,
-              border: Border.all(color: t.border),
-              borderRadius: BorderRadius.circular(AppRadii.input),
-            ),
+          AppCard(
+            variant: AppCardVariant.inset,
+            dense: true,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                Text(
-                  '➕ Crea Nuovo Utente',
-                  style: AppText.small(context)
-                      .copyWith(color: t.primary, fontWeight: FontWeight.w700),
+                Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.person_add_alt_outlined,
+                      size: AppSizes.iconSm,
+                      color: t.primary,
+                    ),
+                    const SizedBox(width: AppSpacing.s6),
+                    Expanded(
+                      child: Text(
+                        'Crea nuovo utente',
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.small(context).copyWith(
+                          color: t.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: AppSpacing.s12),
                 LayoutBuilder(
@@ -1490,7 +1828,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           message: 'Errore nel caricamento degli utenti.',
           actions: <Widget>[
             AppButton(
-              label: '↻ Riprova',
+              label: 'Riprova',
+              icon: const Icon(Icons.refresh),
               variant: AppButtonVariant.ghost,
               size: AppButtonSize.sm,
               onPressed: () => ref.read(usersProvider.notifier).reload(),
@@ -1571,37 +1910,36 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return Column(
       children: <Widget>[
         for (final AuthUser user in users)
-          Container(
+          AppCard(
+            variant: AppCardVariant.inset,
+            dense: true,
             margin: const EdgeInsets.only(bottom: AppSpacing.s8),
-            padding: const EdgeInsets.all(AppSpacing.s12),
-            decoration: BoxDecoration(
-              border: Border.all(color: t.border),
-              borderRadius: BorderRadius.circular(AppRadii.input),
-            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Row(
                   children: <Widget>[
                     Expanded(
-                      child: Row(
-                        children: <Widget>[
-                          Flexible(
-                            child: Text(
-                              user.username,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppText.small(context).copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: user.isAdmin ? t.primary : t.textPrimary,
-                              ),
-                            ),
-                          ),
-                          if (user.id == me?.id)
-                            Text(' (Tu)', style: AppText.caption(context)),
-                        ],
+                      child: Text(
+                        user.id == me?.id
+                            ? '${user.username} (Tu)'
+                            : user.username,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.small(context).copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: user.isAdmin ? t.primary : t.textPrimary,
+                        ),
                       ),
                     ),
-                    _roleBadge(user.isAdmin),
+                    const SizedBox(width: AppSpacing.s8),
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerRight,
+                        child: _roleBadge(user.isAdmin),
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: AppSpacing.s6),
@@ -1622,8 +1960,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Widget _roleBadge(bool isAdmin) {
     return isAdmin
-        ? const AppBadge(label: '👑 Amministratore', tone: BadgeTone.purple)
-        : const AppBadge(label: '👤 Utente', tone: BadgeTone.warning);
+        ? const AppBadge(
+            label: 'Amministratore',
+            tone: BadgeTone.purple,
+            icon: Icon(Icons.admin_panel_settings_outlined),
+          )
+        : const AppBadge(
+            label: 'Utente',
+            tone: BadgeTone.warning,
+            icon: Icon(Icons.person_outline),
+          );
   }
 
   /// Azioni di riga utente.
@@ -1636,25 +1982,28 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final Widget reset = compact
         ? AppIconButton(
             icon: const Icon(Icons.key_outlined),
-            tooltip: '🔑 Reimposta password',
+            tooltip: 'Reimposta password',
             semanticLabel: 'Reimposta password di ${user.username}',
             size: 28,
             iconSize: 15,
+            minTargetSize: AppSizes.touchTarget,
             bordered: false,
             onPressed: () => showResetPasswordDialog(context, user),
           )
         : AppButton(
-            label: '🔑 Reimposta password',
+            label: 'Reimposta password',
+            icon: const Icon(Icons.key_outlined),
             variant: AppButtonVariant.ghost,
             size: AppButtonSize.xs,
             onPressed: () => showResetPasswordDialog(context, user),
           );
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
+    return Wrap(
+      spacing: AppSpacing.s4,
+      runSpacing: AppSpacing.s4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      alignment: WrapAlignment.center,
       children: <Widget>[
         reset,
-        const SizedBox(width: AppSpacing.s4),
         if (isSelf)
           Text('-', style: AppText.caption(context))
         else
@@ -1664,6 +2013,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             semanticLabel: 'Elimina utente ${user.username}',
             size: 28,
             iconSize: 15,
+            minTargetSize: AppSizes.touchTarget,
             bordered: false,
             danger: true,
             onPressed: () => _deleteUser(user),
@@ -1697,12 +2047,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           SectionHeader(
-            title: '🤖 Chiave Gemini AI ($model)',
+            variant: SectionHeaderVariant.rule,
+            overline: 'Sistema',
+            icon: Icons.key_outlined,
+            title: 'Chiave Gemini AI',
             subtitle:
-                'La chiave è cifrata sul server e non viene mai mostrata '
-                'intera. Se salvata qui ha precedenza sulla variabile '
-                'GEMINI_API_KEY. $hint.',
+                'Modello $model. La chiave è cifrata sul server e non viene '
+                'mai mostrata intera. Se salvata qui ha precedenza sulla '
+                'variabile GEMINI_API_KEY. $hint.',
           ),
+          AppKeyValue(
+            icon: Icons.vpn_key_outlined,
+            label: 'Chiave attuale',
+            value: masked.isNotEmpty ? masked : 'Non configurata',
+            trailing: AppBadge(
+              label: masked.isNotEmpty ? 'Configurata' : 'Assente',
+              tone: masked.isNotEmpty ? BadgeTone.success : BadgeTone.neutral,
+            ),
+          ),
+          const SizedBox(height: AppSpacing.s14),
           LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
               final Widget keyField = _LabeledControl(
@@ -1739,12 +2102,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 children: <Widget>[
                   AppButton(
                     label: 'Salva Chiave',
+                    icon: const Icon(Icons.save_outlined),
                     loading: _savingGemini,
                     loadingLabel: 'Salvataggio...',
                     onPressed: _saveGeminiKey,
                   ),
                   AppButton(
                     label: 'Testa Chiave',
+                    icon: const Icon(Icons.science_outlined),
                     variant: AppButtonVariant.ghost,
                     loading: _testingGemini,
                     loadingLabel: 'Test...',
@@ -1791,29 +2156,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   }
 
   Widget _geminiTestAlert() {
-    final AppTokens t = context.tokens;
     final bool ok = _geminiTestOk;
-    return Semantics(
-      container: true,
+    return AppCallout(
+      tone: ok ? AppCalloutTone.success : AppCalloutTone.danger,
+      icon: Icon(ok ? Icons.check_circle_outline : Icons.error_outline),
+      body: _geminiTestMessage ?? '',
       liveRegion: true,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: ok ? t.successBg : t.dangerBg,
-          border: Border.all(color: ok ? t.successBorder : t.dangerBorder),
-          borderRadius: BorderRadius.circular(AppRadii.input),
-        ),
-        child: Text(
-          _geminiTestMessage ?? '',
-          style: TextStyle(
-            color: ok ? t.success : t.danger,
-            fontSize: 13.6,
-            fontWeight: FontWeight.w500,
-            height: 1.4,
-            fontFamilyFallback: AppTokens.fontFallback,
-          ),
-        ),
-      ),
     );
   }
 
@@ -1833,40 +2181,38 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const SectionHeader(title: '📡 Stato Integrazioni & Motore AI'),
-          Wrap(
-            spacing: AppSpacing.s10,
-            runSpacing: AppSpacing.s10,
-            children: <Widget>[
-              _IntegrationCard(
-                title: 'Google Gemini AI',
-                subtitle: model,
-                badge: AppBadge(
-                  label: gemini ? '✅ Attivo' : '❌ Non Configurato',
-                  tone: gemini ? BadgeTone.success : BadgeTone.danger,
-                ),
-              ),
-              _IntegrationCard(
-                title: 'Notizie & Sentiment',
-                subtitle: 'Yahoo, Google News, Reddit',
-                badge: const AppBadge(
-                  label: '✅ Multi-Fonte Attivo',
-                  tone: BadgeTone.success,
-                ),
-              ),
-              _IntegrationCard(
-                title: 'Bot Telegram',
-                subtitle: 'Notifiche push & alert',
-                badge: AppBadge(
-                  label: telegram ? '✅ Attivo' : '⚪ Opzionale (Off)',
-                  tone: telegram ? BadgeTone.success : BadgeTone.neutral,
-                ),
-              ),
-            ],
+          const SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            overline: 'Notifiche',
+            icon: Icons.hub_outlined,
+            title: 'Stato integrazioni',
+            subtitle: 'Motore AI, fonti notizie e canale di notifica',
           ),
-          const SizedBox(height: AppSpacing.s14),
+          _IntegrationLedgerRow(
+            title: 'Google Gemini AI',
+            value: model,
+            statusLabel: gemini ? 'Attivo' : 'Non configurato',
+            tone: gemini ? BadgeTone.success : BadgeTone.danger,
+            dotOpen: gemini,
+          ),
+          _IntegrationLedgerRow(
+            title: 'Notizie & sentiment',
+            value: 'Yahoo, Google News, Reddit',
+            statusLabel: 'Multi-fonte attivo',
+            tone: BadgeTone.success,
+            dotOpen: true,
+          ),
+          _IntegrationLedgerRow(
+            title: 'Bot Telegram',
+            value: 'Notifiche push e alert',
+            statusLabel: telegram ? 'Attivo' : 'Opzionale (off)',
+            tone: telegram ? BadgeTone.success : BadgeTone.neutral,
+            dotOpen: telegram ? true : null,
+            last: true,
+          ),
+          const SizedBox(height: AppSpacing.s12),
           Text(
-            '💡 Zero configurazioni complesse: Notizie e discussioni di '
+            'Zero configurazioni complesse: notizie e discussioni di '
             'mercato vengono aggregate automaticamente da più fonti senza '
             'richiedere credenziali sviluppatore Reddit.',
             style: AppText.caption(context),
@@ -1902,26 +2248,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       style: AppText.caption(context),
     );
 
-    final Widget currentLabel = Text(
-      kIsWeb
-          ? 'Origine corrente: $_currentServer'
-          : _currentServer.isEmpty
-          ? 'Server corrente: non configurato'
-          : 'Server corrente: $_currentServer',
-      style: AppText.caption(context).copyWith(
-        fontFamily: AppTokens.monoFontFamily,
-        fontFamilyFallback: AppTokens.monoFontFallback,
-      ),
-    );
-
     return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           const SectionHeader(
-            title: '🖥️ Server',
+            variant: SectionHeaderVariant.rule,
+            overline: 'Sistema',
+            icon: Icons.dns_outlined,
+            title: 'Server',
             subtitle: 'Connessione al backend di Stock Monitor',
           ),
+          AppKeyValue(
+            icon: Icons.link,
+            label: kIsWeb ? 'Origine corrente' : 'Server corrente',
+            value: _currentServer.isEmpty ? 'Non configurato' : _currentServer,
+          ),
+          const SizedBox(height: AppSpacing.s14),
           LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
               final Widget field = _LabeledControl(
@@ -1943,6 +2286,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               );
               final Widget saveButton = AppButton(
                 label: 'Salva Indirizzo',
+                icon: const Icon(Icons.save_outlined),
                 loading: _serverSaving,
                 onPressed: canSave ? _saveServer : null,
               );
@@ -1956,8 +2300,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     Align(alignment: Alignment.centerLeft, child: saveButton),
                     const SizedBox(height: AppSpacing.s10),
                     explainer,
-                    const SizedBox(height: AppSpacing.s6),
-                    currentLabel,
                   ],
                 );
               }
@@ -1974,8 +2316,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   ),
                   const SizedBox(height: AppSpacing.s10),
                   explainer,
-                  const SizedBox(height: AppSpacing.s6),
-                  currentLabel,
                 ],
               );
             },
@@ -2023,6 +2363,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
       children: <TableRow>[
         TableRow(
+          decoration: BoxDecoration(color: t.surfaceSunken),
           children: <Widget>[
             for (final _SettingsColumn column in columns)
               Padding(
@@ -2113,49 +2454,6 @@ class _LabeledControl extends StatelessWidget {
   }
 }
 
-/// Alert inline di errore (`.alert-error`): sfondo/bordo danger e live region.
-class _ErrorAlert extends StatelessWidget {
-  const _ErrorAlert({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final AppTokens t = context.tokens;
-    return Semantics(
-      container: true,
-      liveRegion: true,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: t.dangerBg,
-          border: Border.all(color: t.dangerBorder),
-          borderRadius: BorderRadius.circular(AppRadii.input),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Text('⚠️', style: TextStyle(fontSize: 14, height: 1.4)),
-            const SizedBox(width: AppSpacing.s8),
-            Expanded(
-              child: Text(
-                message,
-                style: TextStyle(
-                  color: t.danger,
-                  fontSize: 13.6,
-                  fontWeight: FontWeight.w500,
-                  height: 1.4,
-                  fontFamilyFallback: AppTokens.fontFallback,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 /// Checkbox con etichetta cliccabile (`.flex items-center gap-2`).
 class _MarketCheckbox extends StatelessWidget {
   const _MarketCheckbox({
@@ -2182,7 +2480,13 @@ class _MarketCheckbox extends StatelessWidget {
             onChanged: (bool? next) => onChanged(next ?? false),
           ),
           const SizedBox(width: AppSpacing.s6),
-          Text(label, style: AppText.small(context)),
+          Flexible(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.small(context),
+            ),
+          ),
         ],
       ),
     );
@@ -2222,58 +2526,158 @@ class _TimeField extends StatelessWidget {
   }
 }
 
-/// Card di stato di un'integrazione (`.integration-card`).
-class _IntegrationCard extends StatelessWidget {
-  const _IntegrationCard({
+/// Riga del ledger "Stato integrazioni": pallino di stato, nome, valore mono
+/// e badge di stato.
+class _IntegrationLedgerRow extends StatelessWidget {
+  const _IntegrationLedgerRow({
     required this.title,
-    required this.subtitle,
-    required this.badge,
+    required this.value,
+    required this.statusLabel,
+    required this.tone,
+    required this.dotOpen,
+    this.last = false,
   });
 
   final String title;
-  final String subtitle;
-  final Widget badge;
+  final String value;
+  final String statusLabel;
+  final BadgeTone tone;
+
+  /// Stato del pallino: `true` aperto, `false` chiuso, `null` sconosciuto.
+  final bool? dotOpen;
+
+  /// True = ultima riga (niente separatore).
+  final bool last;
 
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    final double width = context.isCompact ? double.infinity : 260;
-    return SizedBox(
-      width: width,
-      child: Container(
-        padding: const EdgeInsets.all(AppSpacing.s12),
-        decoration: BoxDecoration(
-          color: t.surfaceHover,
-          border: Border.all(color: t.border),
-          borderRadius: BorderRadius.circular(AppRadii.input),
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      decoration: last
+          ? null
+          : BoxDecoration(
+              border: Border(bottom: BorderSide(color: t.borderSubtle)),
+            ),
+      child: Row(
+        children: <Widget>[
+          AppStatusDot(
+            open: dotOpen,
+            statusLabel: '$title: $statusLabel',
+          ),
+          const SizedBox(width: AppSpacing.s10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  title,
+                  style: AppText.small(context)
+                      .copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: AppSpacing.s2),
+                Text(value, style: AppText.caption(context)),
+              ],
+            ),
+          ),
+          const SizedBox(width: AppSpacing.s10),
+          AppBadge(label: statusLabel, tone: tone),
+        ],
+      ),
+    );
+  }
+}
+
+/// Voce della rail dei gruppi: altezza 36, raggio 4, attiva su `primaryGlow`
+/// con barra accent clippata a sinistra (stesso linguaggio della sidebar).
+class _SettingsRailItem extends StatefulWidget {
+  const _SettingsRailItem({
+    required this.group,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _SettingsGroup group;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  State<_SettingsRailItem> createState() => _SettingsRailItemState();
+}
+
+class _SettingsRailItemState extends State<_SettingsRailItem> {
+  bool _hovered = false;
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final bool active = widget.selected;
+
+    final Widget item = Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: active
+            ? t.primaryGlow
+            : (_hovered ? t.surfaceHover : Colors.transparent),
+        border: Border.all(
+          color: _focused ? t.primary : Colors.transparent,
         ),
-        child: Row(
+        borderRadius: BorderRadius.circular(AppRadii.control),
+      ),
+      child: Row(
+        children: <Widget>[
+          Icon(
+            widget.group.icon,
+            size: AppSizes.icon,
+            color: active
+                ? t.primary
+                : (_hovered ? t.textPrimary : t.textSecondary),
+          ),
+          const SizedBox(width: AppSpacing.s10),
+          Expanded(
+            child: Text(
+              widget.group.label,
+              style: AppText.navLabel(context, active: active),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return Semantics(
+      button: true,
+      selected: active,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadii.control),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
           children: <Widget>[
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Text(
-                    title,
-                    style: AppText.small(context)
-                        .copyWith(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: AppSpacing.s2),
-                  Text(subtitle, style: AppText.caption(context)),
-                ],
+            Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: widget.onTap,
+                onHover: (bool value) => setState(() => _hovered = value),
+                onFocusChange: (bool value) => setState(() => _focused = value),
+                borderRadius: BorderRadius.circular(AppRadii.control),
+                hoverColor: Colors.transparent,
+                focusColor: t.primaryGlow,
+                child: item,
               ),
             ),
-            const SizedBox(width: AppSpacing.s10),
-            // Il badge resta a dimensione intrinseca ma, su card strette o
-            // label lunghe, si riduce invece di sbordare.
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerRight,
-                child: badge,
+            if (active)
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: AppSizes.accentStrip,
+                child: ColoredBox(color: t.primary),
               ),
-            ),
           ],
         ),
       ),

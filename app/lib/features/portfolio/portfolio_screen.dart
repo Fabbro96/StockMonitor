@@ -13,10 +13,13 @@ import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_confirm_dialog.dart';
+import '../../widgets/app_error_panel.dart';
+import '../../widgets/app_segmented.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/page_content.dart';
-import '../../widgets/skeleton.dart';
+import '../../widgets/section_header.dart';
 import '../../widgets/stat_card.dart';
 import '../../widgets/toast.dart';
 import '../stock_detail/market_editor_modal.dart' show showMarketEditor;
@@ -26,14 +29,39 @@ import 'dividends_section.dart';
 import 'holding_dialog.dart';
 import 'holdings_table.dart';
 import 'portfolio_edits.dart';
+import 'portfolio_modal.dart';
 import 'portfolio_providers.dart';
+import 'portfolio_table.dart';
 import 'portfolio_tools_providers.dart';
 import 'rebalancer_section.dart';
 import 'tools/csv_tools.dart';
 import 'transactions_section.dart';
 
+/// Ancore in-page della pagina Portafoglio (scroll, nessuna rotta).
+enum _PortfolioSection { positions, allocation, transactions, dividends, rebalancer }
+
+extension on _PortfolioSection {
+  /// Etichetta della voce nella barra delle ancore.
+  String get label => switch (this) {
+    _PortfolioSection.positions => 'Posizioni',
+    _PortfolioSection.allocation => 'Allocazione',
+    _PortfolioSection.transactions => 'Transazioni',
+    _PortfolioSection.dividends => 'Dividendi',
+    _PortfolioSection.rebalancer => 'Ribilanciatore',
+  };
+
+  /// Etichetta ridotta sotto 640px: cinque voci non ci stanno per esteso.
+  String get compactLabel => switch (this) {
+    _PortfolioSection.positions => 'Posizioni',
+    _PortfolioSection.allocation => 'Allocaz.',
+    _PortfolioSection.transactions => 'Transaz.',
+    _PortfolioSection.dividends => 'Dividendi',
+    _PortfolioSection.rebalancer => 'Ribilancio',
+  };
+}
+
 /// Gestione Portafoglio: riepilogo, budget, holdings con inline edit,
-/// allocazione e sezioni tools (rebalancer, dividendi, ledger).
+/// allocazione e sezioni tools (transazioni, dividendi, rebalancer).
 class PortfolioScreen extends ConsumerStatefulWidget {
   /// Crea la schermata Portafoglio.
   const PortfolioScreen({super.key});
@@ -61,6 +89,21 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
 
   /// Ultimo errore già notificato (dedupe tra holdings e riepilogo).
   String? _lastErrorToast;
+
+  /// Chiave della barra di salvataggio: ne misura l'altezza reale per
+  /// riservare spazio sotto il contenuto, senza coprire l'ultima riga.
+  final GlobalKey _saveBarKey = GlobalKey();
+
+  /// Altezza misurata della barra (0 finché non è stata disegnata).
+  double _saveBarHeight = 0;
+
+  /// Ancore in-page: chiavi delle sezioni impilate e voce attiva.
+  final Map<_PortfolioSection, GlobalKey> _sectionKeys =
+      <_PortfolioSection, GlobalKey>{
+        for (final _PortfolioSection section in _PortfolioSection.values)
+          section: GlobalKey(),
+      };
+  _PortfolioSection _activeSection = _PortfolioSection.positions;
 
   @override
   void initState() {
@@ -99,38 +142,41 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
     if (context.isCompact) {
       return <Widget>[
         AppIconButton(
-          icon: const Text('📥', style: TextStyle(fontSize: 14)),
+          icon: const Icon(Icons.file_download_outlined),
           tooltip: 'Esporta CSV',
           semanticLabel: 'Esporta CSV',
           onPressed: _exportCsv,
         ),
         AppIconButton(
-          icon: const Text('📤', style: TextStyle(fontSize: 14)),
+          icon: const Icon(Icons.file_upload_outlined),
           tooltip: 'Importa CSV',
           semanticLabel: 'Importa CSV',
           onPressed: _importCsv,
         ),
         AppIconButton(
-          icon: const Text('➕', style: TextStyle(fontSize: 14)),
-          tooltip: 'Aggiungi Holding',
-          semanticLabel: 'Aggiungi Holding',
+          icon: const Icon(Icons.add),
+          tooltip: 'Aggiungi holding',
+          semanticLabel: 'Aggiungi holding',
           onPressed: _addHolding,
         ),
       ];
     }
     return <Widget>[
       AppButton(
-        label: '📥 Esporta CSV',
+        label: 'Esporta CSV',
+        icon: const Icon(Icons.file_download_outlined),
         size: AppButtonSize.sm,
         onPressed: _exportCsv,
       ),
       AppButton(
-        label: '📤 Importa CSV',
+        label: 'Importa CSV',
+        icon: const Icon(Icons.file_upload_outlined),
         size: AppButtonSize.sm,
         onPressed: _importCsv,
       ),
       AppButton(
-        label: '➕ Aggiungi Holding',
+        label: 'Aggiungi holding',
+        icon: const Icon(Icons.add),
         size: AppButtonSize.sm,
         onPressed: _addHolding,
       ),
@@ -165,6 +211,22 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
       context.go('/portfolio');
     }
     await _addHolding(initialTicker: ticker);
+  }
+
+  // --- Ancore in-page -------------------------------------------------------
+
+  /// Scorre alla sezione [section] senza toccare rotta o query.
+  void _scrollTo(_PortfolioSection section) {
+    setState(() => _activeSection = section);
+    final BuildContext? target = _sectionKeys[section]?.currentContext;
+    if (target == null) return;
+    unawaited(
+      Scrollable.ensureVisible(
+        target,
+        duration: AppMotion.effective(context, AppMotion.medium),
+        curve: AppMotion.ease,
+      ),
+    );
   }
 
   // --- Azioni -------------------------------------------------------------
@@ -299,25 +361,14 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
   }
 
   Future<void> _cancelEdits() async {
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
-      barrierColor: context.tokens.scrim,
-      builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('Annulla modifiche'),
-        content: const Text('Vuoi annullare tutte le modifiche non salvate?'),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('No'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Sì, annulla'),
-          ),
-        ],
-      ),
+    final bool confirmed = await showAppConfirm(
+      context,
+      title: 'Annulla modifiche',
+      message: 'Vuoi annullare tutte le modifiche non salvate?',
+      confirmLabel: 'Sì, annulla',
+      destructive: true,
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
     setState(() {
       _edits.clear();
       _epoch++;
@@ -339,14 +390,13 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
         context,
         message:
             'La quantità e il prezzo devono essere maggiori di 0. '
-            'Per rimuovere una posizione usa 🗑️.',
+            'Per rimuovere una posizione usa l\'icona Elimina.',
         type: AppToastType.error,
       );
       return;
     }
-    await showDialog<void>(
-      context: context,
-      barrierColor: context.tokens.scrim,
+    await showPortfolioModal<void>(
+      context,
       builder: (BuildContext _) => _ConfirmSaveDialog(
         edits: _edits.values.toList(growable: false),
         onSave: _performSave,
@@ -422,77 +472,134 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
     final PortfolioSummary? summary = ref.watch(portfolioSummaryProvider).value;
     final RealizedPnl? realized = ref.watch(realizedPnlProvider).value;
     final double? budget = ref.watch(portfolioBudgetProvider).value;
+    final bool hasEdits = _edits.isNotEmpty;
 
-    return Column(
+    final double pagePadding = AppSpacing.pagePadding(context.windowWidth);
+    final double baseBottomPadding = context.isCompact ? 28 : pagePadding;
+    // Spazio sotto il contenuto quando la barra di salvataggio è agganciata in
+    // basso: è l'altezza misurata della barra (breakpoint, testi e safe area
+    // inclusi), così non può coprire l'ultima riga.
+    final double saveBarSpace = hasEdits ? _saveBarHeight : 0;
+    _measureSaveBar(hasEdits);
+
+    return Stack(
       children: <Widget>[
-        if (_edits.isNotEmpty)
-          PortfolioSaveBar(
-            count: _edits.length,
-            onCancel: _cancelEdits,
-            onSave: _openConfirmSave,
-          ),
-        Expanded(
-          child: PageContent(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                _SummaryGrid(
-                  summary: summary,
-                  realized: realized,
-                  holdingsCount: holdingsAsync.value?.length,
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            _AnchorBar(
+              selected: _activeSection,
+              onSelected: _scrollTo,
+            ),
+            Expanded(
+              child: PageContent(
+                padding: EdgeInsets.fromLTRB(
+                  pagePadding,
+                  pagePadding,
+                  pagePadding,
+                  baseBottomPadding + saveBarSpace,
                 ),
-                const SizedBox(height: AppSpacing.s14),
-                _BudgetCard(budget: budget, summary: summary),
-                const SizedBox(height: AppSpacing.s14),
-                _buildHoldingsArea(context, holdingsAsync),
-                const SizedBox(height: AppSpacing.s20),
-                const RebalancerSection(),
-                const SizedBox(height: AppSpacing.s20),
-                const DividendsSection(),
-                const SizedBox(height: AppSpacing.s20),
-                const TransactionsSection(),
-              ],
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    _SummaryGrid(
+                      summary: summary,
+                      realized: realized,
+                      holdingsCount: holdingsAsync.value?.length,
+                    ),
+                    const SizedBox(height: AppSpacing.s14),
+                    _BudgetCard(budget: budget, summary: summary),
+                    const SizedBox(height: AppSpacing.s14),
+                    _section(
+                      _PortfolioSection.positions,
+                      _buildPositionsSection(holdingsAsync),
+                    ),
+                    const SizedBox(height: AppSpacing.s20),
+                    _section(
+                      _PortfolioSection.allocation,
+                      AllocationCard(edits: _edits),
+                    ),
+                    const SizedBox(height: AppSpacing.s20),
+                    _section(
+                      _PortfolioSection.transactions,
+                      const TransactionsSection(),
+                    ),
+                    const SizedBox(height: AppSpacing.s20),
+                    _section(
+                      _PortfolioSection.dividends,
+                      const DividendsSection(),
+                    ),
+                    const SizedBox(height: AppSpacing.s20),
+                    _section(
+                      _PortfolioSection.rebalancer,
+                      const RebalancerSection(),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (hasEdits)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: PortfolioSaveBar(
+              key: _saveBarKey,
+              count: _edits.length,
+              onCancel: _cancelEdits,
+              onSave: _openConfirmSave,
             ),
           ),
-        ),
       ],
     );
   }
 
-  Widget _buildHoldingsArea(
-    BuildContext context,
-    AsyncValue<List<Holding>> holdingsAsync,
-  ) {
+  /// Misura la barra di salvataggio dopo il layout e aggiorna il padding della
+  /// pagina quando l'altezza cambia (evita di coprire il contenuto).
+  void _measureSaveBar(bool visible) {
+    if (!visible) return;
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      if (!mounted || _edits.isEmpty) return;
+      final RenderObject? renderObject =
+          _saveBarKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) return;
+      final double height = renderObject.size.height;
+      if ((height - _saveBarHeight).abs() <= 0.5) return;
+      setState(() => _saveBarHeight = height);
+    });
+  }
+
+  /// Avvolge [child] con la chiave dell'ancora [section].
+  Widget _section(_PortfolioSection section, Widget child) =>
+      KeyedSubtree(key: _sectionKeys[section], child: child);
+
+  Widget _buildPositionsSection(AsyncValue<List<Holding>> holdingsAsync) {
     final List<Holding>? holdings = holdingsAsync.value;
-    final Widget tableContent;
+    final Widget content;
     if (holdingsAsync.isLoading && holdings == null) {
-      tableContent = const Column(
-        children: <Widget>[SkeletonRow(), SkeletonRow(), SkeletonRow()],
-      );
+      content = const PortfolioTableSkeleton();
     } else if (holdingsAsync.hasError && holdings == null) {
-      tableContent = EmptyState(
-        icon: const Icon(Icons.error_outline),
-        message: 'Dati non disponibili.',
-        actions: <Widget>[
-          AppButton(
-            label: '↻ Riprova',
-            variant: AppButtonVariant.ghost,
-            size: AppButtonSize.sm,
-            onPressed: () => ref.read(portfolioProvider.notifier).reload(),
-          ),
-        ],
+      content = AppErrorPanel(
+        message: 'Errore nel caricamento del portafoglio',
+        onRetry: () => ref.read(portfolioProvider.notifier).reload(),
       );
     } else if (holdings == null || holdings.isEmpty) {
-      tableContent = EmptyState(
+      content = EmptyState(
+        icon: const Icon(Icons.account_balance_wallet_outlined),
+        title: 'Portafoglio vuoto',
         message: 'Nessun titolo nel portafoglio.',
         actions: <Widget>[
           AppButton(
-            label: '➕ Aggiungi Holding',
+            label: 'Aggiungi holding',
+            icon: const Icon(Icons.add),
             size: AppButtonSize.sm,
             onPressed: _addHolding,
           ),
           AppButton(
-            label: '🚀 Inizializza Demo',
+            label: 'Inizializza demo',
+            icon: const Icon(Icons.auto_awesome),
             variant: AppButtonVariant.ghost,
             size: AppButtonSize.sm,
             onPressed: _seedDemo,
@@ -500,7 +607,7 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
         ],
       );
     } else {
-      tableContent = HoldingsTable(
+      content = HoldingsTable(
         holdings: holdings,
         edits: _edits,
         epoch: _epoch,
@@ -511,54 +618,81 @@ class _PortfolioScreenState extends ConsumerState<PortfolioScreen> {
       );
     }
 
-    final Widget tableCard = AppCard(
+    return AppCard(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text.rich(
-            TextSpan(
-              text: '💡 ',
-              children: <InlineSpan>[
-                TextSpan(
-                  text:
-                      'Modifica Quantità e Prezzo Acquisto direttamente nelle '
-                      'caselle e clicca "Salva Modifiche". Clicca sui ticker '
-                      'per il deep-dive.',
-                  style: AppText.caption(context).copyWith(
-                    fontStyle: FontStyle.italic,
-                    color: context.tokens.textSecondary,
-                  ),
-                ),
-              ],
+          SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            icon: Icons.account_balance_wallet_outlined,
+            overline: 'Portafoglio',
+            title: 'Posizioni',
+            subtitle:
+                'Modifica quantità e prezzo di carico direttamente nelle '
+                'celle, poi salva. Clicca sul ticker per la scheda completa.',
+            trailing: AppButton(
+              label: 'Aggiungi',
+              icon: const Icon(Icons.add),
+              size: AppButtonSize.sm,
+              onPressed: _addHolding,
             ),
           ),
-          const SizedBox(height: AppSpacing.s12),
-          tableContent,
+          content,
         ],
       ),
     );
+  }
+}
 
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        if (constraints.maxWidth >= AppBreakpoints.narrow) {
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Expanded(child: tableCard),
-              const SizedBox(width: AppSpacing.s14),
-              SizedBox(width: 310, child: AllocationCard(edits: _edits)),
-            ],
-          );
-        }
-        return Column(
-          children: <Widget>[
-            tableCard,
-            const SizedBox(height: AppSpacing.s14),
-            AllocationCard(edits: _edits),
-          ],
-        );
-      },
+/// Barra delle ancore in-page: resta fissa sopra il contenuto scrollabile e
+/// porta alle sezioni impilate della pagina.
+class _AnchorBar extends StatelessWidget {
+  const _AnchorBar({required this.selected, required this.onSelected});
+
+  final _PortfolioSection selected;
+  final ValueChanged<_PortfolioSection> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final double pagePadding = AppSpacing.pagePadding(context.windowWidth);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: t.surface,
+        border: Border(bottom: BorderSide(color: t.border)),
+      ),
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: AppSpacing.s8),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: AppTokens.contentMaxWidth,
+            ),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: pagePadding),
+              child: AppSegmented<_PortfolioSection>(
+                selected: selected,
+                dense: true,
+                semanticsLabel: 'Sezioni del portafoglio',
+                segments: <AppSegment<_PortfolioSection>>[
+                  for (final _PortfolioSection section
+                      in _PortfolioSection.values)
+                    AppSegment<_PortfolioSection>(
+                      value: section,
+                      label: context.isCompact
+                          ? section.compactLabel
+                          : section.label,
+                      tooltip: section.label,
+                    ),
+                ],
+                onSelected: onSelected,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -584,59 +718,66 @@ class _SummaryGrid extends StatelessWidget {
     final double? netRealized = realized?.netRealizedProfit;
     final double? dividends = summary?.estimatedAnnualDividends;
     final double? dividendYield = summary?.estimatedDividendYield;
+    final Color? pnlColor = totalPnl == null
+        ? null
+        : (totalPnl >= 0 ? t.successText : t.danger);
 
     final List<Widget> cards = <Widget>[
       StatCard(
         label: 'Valore Attuale',
+        icon: const Icon(Icons.account_balance_outlined),
         value: summary == null ? '--' : formatCurrency(summary!.totalValue),
         tooltip: 'Valore di mercato odierno di tutte le azioni possedute.',
         valueColor: t.primary,
       ),
       StatCard(
         label: 'Capitale Investito',
+        icon: const Icon(Icons.savings_outlined),
         value: summary == null ? '--' : formatCurrency(summary!.totalInvested),
         tooltip: 'Somma totale spesa all\'acquisto delle posizioni.',
         valueColor: t.textSecondary,
       ),
       StatCard(
         label: 'P&L Totale',
-        value: totalPnl == null
-            ? '--'
-            : '${formatCurrency(totalPnl)} (${formatPercent(totalPnlPct)})',
+        icon: const Icon(Icons.trending_up),
+        iconColor: pnlColor,
+        value: totalPnl == null ? '--' : formatCurrency(totalPnl),
+        delta: totalPnlPct,
+        deltaLabel: '%',
         tooltip:
             'Guadagno o perdita non realizzato rispetto al prezzo medio di '
             'carico.',
-        valueColor: totalPnl == null
-            ? null
-            : (totalPnl >= 0 ? t.success : t.danger),
-        smallValue: true,
+        valueColor: pnlColor,
       ),
       StatCard(
         label: 'P&L Realizzato',
+        icon: const Icon(Icons.receipt_long_outlined),
         value: netRealized == null
             ? '--'
-            : '${netRealized >= 0 ? '+' : ''}${formatCurrency(netRealized)}',
+            : '${netRealized >= 0 ? '+' : '−'}${formatCurrency(netRealized.abs())}',
         tooltip:
             'Profitto o perdita netto incassato da vendite concluse e '
             'dividendi (al netto delle commissioni).',
         valueColor: netRealized == null
             ? null
-            : (netRealized >= 0 ? t.success : t.danger),
+            : (netRealized >= 0 ? t.successText : t.danger),
       ),
       StatCard(
         label: 'Dividendi Stimati',
+        icon: const Icon(Icons.payments_outlined),
         value: dividends == null
             ? '--'
             : '${formatCurrency(dividends)}/anno '
-                  '(${(dividendYield ?? 0).toStringAsFixed(2)}%)',
+                  '(${formatSharePercent(dividendYield ?? 0)})',
         tooltip:
             'Flusso cedolare annuo stimato lordo generato dalle posizioni in '
             'portafoglio.',
-        valueColor: t.success,
+        valueColor: t.successText,
         smallValue: true,
       ),
       StatCard(
         label: 'Posizioni Attive',
+        icon: const Icon(Icons.inventory_2_outlined),
         value: summary == null
             ? '${holdingsCount ?? 0}'
             : '${summary!.holdingsCount}',
@@ -690,12 +831,12 @@ class _BudgetCard extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         Text(
-          'CAPITALE DA INVESTIRE (BUDGET TOTALE)',
-          style: AppText.sectionLabel(context).copyWith(color: t.textMuted),
+          'Capitale da investire (budget totale)'.toUpperCase(),
+          style: AppText.statLabel(context),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        const SizedBox(height: AppSpacing.s2),
+        const SizedBox(height: AppSpacing.s4),
         Text(
           budgetValue == null ? '--' : formatCurrency(budgetValue),
           style: AppText.mono(
@@ -716,14 +857,14 @@ class _BudgetCard extends StatelessWidget {
         AppBadge(
           label: deployedPct == null
               ? 'Allocato: --%'
-              : 'Allocato: ${deployedPct.toStringAsFixed(1)}%',
+              : 'Allocato: ${formatSharePercent(deployedPct, decimals: 1)}',
           tone: deployedPct != null && deployedPct > 100
               ? BadgeTone.danger
               : BadgeTone.primary,
         ),
         Text.rich(
           TextSpan(
-            text: 'Liquidità Libera Residua: ',
+            text: 'Liquidità libera residua: ',
             children: <InlineSpan>[
               TextSpan(
                 text: remaining == null
@@ -733,7 +874,7 @@ class _BudgetCard extends StatelessWidget {
                   context,
                   size: 13,
                   weight: FontWeight.w700,
-                  color: t.success,
+                  color: t.successText,
                 ),
               ),
             ],
@@ -741,12 +882,28 @@ class _BudgetCard extends StatelessWidget {
           style: AppText.caption(context),
         ),
         AppButton(
-          label: '⚙️ Modifica Budget',
+          label: 'Modifica budget',
+          icon: const Icon(Icons.tune),
           variant: AppButtonVariant.ghost,
           size: AppButtonSize.xs,
           onPressed: () => context.go('/settings'),
         ),
       ],
+    );
+
+    final Widget icon = Container(
+      width: 30,
+      height: 30,
+      decoration: BoxDecoration(
+        color: t.surfaceSunken,
+        border: Border.all(color: t.border),
+        borderRadius: BorderRadius.circular(AppRadii.control),
+      ),
+      child: Icon(
+        Icons.savings_outlined,
+        size: AppSizes.iconSm,
+        color: t.primary,
+      ),
     );
 
     return AppCard(
@@ -763,7 +920,7 @@ class _BudgetCard extends StatelessWidget {
               children: <Widget>[
                 Row(
                   children: <Widget>[
-                    const Text('💶', style: TextStyle(fontSize: 20)),
+                    icon,
                     const SizedBox(width: AppSpacing.s10),
                     Expanded(child: titleBlock),
                   ],
@@ -782,7 +939,7 @@ class _BudgetCard extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  const Text('💶', style: TextStyle(fontSize: 20)),
+                  icon,
                   const SizedBox(width: AppSpacing.s10),
                   titleBlock,
                 ],
@@ -798,12 +955,14 @@ class _BudgetCard extends StatelessWidget {
 
 // --- Save bar --------------------------------------------------------------
 
-/// Barra sticky delle modifiche inline non salvate (`.save-bar`).
+/// Barra delle modifiche inline non salvate (`.save-bar`), agganciata in basso
+/// dalla pagina.
 ///
-/// Pubblica per i widget test (`border_paint_test.dart`): la striscia warning
-/// sinistra è una strip clippata su [Stack] (un [Border] asimmetrico non è
-/// compatibile con `borderRadius`).
+/// Pubblica per i widget test (`border_paint_test.dart`): la striscia accent
+/// superiore è clippata da [Stack] (un [Border] asimmetrico non è compatibile
+/// con `borderRadius`).
 class PortfolioSaveBar extends StatelessWidget {
+  /// Crea la barra di salvataggio.
   const PortfolioSaveBar({
     super.key,
     required this.count,
@@ -811,8 +970,13 @@ class PortfolioSaveBar extends StatelessWidget {
     required this.onSave,
   });
 
+  /// Numero di posizioni modificate.
   final int count;
+
+  /// Callback di annullamento.
   final VoidCallback onCancel;
+
+  /// Callback di salvataggio.
   final VoidCallback onSave;
 
   @override
@@ -823,9 +987,14 @@ class PortfolioSaveBar extends StatelessWidget {
         ? 'Hai 1 posizione modificata.'
         : 'Hai $count posizioni modificate.';
     return Padding(
-      padding: EdgeInsets.fromLTRB(pagePadding, AppSpacing.s10, pagePadding, 0),
+      padding: EdgeInsets.fromLTRB(
+        pagePadding,
+        0,
+        pagePadding,
+        context.isCompact ? AppSpacing.s12 : AppSpacing.s16,
+      ),
       child: Align(
-        alignment: Alignment.topCenter,
+        alignment: Alignment.bottomCenter,
         child: ConstrainedBox(
           constraints: const BoxConstraints(
             maxWidth: AppTokens.contentMaxWidth,
@@ -834,8 +1003,8 @@ class PortfolioSaveBar extends StatelessWidget {
             decoration: BoxDecoration(
               color: t.surface,
               border: Border.all(color: t.warningBorder),
-              borderRadius: BorderRadius.circular(AppRadii.card),
-              boxShadow: t.shadowSm,
+              borderRadius: BorderRadius.circular(AppRadii.panel),
+              boxShadow: t.shadowMd,
             ),
             clipBehavior: Clip.antiAlias,
             child: Stack(
@@ -850,7 +1019,11 @@ class PortfolioSaveBar extends StatelessWidget {
                         (BuildContext context, BoxConstraints constraints) {
                           final Widget header = Row(
                             children: <Widget>[
-                              const Text('⚠️', style: TextStyle(fontSize: 18)),
+                              Icon(
+                                Icons.warning_amber,
+                                size: AppSizes.iconLg,
+                                color: t.warning,
+                              ),
                               const SizedBox(width: AppSpacing.s12),
                               Flexible(
                                 child: Column(
@@ -877,13 +1050,15 @@ class PortfolioSaveBar extends StatelessWidget {
                             runSpacing: AppSpacing.s8,
                             children: <Widget>[
                               AppButton(
-                                label: '↩️ Annulla',
+                                label: 'Annulla',
+                                icon: const Icon(Icons.undo),
                                 variant: AppButtonVariant.ghost,
                                 size: AppButtonSize.sm,
                                 onPressed: onCancel,
                               ),
                               AppButton(
-                                label: '💾 Salva Modifiche',
+                                label: 'Salva Modifiche',
+                                icon: const Icon(Icons.save_outlined),
                                 variant: AppButtonVariant.warning,
                                 size: AppButtonSize.sm,
                                 onPressed: onSave,
@@ -911,13 +1086,13 @@ class PortfolioSaveBar extends StatelessWidget {
                         },
                   ),
                 ),
-                // Striscia warning sinistra: un Border asimmetrico non è
+                // Striscia accent superiore: un Border asimmetrico non è
                 // compatibile con borderRadius (assert a ogni paint).
                 Positioned(
                   left: 0,
+                  right: 0,
                   top: 0,
-                  bottom: 0,
-                  width: 3,
+                  height: AppSizes.accentStrip,
                   child: ColoredBox(color: t.warning),
                 ),
               ],
@@ -968,93 +1143,53 @@ class _ConfirmSaveDialogState extends State<_ConfirmSaveDialog> {
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    return Dialog(
-      backgroundColor: t.surface,
-      surfaceTintColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.card),
-        side: BorderSide(color: t.border),
-      ),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 480,
-          maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+    return PortfolioModalShell(
+      title: 'Conferma salvataggio modifiche',
+      onClose: _saving ? null : () => Navigator.of(context).pop(),
+      actions: <Widget>[
+        AppButton(
+          label: 'Annulla',
+          variant: AppButtonVariant.ghost,
+          onPressed: _saving ? null : () => Navigator.of(context).pop(),
         ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      '⚠️ Conferma Salvataggio Modifiche',
-                      style: AppText.modalTitle(context),
-                    ),
-                  ),
-                  AppIconButton(
-                    icon: const Icon(Icons.close),
-                    tooltip: 'Chiudi',
-                    semanticLabel: 'Chiudi',
-                    bordered: false,
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.s12),
-              Text(
-                'Stai per aggiornare le seguenti posizioni nel database. '
-                'Confermi l\'operazione?',
-                style: AppText.small(context).copyWith(color: t.textSecondary),
-              ),
-              const SizedBox(height: AppSpacing.s12),
-              Container(
-                decoration: BoxDecoration(
-                  color: t.surfaceHover,
-                  border: Border.all(color: t.border),
-                  borderRadius: BorderRadius.circular(AppRadii.input),
-                ),
-                child: Column(
-                  children: <Widget>[
-                    for (final HoldingEdit edit in widget.edits)
-                      _ChangeItem(edit: edit),
-                  ],
-                ),
-              ),
-              const SizedBox(height: AppSpacing.s20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: <Widget>[
-                  AppButton(
-                    label: 'Annulla',
-                    variant: AppButtonVariant.ghost,
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                  ),
-                  const SizedBox(width: AppSpacing.s8),
-                  AppButton(
-                    label: '✅ Sì, Conferma e Salva',
-                    variant: AppButtonVariant.success,
-                    loading: _saving,
-                    loadingLabel: 'Salvataggio in corso...',
-                    onPressed: _saving ? null : _confirm,
-                  ),
-                ],
-              ),
-            ],
+        AppButton(
+          label: 'Sì, conferma e salva',
+          variant: AppButtonVariant.success,
+          loading: _saving,
+          loadingLabel: 'Salvataggio in corso...',
+          onPressed: _saving ? null : _confirm,
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(
+            'Stai per aggiornare le seguenti posizioni nel database. '
+            'Confermi l\'operazione?',
+            style: AppText.small(context).copyWith(color: t.textSecondary),
           ),
-        ),
+          const SizedBox(height: AppSpacing.s12),
+          Container(
+            decoration: BoxDecoration(
+              color: t.surfaceSunken,
+              border: Border.all(color: t.border),
+              borderRadius: BorderRadius.circular(AppRadii.control),
+            ),
+            child: Column(
+              children: <Widget>[
+                for (final HoldingEdit edit in widget.edits)
+                  _ChangeItem(edit: edit),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
+/// Riga del riepilogo variazioni: `valore precedente → valore nuovo`.
 class _ChangeItem extends StatelessWidget {
   const _ChangeItem({required this.edit});
 
@@ -1063,7 +1198,10 @@ class _ChangeItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    return Padding(
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.borderSubtle)),
+      ),
       padding: const EdgeInsets.symmetric(
         horizontal: AppSpacing.s12,
         vertical: AppSpacing.s10,
@@ -1086,63 +1224,80 @@ class _ChangeItem extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Text.rich(
-                TextSpan(
-                  text: 'Q.tà: ',
-                  children: <InlineSpan>[
-                    TextSpan(
-                      text: formatDraftNumber(edit.holding.quantity),
-                      style: TextStyle(
-                        color: t.textMuted,
-                        decoration: TextDecoration.lineThrough,
-                      ),
-                    ),
-                    const TextSpan(text: ' ➔ '),
-                    TextSpan(
-                      text: formatDraftNumber(edit.quantity),
-                      style: TextStyle(
-                        color: t.success,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-                style: AppText.mono(context, size: 12),
+              _ChangeValue(
+                label: 'Q.tà',
+                before: formatDraftNumber(edit.holding.quantity),
+                after: formatDraftNumber(edit.quantity),
+                increased: edit.quantity > edit.holding.quantity,
               ),
-              const SizedBox(height: AppSpacing.s2),
-              Text.rich(
-                TextSpan(
-                  text: 'Prz: ',
-                  children: <InlineSpan>[
-                    TextSpan(
-                      text: formatCurrency(
-                        edit.holding.avgPurchasePrice,
-                        currency: edit.holding.currency,
-                      ),
-                      style: TextStyle(
-                        color: t.textMuted,
-                        decoration: TextDecoration.lineThrough,
-                      ),
-                    ),
-                    const TextSpan(text: ' ➔ '),
-                    TextSpan(
-                      text: formatCurrency(
-                        edit.avgPrice,
-                        currency: edit.holding.currency,
-                      ),
-                      style: TextStyle(
-                        color: t.success,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+              const SizedBox(height: AppSpacing.s4),
+              _ChangeValue(
+                label: 'Prezzo',
+                before: formatCurrency(
+                  edit.holding.avgPurchasePrice,
+                  currency: edit.holding.currency,
                 ),
-                style: AppText.mono(context, size: 12),
+                after: formatCurrency(
+                  edit.avgPrice,
+                  currency: edit.holding.currency,
+                ),
+                increased: edit.avgPrice > edit.holding.avgPurchasePrice,
               ),
             ],
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Coppia precedente → nuovo di una variazione.
+class _ChangeValue extends StatelessWidget {
+  const _ChangeValue({
+    required this.label,
+    required this.before,
+    required this.after,
+    required this.increased,
+  });
+
+  final String label;
+  final String before;
+  final String after;
+
+  /// True se il valore nuovo è maggiore di quello precedente: solo in quel
+  /// caso il "dopo" è dipinto in verde (`successText`).
+  final bool increased;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Text(label.toUpperCase(), style: AppText.microFor(t).copyWith(color: t.textFaint)),
+        const SizedBox(width: AppSpacing.s8),
+        Text(
+          before,
+          style: AppText.mono(context, size: 12, weight: FontWeight.w500)
+              .copyWith(
+                color: t.textMuted,
+                decoration: TextDecoration.lineThrough,
+              ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.s4),
+          child: Icon(Icons.arrow_right_alt, size: AppSizes.iconSm, color: t.textMuted),
+        ),
+        Text(
+          after,
+          style: AppText.mono(
+            context,
+            size: 12,
+            weight: FontWeight.w700,
+            color: increased ? t.successText : t.textPrimary,
+          ),
+        ),
+      ],
     );
   }
 }

@@ -12,6 +12,7 @@ import 'package:stock_monitor/core/models/stock.dart';
 import 'package:stock_monitor/features/portfolio/portfolio_providers.dart';
 import 'package:stock_monitor/features/portfolio/portfolio_screen.dart';
 import 'package:stock_monitor/features/settings/settings_providers.dart';
+import 'package:stock_monitor/widgets/page_content.dart';
 
 // ---------------------------------------------------------------------------
 // Fake API (nessuna rete)
@@ -239,7 +240,9 @@ void main() {
       );
       expect(portfolioApi.dividendsCalls, 1);
 
-      await tester.tap(find.text('🗑️'));
+      // Il bottone di eliminazione è un'icona Material con tooltip "Elimina"
+      // (il linguaggio Registro non usa emoji nel chrome).
+      await tester.tap(find.byTooltip('Elimina'));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 50));
 
@@ -247,6 +250,45 @@ void main() {
       expect(portfolioApi.dividendsCalls, 2);
 
       // Smonta l'albero per cancellare i timer del toast (undo).
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    });
+  });
+
+  group('Save bar — spazio riservato misurato', () {
+    testWidgets('il padding di pagina segue l\'altezza reale della barra', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
+      await _pumpScreen(
+        tester,
+        router: _router(),
+        portfolioApi: _FakePortfolioApi(holdings: <Holding>[_holding(id: 7)]),
+        settingsApi: _FakeSettingsApi(),
+      );
+      expect(find.byType(PortfolioSaveBar), findsNothing);
+
+      // Una modifica inline fa comparire la barra.
+      await tester.enterText(find.byType(TextField).first, '12');
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byType(PortfolioSaveBar), findsOneWidget);
+      final double barHeight = tester
+          .getSize(find.byType(PortfolioSaveBar))
+          .height;
+      expect(barHeight, greaterThan(0));
+
+      // Nessun valore hardcoded: il fondo pagina riserva almeno l'altezza
+      // misurata della barra, così non copre l'ultima riga.
+      final EdgeInsets padding =
+          tester.widget<PageContent>(find.byType(PageContent)).padding!
+              as EdgeInsets;
+      expect(padding.bottom, greaterThanOrEqualTo(barHeight));
+
       await tester.pumpWidget(const SizedBox());
       await tester.pump();
     });

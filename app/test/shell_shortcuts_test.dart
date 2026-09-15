@@ -112,14 +112,14 @@ void main() {
     await tester.tap(find.text('apri-help'));
     await tester.pumpAndSettle();
 
-    expect(find.text('⌨️ Scorciatoie da Tastiera'), findsOneWidget);
+    expect(find.text('Scorciatoie da Tastiera'), findsOneWidget);
     expect(find.text('Apri Command Palette / Cerca'), findsOneWidget);
     expect(find.text('Ho capito'), findsOneWidget);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pumpAndSettle();
 
-    expect(find.text('⌨️ Scorciatoie da Tastiera'), findsNothing);
+    expect(find.text('Scorciatoie da Tastiera'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -207,15 +207,13 @@ void main() {
     await tester.tap(find.text('apri-palette'));
     await tester.pumpAndSettle();
 
-    // Porta la selezione sulla terza voce (Portafoglio & Ledger).
+    // Porta la selezione sulla terza voce (Portafoglio).
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
 
     final double dashboardY = tester.getTopLeft(find.text('Dashboard')).dy;
-    final double portfolioY = tester
-        .getTopLeft(find.text('Portafoglio & Ledger'))
-        .dy;
+    final double portfolioY = tester.getTopLeft(find.text('Portafoglio')).dy;
     final double before = tester.getTopLeft(_activeBarFinder()).dy;
     expect(
       (before - portfolioY).abs(),

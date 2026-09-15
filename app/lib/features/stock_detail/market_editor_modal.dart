@@ -6,14 +6,23 @@ import '../../core/api_client.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/app_market_tag.dart';
+import '../../widgets/badges.dart';
 import '../../widgets/toast.dart';
 
 /// Mercati supportati dall'editor (parità con `openMarketEditor` di `app.js`).
 const List<({String value, String label})> _marketOptions = [
-  (value: 'IT', label: '🇮🇹 IT — Borsa Italiana'),
-  (value: 'US', label: '🇺🇸 US — Wall Street'),
-  (value: 'EU', label: '🇪🇺 EU — Europa'),
+  (value: 'IT', label: 'Borsa Italiana'),
+  (value: 'US', label: 'Wall Street'),
+  (value: 'EU', label: 'Europa'),
 ];
+
+/// Tinta del tag di mercato coerente con [AppMarketTag.resolve].
+BadgeTone _marketTone(String market) => switch (market) {
+  'IT' => BadgeTone.primary,
+  'EU' => BadgeTone.cyan,
+  _ => BadgeTone.neutral,
+};
 
 /// Nota informativa comune al dialog (la modifica è globale per tutti gli
 /// utenti).
@@ -177,93 +186,122 @@ class _MarketEditorDialogState extends ConsumerState<_MarketEditorDialog> {
     final AppTokens t = context.tokens;
     final bool selectEnabled = !_loading && !_loadFailed && !_saving;
     return Dialog(
-      backgroundColor: t.surface,
+      // Superficie dipinta dal DecoratedBox: fondo, bordo 1px e ombra ampia
+      // dello stesso dialogo della scheda titolo.
+      backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
+      elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.card),
-        side: BorderSide(color: t.border),
+        borderRadius: BorderRadius.circular(AppRadii.sheet),
       ),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480),
-        child: Padding(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: t.surface,
+          borderRadius: BorderRadius.circular(AppRadii.sheet),
+          border: Border.all(color: t.border),
+          boxShadow: t.shadowLg,
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(AppRadii.sheet),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 480),
+            child: Padding(
+              padding: const EdgeInsets.all(22),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      '🏛️ Mercato di ${widget.ticker}',
-                      style: AppText.modalTitle(context),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          'Mercato di ${widget.ticker}',
+                          style: AppText.modalTitle(context),
+                        ),
+                      ),
+                      AppIconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: 'Chiudi finestra',
+                        semanticLabel: 'Chiudi finestra',
+                        bordered: false,
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.of(context).pop(),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.s16),
+                  Text('Borsa di quotazione', style: AppText.formLabel(context)),
+                  const SizedBox(height: AppSpacing.s6),
+                  DropdownButtonFormField<String>(
+                    initialValue: _market,
+                    isExpanded: true,
+                    items: <DropdownMenuItem<String>>[
+                      for (final option in _marketOptions)
+                        DropdownMenuItem<String>(
+                          value: option.value,
+                          child: Row(
+                            children: <Widget>[
+                              AppMarketTag(
+                                code: option.value,
+                                tone: _marketTone(option.value),
+                              ),
+                              const SizedBox(width: AppSpacing.s8),
+                              Flexible(
+                                child: Text(
+                                  option.label,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                    onChanged: selectEnabled
+                        ? (String? value) {
+                            if (value != null) setState(() => _market = value);
+                          }
+                        : null,
+                  ),
+                  const SizedBox(height: AppSpacing.s8),
+                  if (_loadFailed) ...<Widget>[
+                    _LoadFailedNote(
+                      ticker: widget.ticker,
+                      onRetry: _saving ? null : _retryLoad,
                     ),
-                  ),
-                  AppIconButton(
-                    icon: const Icon(Icons.close),
-                    tooltip: 'Chiudi finestra',
-                    semanticLabel: 'Chiudi finestra',
-                    bordered: false,
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.s16),
-              Text('Borsa di quotazione', style: AppText.formLabel(context)),
-              const SizedBox(height: AppSpacing.s6),
-              DropdownButtonFormField<String>(
-                initialValue: _market,
-                isExpanded: true,
-                items: <DropdownMenuItem<String>>[
-                  for (final option in _marketOptions)
-                    DropdownMenuItem<String>(
-                      value: option.value,
-                      child: Text(option.label),
+                    const SizedBox(height: AppSpacing.s6),
+                    Text(_globalNote, style: AppText.caption(context)),
+                  ] else
+                    Text(
+                      _loading ? 'Caricamento mercato attuale…' : _globalNote,
+                      style: AppText.caption(context),
                     ),
-                ],
-                onChanged: selectEnabled
-                    ? (String? value) {
-                        if (value != null) setState(() => _market = value);
-                      }
-                    : null,
-              ),
-              const SizedBox(height: AppSpacing.s8),
-              if (_loadFailed) ...<Widget>[
-                _LoadFailedNote(
-                  ticker: widget.ticker,
-                  onRetry: _saving ? null : _retryLoad,
-                ),
-                const SizedBox(height: AppSpacing.s6),
-                Text(_globalNote, style: AppText.caption(context)),
-              ] else
-                Text(
-                  _loading ? 'Caricamento mercato attuale...' : _globalNote,
-                  style: AppText.caption(context),
-                ),
-              const SizedBox(height: AppSpacing.s20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: <Widget>[
-                  AppButton(
-                    label: 'Annulla',
-                    variant: AppButtonVariant.ghost,
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                  ),
-                  const SizedBox(width: AppSpacing.s8),
-                  AppButton(
-                    label: '💾 Salva',
-                    variant: AppButtonVariant.primary,
-                    loading: _saving,
-                    onPressed: selectEnabled ? _save : null,
+                  const SizedBox(height: AppSpacing.s20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: <Widget>[
+                      AppButton(
+                        label: 'Annulla',
+                        variant: AppButtonVariant.ghost,
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.of(context).pop(),
+                      ),
+                      const SizedBox(width: AppSpacing.s8),
+                      AppButton(
+                        label: 'Salva',
+                        icon: const Icon(Icons.check),
+                        variant: AppButtonVariant.primary,
+                        loading: _saving,
+                        loadingLabel: 'Salvataggio…',
+                        onPressed: selectEnabled ? _save : null,
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -293,7 +331,8 @@ class _LoadFailedNote extends StatelessWidget {
         ),
         const SizedBox(height: AppSpacing.s6),
         AppButton(
-          label: '🔄 Riprova',
+          label: 'Riprova',
+          icon: const Icon(Icons.refresh),
           variant: AppButtonVariant.ghost,
           size: AppButtonSize.sm,
           onPressed: onRetry,

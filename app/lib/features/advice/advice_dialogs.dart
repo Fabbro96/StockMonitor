@@ -6,7 +6,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/toast.dart';
 
-/// Mostra il modal `📅 Scegli Giorno` e ritorna la data scelta come
+/// Mostra il modal `Scegli giorno` e ritorna la data scelta come
 /// `YYYY-MM-DD`, oppure `null` se annullato/backdrop/esc.
 ///
 /// [initialDate] è il valore corrente del filtro (`YYYY-MM-DD`): il calendario
@@ -70,13 +70,13 @@ class _AdviceDatePickerDialogState extends State<_AdviceDatePickerDialog> {
       surfaceTintColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.card),
+        borderRadius: BorderRadius.circular(AppRadii.sheet),
         side: BorderSide(color: t.border),
       ),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 400),
         child: Padding(
-          padding: const EdgeInsets.all(22),
+          padding: const EdgeInsets.all(AppSpacing.s22),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -85,7 +85,7 @@ class _AdviceDatePickerDialogState extends State<_AdviceDatePickerDialog> {
                 children: <Widget>[
                   Expanded(
                     child: Text(
-                      '📅 Scegli Giorno',
+                      'Scegli giorno',
                       style: AppText.modalTitle(context),
                     ),
                   ),

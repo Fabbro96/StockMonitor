@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// Wrapper del contenuto di pagina (`.content-wrapper`): larghezza massima
-/// 1400 centrata, padding 22/18/12 ai breakpoint (più 28px in basso su
-/// mobile) e, di default, scroll verticale.
+/// Wrapper del contenuto di pagina: larghezza massima 1440 centrata, padding
+/// 24/18/12 ai breakpoint (più 28px in basso su mobile) e, di default, scroll
+/// verticale.
 ///
 /// Le pagine della shell lo usano come primo figlio del proprio layout:
 /// ```dart

@@ -130,11 +130,11 @@ class _StepperInputState extends State<StepperInput> {
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
     final bool compact = context.isCompact;
-    final double buttonSize = compact ? 28 : 24;
+    final double buttonSize = compact ? 26 : 22;
     final Duration duration = AppMotion.effective(context, AppMotion.fast);
     final TextStyle inputStyle = widget.large
-        ? AppText.mono(context, size: 16.8, weight: FontWeight.w700, color: t.primary)
-        : AppText.mono(context, size: 14.1, weight: FontWeight.w600);
+        ? AppText.mono(context, size: 16, weight: FontWeight.w700, color: t.primary)
+        : AppText.mono(context, size: 13.5, weight: FontWeight.w600);
 
     final Widget minus = _StepperButton(
       icon: Icons.remove,
@@ -189,15 +189,15 @@ class _StepperInputState extends State<StepperInput> {
       width: widget.expand ? double.infinity : null,
       constraints: widget.expand
           ? null
-          : BoxConstraints(minWidth: 108, maxWidth: widget.width ?? 170),
-      padding: EdgeInsets.all(compact ? 2 : 3),
+          : BoxConstraints(minWidth: 104, maxWidth: widget.width ?? 170),
+      padding: const EdgeInsets.all(2),
       decoration: BoxDecoration(
-        color: t.surfaceHover,
+        color: t.surfaceSunken,
         border: Border.all(color: _focusNode.hasFocus ? t.primary : t.border),
         borderRadius: BorderRadius.circular(AppRadii.input),
         boxShadow: _focusNode.hasFocus
             ? <BoxShadow>[
-                BoxShadow(color: t.primaryGlow, blurRadius: 0, spreadRadius: 2),
+                BoxShadow(color: t.focusRing, blurRadius: 0, spreadRadius: 2),
               ]
             : null,
       ),
@@ -266,10 +266,10 @@ class _StepperButtonState extends State<_StepperButton> {
         ? t.surfaceActive
         : (_hovered ? t.primarySolid : t.surface);
     final Color foreground = !enabled
-        ? t.textMuted
+        ? t.textFaint
         : (_hovered ? t.onPrimarySolid : t.textPrimary);
     final Color border = !enabled
-        ? t.border
+        ? t.borderSubtle
         : (_hovered ? t.primarySolid : (_focused ? t.primary : t.border));
 
     Widget button = AnimatedScale(
@@ -284,10 +284,10 @@ class _StepperButtonState extends State<_StepperButton> {
         decoration: BoxDecoration(
           color: background,
           border: Border.all(color: border),
-          borderRadius: BorderRadius.circular(AppRadii.small),
+          borderRadius: BorderRadius.circular(AppRadii.tag),
           boxShadow: _focused && enabled
               ? <BoxShadow>[
-                  BoxShadow(color: t.primaryGlow, blurRadius: 0, spreadRadius: 2),
+                  BoxShadow(color: t.focusRing, blurRadius: 0, spreadRadius: 2),
                 ]
               : null,
         ),
@@ -299,10 +299,10 @@ class _StepperButtonState extends State<_StepperButton> {
             onHover: (bool value) => setState(() => _hovered = value),
             onHighlightChanged: (bool value) => setState(() => _pressed = value),
             onFocusChange: (bool value) => setState(() => _focused = value),
-            borderRadius: BorderRadius.circular(AppRadii.small),
+            borderRadius: BorderRadius.circular(AppRadii.tag),
             hoverColor: Colors.transparent,
             focusColor: Colors.transparent,
-            child: Icon(widget.icon, size: widget.size * 0.55, color: foreground),
+            child: Icon(widget.icon, size: widget.size * 0.6, color: foreground),
           ),
         ),
       ),

@@ -10,8 +10,10 @@ import '../../core/models/stock.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/app_market_tag.dart';
 import '../../widgets/stepper_input.dart';
 import '../../widgets/toast.dart';
+import 'portfolio_modal.dart';
 import 'portfolio_providers.dart';
 
 /// Apre il modal "Aggiungi Titolo al Portafoglio" (parità `#holdingModal`).
@@ -23,11 +25,9 @@ Future<bool> showAddHoldingDialog(
   BuildContext context, {
   String initialTicker = '',
 }) async {
-  final bool? saved = await showDialog<bool>(
-    context: context,
-    barrierColor: context.tokens.scrim,
-    builder: (BuildContext _) =>
-        _AddHoldingDialog(initialTicker: initialTicker),
+  final bool? saved = await showPortfolioModal<bool>(
+    context,
+    builder: (BuildContext _) => _AddHoldingDialog(initialTicker: initialTicker),
   );
   return saved ?? false;
 }
@@ -186,152 +186,110 @@ class _AddHoldingDialogState extends ConsumerState<_AddHoldingDialog> {
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    return Dialog(
-      backgroundColor: t.surface,
-      surfaceTintColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.card),
-        side: BorderSide(color: t.border),
-      ),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 480,
-          maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+    return PortfolioModalShell(
+      title: 'Aggiungi Titolo al Portafoglio',
+      onClose: _saving ? null : () => Navigator.of(context).pop(false),
+      actions: <Widget>[
+        AppButton(
+          label: 'Annulla',
+          variant: AppButtonVariant.ghost,
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
         ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(22),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: Text(
-                      'Aggiungi Titolo al Portafoglio',
-                      style: AppText.modalTitle(context),
-                    ),
-                  ),
-                  AppIconButton(
-                    icon: const Icon(Icons.close),
-                    tooltip: 'Chiudi',
-                    semanticLabel: 'Chiudi',
-                    bordered: false,
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(false),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.s16),
-              _FieldLabel('Ticker o Simbolo Azione'),
-              const SizedBox(height: AppSpacing.s6),
-              TextField(
-                controller: _ticker,
-                enabled: !_saving,
-                textCapitalization: TextCapitalization.characters,
-                onChanged: _onTickerChanged,
-                decoration: const InputDecoration(
-                  hintText: 'Es. G.MI, LDO.MI, ISP.MI, AAPL, NVDA...',
-                ),
-              ),
-              if (_suggestions.isNotEmpty) ...<Widget>[
-                const SizedBox(height: AppSpacing.s4),
-                _AutocompleteDropdown(
-                  suggestions: _suggestions,
-                  onSelected: _selectTicker,
-                ),
-              ],
-              const SizedBox(height: AppSpacing.s14),
-              _FieldLabel('Quantità di Azioni'),
-              const SizedBox(height: AppSpacing.s6),
-              StepperInput(
-                controller: _quantity,
-                enabled: !_saving,
-                min: 0,
-                step: 1,
-                expand: true,
-                hint: 'Es. 100',
-                semanticsLabel: 'Quantità di azioni',
-                increaseLabel: 'Aumenta quantità',
-                decreaseLabel: 'Diminuisci quantità',
-              ),
-              const SizedBox(height: AppSpacing.s14),
-              _FieldLabel('Prezzo Acquisto Unitario (€ o \$)'),
-              const SizedBox(height: AppSpacing.s6),
-              StepperInput(
-                controller: _price,
-                enabled: !_saving,
-                min: 0,
-                step: 0.5,
-                expand: true,
-                hint: 'Es. 24.50',
-                semanticsLabel: 'Prezzo di acquisto',
-                increaseLabel: 'Aumenta prezzo di acquisto',
-                decreaseLabel: 'Diminuisci prezzo di acquisto',
-              ),
-              const SizedBox(height: AppSpacing.s14),
-              _FieldLabel('Data di Acquisto'),
-              const SizedBox(height: AppSpacing.s6),
-              TextField(
-                controller: _date,
-                readOnly: true,
-                enabled: !_saving,
-                onTap: _pickDate,
-                decoration: InputDecoration(
-                  hintText: 'gg/mm/aaaa',
-                  suffixIcon: _purchaseDate == null
-                      ? const Icon(Icons.calendar_today, size: 16)
-                      : IconButton(
-                          icon: const Icon(Icons.close, size: 16),
-                          tooltip: 'Rimuovi data',
-                          onPressed: _saving ? null : _clearDate,
-                        ),
-                ),
-              ),
-              const SizedBox(height: AppSpacing.s14),
-              _FieldLabel('Note Operative (opzionale)'),
-              const SizedBox(height: AppSpacing.s6),
-              TextField(
-                controller: _notes,
-                enabled: !_saving,
-                decoration: const InputDecoration(
-                  hintText: 'Es. Primo ingresso, dividendo reinvestito...',
-                ),
-              ),
-              if (_error != null) ...<Widget>[
-                const SizedBox(height: AppSpacing.s12),
-                Text(
-                  _error!,
-                  style: AppText.caption(context).copyWith(color: t.danger),
-                ),
-              ],
-              const SizedBox(height: AppSpacing.s20),
-              Wrap(
-                alignment: WrapAlignment.end,
-                spacing: AppSpacing.s8,
-                runSpacing: AppSpacing.s8,
-                children: <Widget>[
-                  AppButton(
-                    label: 'Annulla',
-                    variant: AppButtonVariant.ghost,
-                    onPressed: _saving
-                        ? null
-                        : () => Navigator.of(context).pop(false),
-                  ),
-                  AppButton(
-                    label: 'Salva nel Portafoglio',
-                    variant: AppButtonVariant.primary,
-                    loading: _saving,
-                    loadingLabel: 'Salvataggio...',
-                    onPressed: _saving ? null : _submit,
-                  ),
-                ],
-              ),
-            ],
+        AppButton(
+          label: 'Salva nel Portafoglio',
+          variant: AppButtonVariant.primary,
+          loading: _saving,
+          loadingLabel: 'Salvataggio...',
+          onPressed: _saving ? null : _submit,
+        ),
+      ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const _FieldLabel('Ticker o simbolo azione'),
+          const SizedBox(height: AppSpacing.s6),
+          TextField(
+            controller: _ticker,
+            enabled: !_saving,
+            textCapitalization: TextCapitalization.characters,
+            onChanged: _onTickerChanged,
+            decoration: const InputDecoration(
+              hintText: 'Es. G.MI, LDO.MI, ISP.MI, AAPL, NVDA...',
+            ),
           ),
-        ),
+          if (_suggestions.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppSpacing.s4),
+            _AutocompleteDropdown(
+              suggestions: _suggestions,
+              onSelected: _selectTicker,
+            ),
+          ],
+          const SizedBox(height: AppSpacing.s14),
+          const _FieldLabel('Quantità di azioni'),
+          const SizedBox(height: AppSpacing.s6),
+          StepperInput(
+            controller: _quantity,
+            enabled: !_saving,
+            min: 0,
+            step: 1,
+            expand: true,
+            hint: 'Es. 100',
+            semanticsLabel: 'Quantità di azioni',
+            increaseLabel: 'Aumenta quantità',
+            decreaseLabel: 'Diminuisci quantità',
+          ),
+          const SizedBox(height: AppSpacing.s14),
+          const _FieldLabel('Prezzo acquisto unitario (€ o \$)'),
+          const SizedBox(height: AppSpacing.s6),
+          StepperInput(
+            controller: _price,
+            enabled: !_saving,
+            min: 0,
+            step: 0.5,
+            expand: true,
+            hint: 'Es. 24.50',
+            semanticsLabel: 'Prezzo di acquisto',
+            increaseLabel: 'Aumenta prezzo di acquisto',
+            decreaseLabel: 'Diminuisci prezzo di acquisto',
+          ),
+          const SizedBox(height: AppSpacing.s14),
+          const _FieldLabel('Data di acquisto'),
+          const SizedBox(height: AppSpacing.s6),
+          TextField(
+            controller: _date,
+            readOnly: true,
+            enabled: !_saving,
+            onTap: _pickDate,
+            decoration: InputDecoration(
+              hintText: 'gg/mm/aaaa',
+              suffixIcon: _purchaseDate == null
+                  ? const Icon(Icons.calendar_today, size: 16)
+                  : IconButton(
+                      icon: const Icon(Icons.close, size: 16),
+                      tooltip: 'Rimuovi data',
+                      onPressed: _saving ? null : _clearDate,
+                    ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.s14),
+          const _FieldLabel('Note operative (opzionale)'),
+          const SizedBox(height: AppSpacing.s6),
+          TextField(
+            controller: _notes,
+            enabled: !_saving,
+            decoration: const InputDecoration(
+              hintText: 'Es. Primo ingresso, dividendo reinvestito...',
+            ),
+          ),
+          if (_error != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.s12),
+            Text(
+              _error!,
+              style: AppText.caption(context).copyWith(color: t.danger),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -386,26 +344,29 @@ class _AutocompleteDropdown extends StatelessWidget {
                 horizontal: AppSpacing.s12,
                 vertical: AppSpacing.s10,
               ),
-              child: Text.rich(
-                TextSpan(
-                  children: <InlineSpan>[
-                    TextSpan(
-                      text: item.ticker,
-                      style: AppText.mono(
-                        context,
-                        size: 13,
-                        weight: FontWeight.w700,
-                        color: t.primary,
-                      ),
+              child: Row(
+                children: <Widget>[
+                  AppMarketTag.forTicker(item.ticker),
+                  const SizedBox(width: AppSpacing.s8),
+                  Text(
+                    item.ticker,
+                    style: AppText.mono(
+                      context,
+                      size: 13,
+                      weight: FontWeight.w700,
+                      color: t.primary,
                     ),
-                    TextSpan(
-                      text: ' — ${item.name}',
+                  ),
+                  const SizedBox(width: AppSpacing.s8),
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: AppText.caption(context),
                     ),
-                  ],
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
           );

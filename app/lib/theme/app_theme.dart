@@ -2,15 +2,15 @@ import 'package:flutter/material.dart';
 
 import 'tokens.dart';
 
-/// Tema chiaro dell'app, costruito dai token CSS del frontend.
+/// Tema chiaro "carta" del linguaggio Registro.
 final ThemeData lightTheme = buildAppTheme(AppTokens.light);
 
-/// Tema scuro dell'app, costruito dai token CSS del frontend.
+/// Tema scuro "carbone" del linguaggio Registro.
 final ThemeData darkTheme = buildAppTheme(AppTokens.dark);
 
 /// Costruisce un [ThemeData] completo a partire da un set di [AppTokens]:
-/// colorScheme, textTheme (base 14px), temi di bottoni/input/dialog/tooltip,
-/// scrollbar, data table e transizioni pagina.
+/// colorScheme, textTheme, temi di bottoni/input/dialogo/menu/tooltip,
+/// scrollbar, tabella e transizioni pagina.
 ThemeData buildAppTheme(AppTokens t) {
   final ColorScheme colorScheme = ColorScheme(
     brightness: t.brightness,
@@ -18,35 +18,35 @@ ThemeData buildAppTheme(AppTokens t) {
     onPrimary: t.onPrimarySolid,
     primaryContainer: t.primaryGlow,
     onPrimaryContainer: t.primary,
-    secondary: t.primary,
-    onSecondary: t.onPrimarySolid,
+    secondary: t.cyan,
+    onSecondary: t.isDark ? t.surfaceInverse : t.onPrimarySolid,
     secondaryContainer: t.primaryGlow,
-    onSecondaryContainer: t.primary,
+    onSecondaryContainer: t.cyan,
     tertiary: t.purple,
-    onTertiary: t.onPrimarySolid,
+    onTertiary: t.isDark ? t.surfaceInverse : t.onPrimarySolid,
     tertiaryContainer: t.purpleBg,
     onTertiaryContainer: t.purple,
     error: t.danger,
-    onError: t.onPrimarySolid,
+    onError: t.onDangerSolid,
     errorContainer: t.dangerBg,
     onErrorContainer: t.danger,
     surface: t.surface,
     onSurface: t.textPrimary,
     surfaceDim: t.bg,
-    surfaceBright: t.surface,
+    surfaceBright: t.surfaceRaised,
     surfaceContainerLowest: t.bg,
     surfaceContainerLow: t.bgSecondary,
-    surfaceContainer: t.surfaceHover,
-    surfaceContainerHigh: t.surfaceActive,
+    surfaceContainer: t.surfaceSunken,
+    surfaceContainerHigh: t.surfaceHover,
     surfaceContainerHighest: t.surfaceActive,
     onSurfaceVariant: t.textSecondary,
     outline: t.border,
     outlineVariant: t.borderSubtle,
-    shadow: const Color(0xFF101828),
+    shadow: t.surfaceInverse,
     scrim: t.scrim,
-    inverseSurface: t.textPrimary,
-    onInverseSurface: t.surface,
-    inversePrimary: t.primary,
+    inverseSurface: t.surfaceInverse,
+    onInverseSurface: t.textInverse,
+    inversePrimary: t.primarySolid,
     surfaceTint: Colors.transparent,
   );
 
@@ -62,6 +62,8 @@ ThemeData buildAppTheme(AppTokens t) {
     dividerColor: t.borderSubtle,
     disabledColor: t.textMuted,
     hintColor: t.textMuted,
+    focusColor: t.focusRing,
+    hoverColor: t.surfaceHover,
     highlightColor: Colors.transparent,
     splashFactory: NoSplash.splashFactory,
     visualDensity: VisualDensity.standard,
@@ -69,11 +71,11 @@ ThemeData buildAppTheme(AppTokens t) {
     extensions: <ThemeExtension<dynamic>>[t],
     textTheme: _buildTextTheme(t),
     primaryTextTheme: _buildTextTheme(t),
-    iconTheme: IconThemeData(color: t.textSecondary, size: 18),
-    primaryIconTheme: IconThemeData(color: t.textSecondary, size: 18),
+    iconTheme: IconThemeData(color: t.textSecondary, size: AppSizes.icon),
+    primaryIconTheme: IconThemeData(color: t.textSecondary, size: AppSizes.icon),
     textSelectionTheme: TextSelectionThemeData(
       cursorColor: t.primary,
-      selectionColor: t.primaryGlow,
+      selectionColor: t.selection,
       selectionHandleColor: t.primary,
     ),
     dividerTheme: DividerThemeData(
@@ -82,55 +84,54 @@ ThemeData buildAppTheme(AppTokens t) {
       space: 1,
     ),
     dialogTheme: DialogThemeData(
-      backgroundColor: t.surface,
+      backgroundColor: t.surfaceRaised,
       surfaceTintColor: Colors.transparent,
-      elevation: 0,
-      shadowColor: Colors.transparent,
+      elevation: 6,
+      shadowColor: Colors.black,
       barrierColor: t.scrim,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.modal),
+        borderRadius: BorderRadius.circular(AppRadii.sheet),
+        side: BorderSide(color: t.border),
       ),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 28),
       titleTextStyle: AppText.modalTitleFor(t),
       contentTextStyle: AppText.bodyFor(t),
-      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
     ),
     bottomSheetTheme: BottomSheetThemeData(
-      backgroundColor: t.surface,
-      modalBackgroundColor: t.surface,
+      backgroundColor: t.surfaceRaised,
+      modalBackgroundColor: t.surfaceRaised,
       modalBarrierColor: t.scrim,
       surfaceTintColor: Colors.transparent,
-      elevation: 0,
-      modalElevation: 0,
-      shadowColor: Colors.transparent,
+      elevation: 8,
+      modalElevation: 8,
+      shadowColor: Colors.black,
       showDragHandle: false,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.modal)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.sheet)),
       ),
     ),
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(
-        color: t.surface,
-        border: Border.all(color: t.border),
-        borderRadius: BorderRadius.circular(AppRadii.input),
-        boxShadow: t.shadowMd,
+        color: t.surfaceInverse,
+        borderRadius: BorderRadius.circular(AppRadii.control),
       ),
       textStyle: TextStyle(
-        color: t.textPrimary,
-        fontSize: 12.2,
-        fontWeight: FontWeight.w400,
-        height: 1.4,
+        color: t.textInverse,
+        fontSize: 11.8,
+        fontWeight: FontWeight.w500,
+        height: 1.35,
         fontFamilyFallback: AppTokens.fontFallback,
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      constraints: const BoxConstraints(maxWidth: 230),
-      waitDuration: const Duration(milliseconds: 350),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      constraints: const BoxConstraints(maxWidth: 250),
+      waitDuration: const Duration(milliseconds: 320),
       showDuration: const Duration(seconds: 8),
     ),
     scrollbarTheme: ScrollbarThemeData(
-      thickness: const WidgetStatePropertyAll<double>(8),
+      thickness: const WidgetStatePropertyAll<double>(7),
       radius: const Radius.circular(4),
-      crossAxisMargin: 0,
+      crossAxisMargin: 2,
       minThumbLength: 32,
       trackVisibility: const WidgetStatePropertyAll<bool>(false),
       thumbColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
@@ -150,7 +151,7 @@ ThemeData buildAppTheme(AppTokens t) {
     textButtonTheme: TextButtonThemeData(style: _textButtonStyle(t)),
     iconButtonTheme: IconButtonThemeData(style: _iconButtonStyle(t)),
     checkboxTheme: CheckboxThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.small)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.xs)),
       side: BorderSide(color: t.borderStrong, width: 1.5),
       fillColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
         if (states.contains(WidgetState.disabled)) return t.surfaceActive;
@@ -161,50 +162,113 @@ ThemeData buildAppTheme(AppTokens t) {
     ),
     radioTheme: RadioThemeData(
       fillColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
-        if (states.contains(WidgetState.disabled)) return t.textMuted;
+        if (states.contains(WidgetState.disabled)) return t.textFaint;
         return states.contains(WidgetState.selected) ? t.primarySolid : t.borderStrong;
       }),
       overlayColor: WidgetStatePropertyAll<Color>(t.primaryGlow),
     ),
     switchTheme: SwitchThemeData(
       thumbColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
-        return states.contains(WidgetState.selected) ? t.onPrimarySolid : t.textMuted;
+        return states.contains(WidgetState.selected) ? t.onPrimarySolid : t.textSecondary;
       }),
       trackColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
-        return states.contains(WidgetState.selected) ? t.primarySolid : t.surfaceActive;
+        if (states.contains(WidgetState.disabled)) return t.surfaceActive;
+        return states.contains(WidgetState.selected) ? t.primarySolid : t.track;
       }),
       trackOutlineColor: WidgetStatePropertyAll<Color>(t.border),
       overlayColor: WidgetStatePropertyAll<Color>(t.primaryGlow),
     ),
     progressIndicatorTheme: ProgressIndicatorThemeData(
       color: t.primarySolid,
-      linearTrackColor: t.surfaceActive,
-      circularTrackColor: t.border,
+      linearTrackColor: t.track,
+      circularTrackColor: t.track,
+      linearMinHeight: 4,
+    ),
+    chipTheme: ChipThemeData(
+      backgroundColor: t.surfaceSunken,
+      selectedColor: t.primaryGlow,
+      disabledColor: t.surfaceActive,
+      labelStyle: AppText.smallFor(t).copyWith(fontWeight: FontWeight.w500),
+      secondaryLabelStyle: AppText.smallFor(t).copyWith(color: t.primary, fontWeight: FontWeight.w600),
+      side: BorderSide(color: t.border),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.tag)),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      showCheckmark: false,
     ),
     popupMenuTheme: PopupMenuThemeData(
-      color: t.surface,
+      color: t.surfaceRaised,
       surfaceTintColor: Colors.transparent,
-      elevation: 0,
+      elevation: 6,
+      shadowColor: Colors.black,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.input),
+        borderRadius: BorderRadius.circular(AppRadii.control),
         side: BorderSide(color: t.border),
       ),
       textStyle: AppText.bodyFor(t),
+      labelTextStyle: WidgetStatePropertyAll<TextStyle>(AppText.bodyFor(t)),
     ),
     dropdownMenuTheme: DropdownMenuThemeData(
       textStyle: AppText.bodyFor(t),
       inputDecorationTheme: inputTheme,
       menuStyle: MenuStyle(
-        backgroundColor: WidgetStatePropertyAll<Color>(t.surface),
+        backgroundColor: WidgetStatePropertyAll<Color>(t.surfaceRaised),
         surfaceTintColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
-        elevation: const WidgetStatePropertyAll<double>(0),
+        elevation: const WidgetStatePropertyAll<double>(6),
+        shadowColor: const WidgetStatePropertyAll<Color>(Colors.black),
         shape: WidgetStatePropertyAll<OutlinedBorder>(
           RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadii.input),
+            borderRadius: BorderRadius.circular(AppRadii.control),
             side: BorderSide(color: t.border),
           ),
         ),
       ),
+    ),
+    menuTheme: MenuThemeData(
+      style: MenuStyle(
+        backgroundColor: WidgetStatePropertyAll<Color>(t.surfaceRaised),
+        surfaceTintColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
+        elevation: const WidgetStatePropertyAll<double>(6),
+        shape: WidgetStatePropertyAll<OutlinedBorder>(
+          RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadii.control),
+            side: BorderSide(color: t.border),
+          ),
+        ),
+      ),
+    ),
+    segmentedButtonTheme: SegmentedButtonThemeData(
+      style: ButtonStyle(
+        textStyle: WidgetStatePropertyAll<TextStyle>(
+          AppText.buttonFor().copyWith(fontSize: 13),
+        ),
+        backgroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
+          if (states.contains(WidgetState.disabled)) return t.surfaceActive;
+          return states.contains(WidgetState.selected) ? t.primaryGlow : t.surface;
+        }),
+        foregroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
+          if (states.contains(WidgetState.disabled)) return t.textMuted;
+          return states.contains(WidgetState.selected) ? t.primary : t.textSecondary;
+        }),
+        side: WidgetStatePropertyAll<BorderSide>(BorderSide(color: t.border)),
+        shape: WidgetStatePropertyAll<OutlinedBorder>(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.control)),
+        ),
+        elevation: const WidgetStatePropertyAll<double>(0),
+        minimumSize: const WidgetStatePropertyAll<Size>(Size(0, AppSizes.control)),
+        padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+          EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        ),
+      ),
+    ),
+    tabBarTheme: TabBarThemeData(
+      labelColor: t.primary,
+      unselectedLabelColor: t.textSecondary,
+      labelStyle: AppText.buttonFor().copyWith(fontSize: 13.5),
+      unselectedLabelStyle: AppText.buttonFor().copyWith(fontSize: 13.5, fontWeight: FontWeight.w500),
+      indicatorColor: t.primary,
+      indicatorSize: TabBarIndicatorSize.tab,
+      dividerColor: t.borderSubtle,
+      overlayColor: WidgetStatePropertyAll<Color>(t.primaryGlow),
     ),
     drawerTheme: DrawerThemeData(
       backgroundColor: t.surface,
@@ -216,30 +280,31 @@ ThemeData buildAppTheme(AppTokens t) {
       shape: const RoundedRectangleBorder(),
     ),
     dataTableTheme: DataTableThemeData(
-      headingRowColor: WidgetStatePropertyAll<Color>(t.surface),
+      headingRowColor: WidgetStatePropertyAll<Color>(t.surfaceSunken),
       headingTextStyle: AppText.tableHeaderFor(t),
-      headingRowHeight: 40,
+      headingRowHeight: AppSizes.tableHeader,
       dataTextStyle: AppText.tableCellFor(t),
-      dataRowMinHeight: 44,
-      dataRowMaxHeight: 60,
+      dataRowMinHeight: AppSizes.rowCompact,
+      dataRowMaxHeight: AppSizes.rowLoose,
       dividerThickness: 1,
       horizontalMargin: 12,
-      columnSpacing: 18,
+      columnSpacing: 20,
     ),
     listTileTheme: ListTileThemeData(
       iconColor: t.textSecondary,
       textColor: t.textPrimary,
       selectedColor: t.primary,
       selectedTileColor: t.primaryGlow,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.input)),
+      minVerticalPadding: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.control)),
     ),
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: t.surface,
+      backgroundColor: t.surfaceRaised,
       contentTextStyle: AppText.bodyFor(t),
       elevation: 0,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.input),
+        borderRadius: BorderRadius.circular(AppRadii.panel),
         side: BorderSide(color: t.border),
       ),
     ),
@@ -259,34 +324,35 @@ InputDecorationThemeData _inputDecorationTheme(AppTokens t) => InputDecorationTh
       filled: true,
       fillColor: t.surface,
       isDense: true,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
-      hintStyle: TextStyle(color: t.textMuted, fontSize: 14.4, fontWeight: FontWeight.w400),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      hintStyle: AppText.bodyFor(t).copyWith(color: t.textMuted),
       labelStyle: AppText.formLabelFor(t),
-      floatingLabelStyle: TextStyle(color: t.primary, fontSize: 13.1, fontWeight: FontWeight.w600),
-      errorStyle: TextStyle(color: t.danger, fontSize: 12.2, height: 1.3),
+      floatingLabelStyle: TextStyle(color: t.primary, fontSize: 12.5, fontWeight: FontWeight.w600),
+      errorStyle: TextStyle(color: t.danger, fontSize: 12, height: 1.35),
       prefixIconColor: t.textMuted,
       suffixIconColor: t.textMuted,
       border: _inputBorder(t.border),
       enabledBorder: _inputBorder(t.border),
-      focusedBorder: _GlowOutlineInputBorder(
+      focusedBorder: _RingOutlineInputBorder(
         borderSide: BorderSide(color: t.primary, width: 1),
-        borderRadius: BorderRadius.circular(AppRadii.input),
-        glowColor: t.primaryGlow,
+        borderRadius: BorderRadius.circular(AppRadii.control),
+        ringColor: t.focusRing,
       ),
       errorBorder: _inputBorder(t.dangerBorder),
-      focusedErrorBorder: _GlowOutlineInputBorder(
+      focusedErrorBorder: _RingOutlineInputBorder(
         borderSide: BorderSide(color: t.danger, width: 1),
-        borderRadius: BorderRadius.circular(AppRadii.input),
-        glowColor: t.dangerBg,
+        borderRadius: BorderRadius.circular(AppRadii.control),
+        ringColor: t.dangerBg,
       ),
       disabledBorder: _inputBorder(t.borderSubtle),
     );
 
 OutlineInputBorder _inputBorder(Color color) => OutlineInputBorder(
       borderSide: BorderSide(color: color, width: 1),
-      borderRadius: BorderRadius.circular(AppRadii.input),
+      borderRadius: BorderRadius.circular(AppRadii.control),
     );
 
+/// Stile "rule": bordo 1px, nessuna ombra, hover con fondo tenue.
 ButtonStyle _solidButtonStyle(AppTokens t, Color background, Color hover, Color foreground) {
   return ButtonStyle(
     backgroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
@@ -305,12 +371,12 @@ ButtonStyle _solidButtonStyle(AppTokens t, Color background, Color hover, Color 
     shadowColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
     surfaceTintColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
     padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
-      EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      EdgeInsets.symmetric(horizontal: 14, vertical: 8),
     ),
-    minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 32)),
-    maximumSize: const WidgetStatePropertyAll<Size>(Size(double.infinity, 44)),
+    minimumSize: const WidgetStatePropertyAll<Size>(Size(0, AppSizes.control)),
+    maximumSize: const WidgetStatePropertyAll<Size>(Size(double.infinity, AppSizes.controlLg)),
     shape: WidgetStatePropertyAll<OutlinedBorder>(
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.input)),
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.control)),
     ),
     textStyle: WidgetStatePropertyAll<TextStyle>(AppText.buttonFor()),
     mouseCursor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
@@ -324,32 +390,33 @@ ButtonStyle _solidButtonStyle(AppTokens t, Color background, Color hover, Color 
 ButtonStyle _ghostButtonStyle(AppTokens t) {
   return ButtonStyle(
     backgroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
-      if (states.contains(WidgetState.disabled)) return t.surfaceActive;
+      if (states.contains(WidgetState.disabled)) return Colors.transparent;
       if (states.contains(WidgetState.hovered) || states.contains(WidgetState.pressed)) return t.surfaceHover;
-      return t.surface;
+      return Colors.transparent;
     }),
     foregroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
       if (states.contains(WidgetState.disabled)) return t.textMuted;
       if (states.contains(WidgetState.hovered)) return t.primary;
-      return t.textSecondary;
+      return t.textPrimary;
     }),
     overlayColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
     side: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
-      if (states.contains(WidgetState.hovered) && !states.contains(WidgetState.disabled)) {
-        return BorderSide(color: t.primary);
-      }
-      return BorderSide(color: t.border);
+      if (states.contains(WidgetState.disabled)) return BorderSide(color: t.borderSubtle);
+      final bool hot = states.contains(WidgetState.hovered) ||
+          states.contains(WidgetState.focused) ||
+          states.contains(WidgetState.pressed);
+      return BorderSide(color: hot ? t.primary : t.border);
     }),
     elevation: const WidgetStatePropertyAll<double>(0),
     shadowColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
     surfaceTintColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
     padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
-      EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+      EdgeInsets.symmetric(horizontal: 14, vertical: 8),
     ),
-    minimumSize: const WidgetStatePropertyAll<Size>(Size(0, 32)),
-    maximumSize: const WidgetStatePropertyAll<Size>(Size(double.infinity, 44)),
+    minimumSize: const WidgetStatePropertyAll<Size>(Size(0, AppSizes.control)),
+    maximumSize: const WidgetStatePropertyAll<Size>(Size(double.infinity, AppSizes.controlLg)),
     shape: WidgetStatePropertyAll<OutlinedBorder>(
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.input)),
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.control)),
     ),
     textStyle: WidgetStatePropertyAll<TextStyle>(AppText.buttonFor()),
     mouseCursor: WidgetStateProperty.resolveWith((Set<WidgetState> states) {
@@ -379,11 +446,11 @@ ButtonStyle _iconButtonStyle(AppTokens t) {
     overlayColor: WidgetStatePropertyAll<Color>(t.primaryGlow),
     side: const WidgetStatePropertyAll<BorderSide>(BorderSide(color: Colors.transparent)),
     elevation: const WidgetStatePropertyAll<double>(0),
-    padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(EdgeInsets.all(7)),
-    minimumSize: const WidgetStatePropertyAll<Size>(Size(34, 34)),
-    maximumSize: const WidgetStatePropertyAll<Size>(Size(34, 34)),
+    padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(EdgeInsets.all(6)),
+    minimumSize: const WidgetStatePropertyAll<Size>(Size(32, 32)),
+    maximumSize: const WidgetStatePropertyAll<Size>(Size(32, 32)),
     shape: WidgetStatePropertyAll<OutlinedBorder>(
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.input)),
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(AppRadii.control)),
     ),
     animationDuration: AppMotion.fast,
     enableFeedback: false,
@@ -392,44 +459,29 @@ ButtonStyle _iconButtonStyle(AppTokens t) {
 
 TextTheme _buildTextTheme(AppTokens t) {
   return TextTheme(
-    displayLarge: TextStyle(color: t.textPrimary, fontSize: 34, fontWeight: FontWeight.w700, height: 1.2),
-    displayMedium: TextStyle(color: t.textPrimary, fontSize: 28, fontWeight: FontWeight.w700, height: 1.2),
-    displaySmall: TextStyle(color: t.textPrimary, fontSize: 24, fontWeight: FontWeight.w700, height: 1.25),
-    headlineLarge: TextStyle(color: t.textPrimary, fontSize: 21, fontWeight: FontWeight.w700, height: 1.25),
-    headlineMedium: TextStyle(color: t.textPrimary, fontSize: 19, fontWeight: FontWeight.w700, height: 1.3),
-    headlineSmall: TextStyle(color: t.textPrimary, fontSize: 17, fontWeight: FontWeight.w700, height: 1.3),
-    titleLarge: TextStyle(
-      color: t.textPrimary,
-      fontSize: 17.9,
-      fontWeight: FontWeight.w700,
-      height: 1.3,
-      letterSpacing: -0.18,
-    ),
-    titleMedium: TextStyle(
-      color: t.textPrimary,
-      fontSize: 15.7,
-      fontWeight: FontWeight.w600,
-      height: 1.35,
-      letterSpacing: -0.16,
-    ),
-    titleSmall: TextStyle(color: t.textSecondary, fontSize: 13.1, fontWeight: FontWeight.w600, height: 1.4),
-    bodyLarge: TextStyle(color: t.textPrimary, fontSize: 15.2, fontWeight: FontWeight.w400, height: 1.5),
+    displayLarge: TextStyle(color: t.textPrimary, fontSize: 34, fontWeight: FontWeight.w700, height: 1.15, letterSpacing: -0.4),
+    displayMedium: TextStyle(color: t.textPrimary, fontSize: 30, fontWeight: FontWeight.w700, height: 1.15, letterSpacing: -0.35),
+    displaySmall: TextStyle(color: t.textPrimary, fontSize: 26, fontWeight: FontWeight.w700, height: 1.2, letterSpacing: -0.3),
+    headlineLarge: TextStyle(color: t.textPrimary, fontSize: 22, fontWeight: FontWeight.w700, height: 1.25, letterSpacing: -0.25),
+    headlineMedium: TextStyle(color: t.textPrimary, fontSize: 20, fontWeight: FontWeight.w700, height: 1.3, letterSpacing: -0.2),
+    headlineSmall: TextStyle(color: t.textPrimary, fontSize: 18, fontWeight: FontWeight.w600, height: 1.3, letterSpacing: -0.15),
+    titleLarge: TextStyle(color: t.textPrimary, fontSize: 17, fontWeight: FontWeight.w600, height: 1.3, letterSpacing: -0.15),
+    titleMedium: TextStyle(color: t.textPrimary, fontSize: 15, fontWeight: FontWeight.w600, height: 1.35, letterSpacing: -0.1),
+    titleSmall: TextStyle(color: t.textSecondary, fontSize: 13, fontWeight: FontWeight.w600, height: 1.4),
+    bodyLarge: TextStyle(color: t.textPrimary, fontSize: 15, fontWeight: FontWeight.w400, height: 1.5),
     bodyMedium: TextStyle(color: t.textPrimary, fontSize: 14, fontWeight: FontWeight.w400, height: 1.5),
-    bodySmall: TextStyle(color: t.textSecondary, fontSize: 13.1, fontWeight: FontWeight.w400, height: 1.45),
-    labelLarge: TextStyle(color: t.textPrimary, fontSize: 13.8, fontWeight: FontWeight.w600, height: 1.3),
-    labelMedium: TextStyle(color: t.textSecondary, fontSize: 12.2, fontWeight: FontWeight.w600, height: 1.3),
-    labelSmall: TextStyle(
-      color: t.textSecondary,
-      fontSize: 11.5,
-      fontWeight: FontWeight.w600,
-      height: 1.3,
-      letterSpacing: 0.58,
-    ),
+    bodySmall: TextStyle(color: t.textSecondary, fontSize: 12.5, fontWeight: FontWeight.w400, height: 1.45),
+    labelLarge: TextStyle(color: t.textPrimary, fontSize: 13, fontWeight: FontWeight.w600, height: 1.3),
+    labelMedium: TextStyle(color: t.textSecondary, fontSize: 11.5, fontWeight: FontWeight.w600, height: 1.3, letterSpacing: 0.4),
+    labelSmall: TextStyle(color: t.textSecondary, fontSize: 11, fontWeight: FontWeight.w600, height: 1.3, letterSpacing: 0.8),
   );
 }
 
-/// Stili di testo "di prodotto" allineati al CSS del frontend
-/// (`.page-title`, `.card-title`, `.stat-*`, tabelle, form, login).
+/// Stili di testo "di prodotto" del linguaggio Registro.
+///
+/// Gerarchia: micro-etichette MAIUSCOLE con tracking (11px), testo di corpo
+/// 13–14px, titoli 15–18px, numeri in mono tabulare con il valore come
+/// elemento più grande della card.
 ///
 /// Due livelli di API:
 /// - i metodi `*For(AppTokens)` costruiscono lo stile dai soli token, con
@@ -440,106 +492,135 @@ TextTheme _buildTextTheme(AppTokens t) {
 /// Il colore arriva dai token: sugli stessi stili si può poi applicare
 /// `.copyWith(color: ...)` per profit/loss.
 abstract final class AppText {
-  /// Titolo di pagina in topbar (`1.12rem/700`, `1rem` sotto 640).
+  /// Titolo di pagina in topbar (18px/700, 16px sotto 640).
   static TextStyle pageTitle(BuildContext context) =>
       pageTitleFor(context.tokens, compact: context.isCompact);
 
   /// [pageTitle] dai soli token.
   static TextStyle pageTitleFor(AppTokens t, {bool compact = false}) => TextStyle(
         color: t.textPrimary,
-        fontSize: compact ? 16 : 17.9,
+        fontSize: compact ? 16 : 18,
         fontWeight: FontWeight.w700,
-        height: 1.3,
-        letterSpacing: -0.18,
+        height: 1.25,
+        letterSpacing: -0.15,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Titolo di card/sezione (`.card-title`, `.98rem/600`).
+  /// Numero in evidenza (display, 30px/700).
+  static TextStyle display(BuildContext context) => displayFor(context.tokens);
+
+  /// [display] dai soli token.
+  static TextStyle displayFor(AppTokens t) => TextStyle(
+        color: t.textPrimary,
+        fontSize: 30,
+        fontWeight: FontWeight.w700,
+        height: 1.15,
+        letterSpacing: -0.35,
+        fontFamilyFallback: AppTokens.fontFallback,
+      );
+
+  /// Titolo di card/sezione (15px/650).
   static TextStyle cardTitle(BuildContext context) => cardTitleFor(context.tokens);
 
   /// [cardTitle] dai soli token.
   static TextStyle cardTitleFor(AppTokens t) => TextStyle(
         color: t.textPrimary,
-        fontSize: 15.7,
+        fontSize: 15,
         fontWeight: FontWeight.w600,
         height: 1.35,
-        letterSpacing: -0.16,
+        letterSpacing: -0.1,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Etichetta maiuscola di sezione (`.text-xs` + `uppercase`).
+  /// Etichetta micro maiuscola (11px/600, tracking 0.09em).
+  static TextStyle micro(BuildContext context) => microFor(context.tokens);
+
+  /// [micro] dai soli token.
+  static TextStyle microFor(AppTokens t) => TextStyle(
+        color: t.textSecondary,
+        fontSize: 11,
+        fontWeight: FontWeight.w600,
+        height: 1.3,
+        letterSpacing: 0.9,
+        fontFamilyFallback: AppTokens.fontFallback,
+      );
+
+  /// Etichetta maiuscola di sezione (alias storico di [micro]).
   static TextStyle sectionLabel(BuildContext context) => sectionLabelFor(context.tokens);
 
   /// [sectionLabel] dai soli token.
-  static TextStyle sectionLabelFor(AppTokens t) => TextStyle(
-        color: t.textSecondary,
-        fontSize: 12.2,
-        fontWeight: FontWeight.w600,
-        height: 1.3,
-        letterSpacing: 0.6,
-        fontFamilyFallback: AppTokens.fontFallback,
-      );
+  static TextStyle sectionLabelFor(AppTokens t) => microFor(t);
 
-  /// Etichetta di uno stat (`.stat-label`, `.76rem`, maiuscola con tracking).
+  /// Etichetta di uno stat (11px maiuscola con tracking).
   static TextStyle statLabel(BuildContext context) =>
       statLabelFor(context.tokens, compact: context.isCompact);
 
   /// [statLabel] dai soli token.
-  static TextStyle statLabelFor(AppTokens t, {bool compact = false}) => TextStyle(
-        color: t.textSecondary,
-        fontSize: compact ? 10.9 : 12.2,
-        fontWeight: FontWeight.w600,
-        height: 1.3,
-        letterSpacing: 0.6,
-        fontFamilyFallback: AppTokens.fontFallback,
+  static TextStyle statLabelFor(AppTokens t, {bool compact = false}) => microFor(t).copyWith(
+        fontSize: compact ? 10.5 : 11,
+        color: t.textMuted,
       );
 
-  /// Valore numerico di uno stat (mono, tabular, 1.55rem → 1.25rem → 1.1rem).
+  /// Valore numerico di uno stat (mono tabular, 26 → 22 → 19).
   static TextStyle statValue(BuildContext context) =>
       statValueFor(context.tokens, compact: context.isCompact, tiny: context.isTiny);
 
   /// [statValue] dai soli token.
   static TextStyle statValueFor(AppTokens t, {bool compact = false, bool tiny = false}) {
-    final double size = tiny ? 17.6 : (compact ? 20 : 24.8);
+    final double size = tiny ? 19 : (compact ? 22 : 26);
     return TextStyle(
       color: t.textPrimary,
       fontSize: size,
-      fontWeight: FontWeight.w700,
-      height: 1.25,
-      letterSpacing: size * -0.02,
+      fontWeight: FontWeight.w600,
+      height: 1.15,
+      letterSpacing: size * -0.015,
       fontFamily: AppTokens.monoFontFamily,
       fontFamilyFallback: AppTokens.monoFontFallback,
       fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
     );
   }
 
-  /// Variante ridotta del valore stat (`.stat-value-sm`, 1.25rem).
+  /// Variante ridotta del valore stat (19px).
   static TextStyle statValueSm(BuildContext context) =>
       statValueSmFor(context.tokens, compact: context.isCompact);
 
   /// [statValueSm] dai soli token.
   static TextStyle statValueSmFor(AppTokens t, {bool compact = false}) => TextStyle(
         color: t.textPrimary,
-        fontSize: compact ? 16.8 : 20,
-        fontWeight: FontWeight.w700,
-        height: 1.25,
-        letterSpacing: -0.2,
+        fontSize: compact ? 17 : 19,
+        fontWeight: FontWeight.w600,
+        height: 1.2,
+        letterSpacing: -0.15,
         fontFamily: AppTokens.monoFontFamily,
         fontFamilyFallback: AppTokens.monoFontFallback,
         fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
       );
 
-  /// Descrizione sotto il valore di uno stat (`.stat-desc`, `.74rem` muted).
+  /// Descrizione sotto il valore di uno stat (12px muted).
   static TextStyle statDesc(BuildContext context) =>
       statDescFor(context.tokens, compact: context.isCompact);
 
   /// [statDesc] dai soli token.
   static TextStyle statDescFor(AppTokens t, {bool compact = false}) => TextStyle(
         color: t.textMuted,
-        fontSize: compact ? 10.9 : 11.8,
+        fontSize: compact ? 11 : 12,
         fontWeight: FontWeight.w400,
-        height: 1.35,
+        height: 1.4,
         fontFamilyFallback: AppTokens.fontFallback,
+      );
+
+  /// Variazione numerica (mono tabulare, 13px/600).
+  static TextStyle delta(BuildContext context) => deltaFor(context.tokens);
+
+  /// [delta] dai soli token.
+  static TextStyle deltaFor(AppTokens t) => TextStyle(
+        color: t.textPrimary,
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        height: 1.25,
+        fontFamily: AppTokens.monoFontFamily,
+        fontFamilyFallback: AppTokens.monoFontFallback,
+        fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
       );
 
   /// Testo di corpo base (14px, line-height 1.5).
@@ -558,163 +639,166 @@ abstract final class AppText {
   static TextStyle bodySecondary(BuildContext context) =>
       bodyFor(context.tokens).copyWith(color: context.tokens.textSecondary);
 
-  /// Testo compatto (`.text-sm`, `.82rem`).
+  /// Testo compatto (13px).
   static TextStyle small(BuildContext context) => smallFor(context.tokens);
 
   /// [small] dai soli token.
   static TextStyle smallFor(AppTokens t) => TextStyle(
         color: t.textPrimary,
-        fontSize: 13.1,
+        fontSize: 13,
         fontWeight: FontWeight.w400,
-        height: 1.45,
+        height: 1.5,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Testo minuto/attenuato (`.text-xs`, `.74rem` muted).
+  /// Testo minuto/attenuato (12px muted).
   static TextStyle caption(BuildContext context) => captionFor(context.tokens);
 
   /// [caption] dai soli token.
   static TextStyle captionFor(AppTokens t) => TextStyle(
         color: t.textMuted,
-        fontSize: 11.8,
+        fontSize: 12,
         fontWeight: FontWeight.w400,
-        height: 1.4,
+        height: 1.45,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Etichetta di form (`.form-group label`, `.82rem/600` secondary).
+  /// Etichetta di form (12.5px/600 secondary).
   static TextStyle formLabel(BuildContext context) => formLabelFor(context.tokens);
 
   /// [formLabel] dai soli token.
   static TextStyle formLabelFor(AppTokens t) => TextStyle(
         color: t.textSecondary,
-        fontSize: 13.1,
+        fontSize: 12.5,
         fontWeight: FontWeight.w600,
         height: 1.3,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Intestazione di tabella (`th`, `.72rem/600` maiuscola con tracking).
+  /// Intestazione di tabella (11px/600 maiuscola con tracking).
   static TextStyle tableHeader(BuildContext context) => tableHeaderFor(context.tokens);
 
   /// [tableHeader] dai soli token.
-  static TextStyle tableHeaderFor(AppTokens t) => TextStyle(
-        color: t.textSecondary,
-        fontSize: 11.5,
-        fontWeight: FontWeight.w600,
-        height: 1.3,
-        letterSpacing: 0.58,
-        fontFamilyFallback: AppTokens.fontFallback,
-      );
+  static TextStyle tableHeaderFor(AppTokens t) => microFor(t);
 
-  /// Cella di tabella (`td`, `.88rem`).
+  /// Cella di tabella (13px).
   static TextStyle tableCell(BuildContext context) => tableCellFor(context.tokens);
 
   /// [tableCell] dai soli token.
   static TextStyle tableCellFor(AppTokens t) => TextStyle(
         color: t.textPrimary,
-        fontSize: 14.1,
+        fontSize: 13,
         fontWeight: FontWeight.w400,
         height: 1.4,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Titolo di modale (`.modal-title`, `1.08rem/700`).
+  /// Cella numerica di tabella (mono tabulare).
+  static TextStyle tableCellNum(BuildContext context) =>
+      tableCellFor(context.tokens).copyWith(
+        fontFamily: AppTokens.monoFontFamily,
+        fontFamilyFallback: AppTokens.monoFontFallback,
+        fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+        fontWeight: FontWeight.w500,
+      );
+
+  /// Titolo di modale (17px/700).
   static TextStyle modalTitle(BuildContext context) => modalTitleFor(context.tokens);
 
   /// [modalTitle] dai soli token.
   static TextStyle modalTitleFor(AppTokens t) => TextStyle(
         color: t.textPrimary,
-        fontSize: 17.3,
+        fontSize: 17,
         fontWeight: FontWeight.w700,
         height: 1.3,
-        letterSpacing: -0.17,
+        letterSpacing: -0.15,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Etichetta di bottone (`.btn`, `.86rem/600`).
+  /// Etichetta di bottone (13px/600).
   static TextStyle button(BuildContext context) => buttonFor();
 
   /// [button] dai soli token (il colore lo decide il ButtonStyle).
   static TextStyle buttonFor() => const TextStyle(
-        fontSize: 13.8,
+        fontSize: 13,
         fontWeight: FontWeight.w600,
-        height: 1.3,
+        height: 1.25,
+        letterSpacing: 0.1,
         fontFamilyFallback: AppTokens.fontFallback,
       );
 
-  /// Link testuale (`.stock-ticker-link`, primary/600).
+  /// Link testuale (accento/600).
   static TextStyle link(BuildContext context) =>
       buttonFor().copyWith(color: context.tokens.primary);
 
-  /// Voce di navigazione della sidebar (`.nav-link`, `.9rem/500`).
+  /// Voce di navigazione della sidebar (13.5px).
   static TextStyle navLabel(BuildContext context, {bool active = false}) {
     final AppTokens t = context.tokens;
     return TextStyle(
       color: active ? t.primary : t.textSecondary,
-      fontSize: 14.4,
+      fontSize: 13.5,
       fontWeight: active ? FontWeight.w600 : FontWeight.w500,
       height: 1.3,
       fontFamilyFallback: AppTokens.fontFallback,
     );
   }
 
-  /// Titolo del logo in sidebar (`.app-title`, `1.02rem/700`).
+  /// Titolo del logo in sidebar (15px/700).
   static TextStyle appTitle(BuildContext context) {
     final AppTokens t = context.tokens;
     return TextStyle(
       color: t.textPrimary,
-      fontSize: 16.3,
+      fontSize: 15,
       fontWeight: FontWeight.w700,
       height: 1.3,
-      letterSpacing: -0.16,
+      letterSpacing: 0.4,
       fontFamilyFallback: AppTokens.fontFallback,
     );
   }
 
-  /// Testo di un toast (`.toast`, `.86rem/500`).
+  /// Testo di un toast (13px/500).
   static TextStyle toast(BuildContext context) {
     final AppTokens t = context.tokens;
     return TextStyle(
       color: t.textPrimary,
-      fontSize: 13.8,
+      fontSize: 13,
       fontWeight: FontWeight.w500,
-      height: 1.4,
-      fontFamilyFallback: AppTokens.fontFallback,
-    );
-  }
-
-  /// Titolo della login (`.login-title`, `1.35rem/700`).
-  static TextStyle loginTitle(BuildContext context) {
-    final AppTokens t = context.tokens;
-    return TextStyle(
-      color: t.textPrimary,
-      fontSize: 21.6,
-      fontWeight: FontWeight.w700,
-      height: 1.3,
-      letterSpacing: -0.2,
-      fontFamilyFallback: AppTokens.fontFallback,
-    );
-  }
-
-  /// Sottotitolo della login (`.login-subtitle`, `.88rem` secondary).
-  static TextStyle loginSubtitle(BuildContext context) {
-    final AppTokens t = context.tokens;
-    return TextStyle(
-      color: t.textSecondary,
-      fontSize: 14.1,
-      fontWeight: FontWeight.w400,
       height: 1.45,
       fontFamilyFallback: AppTokens.fontFallback,
     );
   }
 
-  /// Nota di sicurezza sotto la login (`.security-badge`, `.74rem` muted).
+  /// Titolo della login (24px/700).
+  static TextStyle loginTitle(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return TextStyle(
+      color: t.textPrimary,
+      fontSize: 24,
+      fontWeight: FontWeight.w700,
+      height: 1.25,
+      letterSpacing: -0.3,
+      fontFamilyFallback: AppTokens.fontFallback,
+    );
+  }
+
+  /// Sottotitolo della login (14px secondary).
+  static TextStyle loginSubtitle(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return TextStyle(
+      color: t.textSecondary,
+      fontSize: 14,
+      fontWeight: FontWeight.w400,
+      height: 1.5,
+      fontFamilyFallback: AppTokens.fontFallback,
+    );
+  }
+
+  /// Nota di sicurezza sotto la login (11.5px muted).
   static TextStyle securityBadge(BuildContext context) {
     final AppTokens t = context.tokens;
     return TextStyle(
       color: t.textMuted,
-      fontSize: 11.8,
+      fontSize: 11.5,
       fontWeight: FontWeight.w500,
       height: 1.4,
       fontFamilyFallback: AppTokens.fontFallback,
@@ -727,7 +811,7 @@ abstract final class AppText {
       color: color ?? context.tokens.textPrimary,
       fontSize: size,
       fontWeight: weight,
-      height: 1.4,
+      height: 1.35,
       fontFamily: AppTokens.monoFontFamily,
       fontFamilyFallback: AppTokens.monoFontFallback,
       fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
@@ -735,17 +819,17 @@ abstract final class AppText {
   }
 }
 
-/// [OutlineInputBorder] con alone di focus (`box-shadow: 0 0 0 3px var(--primary-glow)`).
-class _GlowOutlineInputBorder extends OutlineInputBorder {
-  const _GlowOutlineInputBorder({
+/// [OutlineInputBorder] con anello di focus visibile (2px attorno al bordo).
+class _RingOutlineInputBorder extends OutlineInputBorder {
+  const _RingOutlineInputBorder({
     super.borderSide,
     super.borderRadius,
     super.gapPadding,
-    required this.glowColor,
+    required this.ringColor,
   });
 
-  /// Colore dell'alone (di norma `--primary-glow`).
-  final Color glowColor;
+  /// Colore dell'anello (`focusRing`).
+  final Color ringColor;
 
   @override
   void paint(
@@ -756,14 +840,14 @@ class _GlowOutlineInputBorder extends OutlineInputBorder {
     double gapPercentage = 0.0,
     TextDirection? textDirection,
   }) {
-    // Anello pieno di 3px attorno al bordo, come il box-shadow del CSS.
+    // Anello pieno di 3px attorno al bordo (2px visibili + 1px di raccordo).
     final RRect rrect = borderRadius.resolve(textDirection).toRRect(rect).inflate(2);
     canvas.drawRRect(
       rrect,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 3
-        ..color = glowColor,
+        ..color = ringColor,
     );
     super.paint(
       canvas,
@@ -776,26 +860,26 @@ class _GlowOutlineInputBorder extends OutlineInputBorder {
   }
 
   @override
-  _GlowOutlineInputBorder copyWith({
+  _RingOutlineInputBorder copyWith({
     BorderSide? borderSide,
     BorderRadius? borderRadius,
     double? gapPadding,
   }) {
-    return _GlowOutlineInputBorder(
+    return _RingOutlineInputBorder(
       borderSide: borderSide ?? this.borderSide,
       borderRadius: borderRadius ?? this.borderRadius,
       gapPadding: gapPadding ?? this.gapPadding,
-      glowColor: glowColor,
+      ringColor: ringColor,
     );
   }
 
   @override
-  _GlowOutlineInputBorder scale(double t) {
-    return _GlowOutlineInputBorder(
+  _RingOutlineInputBorder scale(double t) {
+    return _RingOutlineInputBorder(
       borderSide: borderSide.scale(t),
       borderRadius: borderRadius * t,
       gapPadding: gapPadding * t,
-      glowColor: glowColor,
+      ringColor: ringColor,
     );
   }
 }

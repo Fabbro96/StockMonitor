@@ -13,18 +13,23 @@ import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_confirm_dialog.dart';
+import '../../widgets/app_error_panel.dart';
+import '../../widgets/app_market_tag.dart';
+import '../../widgets/app_segmented.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/section_header.dart';
-import '../../widgets/skeleton.dart';
 import '../../widgets/stepper_input.dart';
 import '../../widgets/toast.dart';
 import '../stock_detail/stock_detail_modal.dart' show showStockDetail;
 import 'portfolio_edits.dart' show formatDraftNumber;
+import 'portfolio_modal.dart';
 import 'portfolio_providers.dart' show realizedPnlProvider, reloadPortfolio;
+import 'portfolio_table.dart';
 import 'portfolio_tools_providers.dart';
 
-/// Sezione "📖 Trade Ledger & Storico Transazioni" (parità `#tradeLedgerCard`).
+/// Sezione "Trade Ledger & Storico Transazioni" (parità `#tradeLedgerCard`).
 ///
 /// Filtri server (`ALL`/`BUY`/`SELL`/`DIVIDEND`), tabella del registro,
 /// eliminazione con conferma e modal "Registra Transazione" (con quantità
@@ -42,17 +47,16 @@ class _TransactionsSectionState extends ConsumerState<TransactionsSection> {
   static const List<({String value, String label})> _filters =
       <({String value, String label})>[
         (value: kAllTransactionsFilter, label: 'Tutte'),
-        (value: 'BUY', label: '🟢 Acquisti (BUY)'),
-        (value: 'SELL', label: '🔴 Vendite (SELL)'),
-        (value: 'DIVIDEND', label: '💰 Dividendi'),
+        (value: 'BUY', label: 'Acquisti'),
+        (value: 'SELL', label: 'Vendite'),
+        (value: 'DIVIDEND', label: 'Dividendi'),
       ];
 
   String _filter = kAllTransactionsFilter;
 
   Future<void> _openTxDialog() async {
-    final bool? created = await showDialog<bool>(
-      context: context,
-      barrierColor: context.tokens.scrim,
+    final bool? created = await showPortfolioModal<bool>(
+      context,
       builder: (BuildContext _) => const _TransactionDialog(),
     );
     if (created != true || !mounted) return;
@@ -66,30 +70,14 @@ class _TransactionsSectionState extends ConsumerState<TransactionsSection> {
   }
 
   Future<void> _deleteTransaction(Transaction tx) async {
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
-      barrierColor: context.tokens.scrim,
-      builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('Elimina transazione'),
-        content: Text(
-          'Sei sicuro di voler eliminare la transazione #${tx.id}?',
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Annulla'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(
-              'Elimina',
-              style: TextStyle(color: context.tokens.danger),
-            ),
-          ),
-        ],
-      ),
+    final bool confirmed = await showAppConfirm(
+      context,
+      title: 'Elimina transazione',
+      message: 'Sei sicuro di voler eliminare la transazione #${tx.id}?',
+      confirmLabel: 'Elimina',
+      destructive: true,
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     try {
       await ref.read(portfolioApiProvider).deleteTransaction(tx.id);
@@ -127,29 +115,36 @@ class _TransactionsSectionState extends ConsumerState<TransactionsSection> {
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
           SectionHeader(
-            title: '📖 Trade Ledger & Storico Transazioni',
+            variant: SectionHeaderVariant.rule,
+            icon: Icons.receipt_long_outlined,
+            overline: 'Registro',
+            title: 'Transazioni',
             subtitle:
                 'Traccia ogni acquisto, vendita e accredito dividendi '
-                'calcolando automaticamente il P&L Realizzato e le commissioni.',
+                'calcolando automaticamente il P&L realizzato e le commissioni.',
             trailing: AppButton(
-              label: '➕ Registra Transazione',
+              label: 'Registra',
+              icon: const Icon(Icons.add),
               size: AppButtonSize.sm,
               onPressed: () => unawaited(_openTxDialog()),
             ),
           ),
-          Wrap(
-            spacing: AppSpacing.s8,
-            runSpacing: AppSpacing.s8,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: <Widget>[
-              Text('Filtra per:', style: AppText.caption(context)),
-              for (final ({String value, String label}) filter in _filters)
-                AppPill(
-                  label: filter.label,
-                  selected: _filter == filter.value,
-                  onPressed: () => setState(() => _filter = filter.value),
-                ),
-            ],
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AppSegmented<String>(
+              selected: _filter,
+              dense: true,
+              expand: context.isCompact,
+              semanticsLabel: 'Filtra transazioni per tipo',
+              segments: <AppSegment<String>>[
+                for (final ({String value, String label}) filter in _filters)
+                  AppSegment<String>(
+                    value: filter.value,
+                    label: filter.label,
+                  ),
+              ],
+              onSelected: (String value) => setState(() => _filter = value),
+            ),
           ),
           const SizedBox(height: AppSpacing.s12),
           _buildTable(context, async),
@@ -162,28 +157,27 @@ class _TransactionsSectionState extends ConsumerState<TransactionsSection> {
     BuildContext context,
     AsyncValue<List<Transaction>> async,
   ) {
-    final AppTokens t = context.tokens;
     if (async.isLoading && !async.hasValue) {
-      return const Column(
-        children: <Widget>[SkeletonRow(), SkeletonRow(), SkeletonRow()],
-      );
+      return const PortfolioTableSkeleton();
     }
     if (async.hasError && !async.hasValue) {
-      return const EmptyState(
-        icon: Icon(Icons.error_outline),
+      return AppErrorPanel(
         message: 'Errore nel caricamento del Trade Ledger',
+        onRetry: () => ref.invalidate(transactionsProvider(_filter)),
       );
     }
 
     final List<Transaction> transactions = async.value ?? const <Transaction>[];
     if (transactions.isEmpty) {
       return EmptyState(
+        icon: const Icon(Icons.receipt_long_outlined),
         message: _filter == kAllTransactionsFilter
             ? 'Nessuna transazione registrata.'
             : 'Nessuna transazione registrata con filtro $_filter.',
         actions: <Widget>[
           AppButton(
-            label: '➕ Registra la prima esecuzione',
+            label: 'Registra la prima esecuzione',
+            icon: const Icon(Icons.add),
             size: AppButtonSize.sm,
             onPressed: () => unawaited(_openTxDialog()),
           ),
@@ -191,115 +185,98 @@ class _TransactionsSectionState extends ConsumerState<TransactionsSection> {
       );
     }
 
-    final Table table = Table(
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-      columnWidths: const <int, TableColumnWidth>{
-        0: FixedColumnWidth(90),
-        1: FixedColumnWidth(110),
-        2: FlexColumnWidth(0.9),
-        3: FlexColumnWidth(1.2),
-        4: FixedColumnWidth(80),
-        5: FixedColumnWidth(110),
-        6: FixedColumnWidth(90),
-        7: FixedColumnWidth(120),
-        8: FlexColumnWidth(1.2),
-        9: FixedColumnWidth(50),
-      },
-      border: TableBorder(
-        horizontalInside: BorderSide(color: t.borderSubtle),
-        bottom: BorderSide(color: t.border),
+    return PortfolioTable(
+      minWidth: 1100,
+      child: Column(
+        children: <Widget>[
+          const PortfolioTableHeader(
+            cells: <Widget>[
+              SizedBox(width: 92, child: PortfolioHeaderLabel('Data')),
+              SizedBox(width: 104, child: PortfolioHeaderLabel('Tipo')),
+              Expanded(flex: 24, child: PortfolioHeaderLabel('Titolo')),
+              SizedBox(
+                width: 92,
+                child: PortfolioHeaderLabel(
+                  'Quantità',
+                  alignment: Alignment.centerRight,
+                ),
+              ),
+              SizedBox(
+                width: 108,
+                child: PortfolioHeaderLabel(
+                  'Prezzo',
+                  alignment: Alignment.centerRight,
+                ),
+              ),
+              SizedBox(
+                width: 92,
+                child: PortfolioHeaderLabel(
+                  'Commissione',
+                  alignment: Alignment.centerRight,
+                ),
+              ),
+              SizedBox(
+                width: 118,
+                child: PortfolioHeaderLabel(
+                  'P&L realizzato',
+                  alignment: Alignment.centerRight,
+                ),
+              ),
+              Expanded(flex: 18, child: PortfolioHeaderLabel('Note')),
+              SizedBox(width: 44, child: PortfolioHeaderLabel('')),
+            ],
+          ),
+          for (final Transaction tx in transactions)
+            _TransactionRow(
+              transaction: tx,
+              onDelete: () => unawaited(_deleteTransaction(tx)),
+            ),
+        ],
       ),
-      children: <TableRow>[
-        TableRow(
-          children: <Widget>[
-            _headerCell(context, 'Data'),
-            _headerCell(context, 'Tipo'),
-            _headerCell(context, 'Ticker'),
-            _headerCell(context, 'Nome Titolo'),
-            _headerCell(context, 'Quantità', alignment: Alignment.centerRight),
-            _headerCell(
-              context,
-              'Prezzo Eseguito',
-              alignment: Alignment.centerRight,
-            ),
-            _headerCell(
-              context,
-              'Commissione',
-              alignment: Alignment.centerRight,
-            ),
-            _headerCell(
-              context,
-              'P&L Realizzato',
-              alignment: Alignment.centerRight,
-            ),
-            _headerCell(context, 'Note'),
-            _headerCell(context, ''),
-          ],
-        ),
-        for (final Transaction tx in transactions) _row(context, tx),
-      ],
-    );
-
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        if (constraints.maxWidth < 1120) {
-          return SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(width: 1120, child: table),
-          );
-        }
-        return table;
-      },
     );
   }
+}
 
-  TableRow _row(BuildContext context, Transaction tx) {
+/// Riga del registro: 40px, tag di lato, importi mono tabulari e azione di
+/// eliminazione rivelata con hover/focus.
+class _TransactionRow extends StatelessWidget {
+  const _TransactionRow({required this.transaction, required this.onDelete});
+
+  final Transaction transaction;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    final bool isSell = tx.type == 'SELL';
-    final bool isDividend = tx.type == 'DIVIDEND';
-    final double? pnl = tx.realizedPnl;
-    final String notes = tx.notes;
+    final bool isSell = transaction.type == 'SELL';
+    final bool isDividend = transaction.type == 'DIVIDEND';
+    final double? pnl = transaction.realizedPnl;
+    final String notes = transaction.notes;
 
     final Widget pnlCell;
-    if (isSell && pnl != null) {
+    if ((isSell || isDividend) && pnl != null) {
+      final Color color = isSell
+          ? (pnl >= 0 ? t.success : t.danger)
+          : t.success;
       pnlCell = Text(
-        '${pnl >= 0 ? '+' : ''}'
-        '${formatCurrency(pnl, currency: tx.currency)}',
-        style: AppText.mono(
-          context,
-          size: 13,
-          weight: FontWeight.w700,
-          color: pnl >= 0 ? t.success : t.danger,
-        ),
-      );
-    } else if (isDividend && pnl != null) {
-      pnlCell = Text(
-        '+${formatCurrency(pnl, currency: tx.currency)}',
-        style: AppText.mono(
-          context,
-          size: 13,
-          weight: FontWeight.w700,
-          color: t.success,
-        ),
+        _signedMoney(pnl, transaction.currency),
+        textAlign: TextAlign.right,
+        style: AppText.tableCellNum(context).copyWith(color: color),
       );
     } else {
       pnlCell = Text(
-        '--',
-        style: AppText.mono(
-          context,
-          size: 13,
-          weight: FontWeight.w500,
-          color: t.textMuted,
-        ),
+        '—',
+        textAlign: TextAlign.right,
+        style: AppText.tableCellNum(context).copyWith(color: t.textMuted),
       );
     }
 
-    return TableRow(
-      children: <Widget>[
-        _bodyCell(
-          context,
+    return PortfolioTableRow(
+      cells: <Widget>[
+        SizedBox(
+          width: 92,
           child: Text(
-            formatDate(tx.transactionDate),
+            formatDate(transaction.transactionDate),
             style: AppText.mono(
               context,
               size: 11.5,
@@ -308,67 +285,53 @@ class _TransactionsSectionState extends ConsumerState<TransactionsSection> {
             ),
           ),
         ),
-        _bodyCell(context, child: _typeBadge(tx.type)),
-        _bodyCell(
-          context,
-          child: InkWell(
-            onTap: () => unawaited(showStockDetail(context, tx.ticker)),
-            borderRadius: BorderRadius.circular(AppRadii.small),
+        SizedBox(width: 104, child: _typeBadge(transaction.type)),
+        Expanded(
+          flex: 24,
+          child: _TickerCell(transaction: transaction),
+        ),
+        SizedBox(
+          width: 92,
+          child: PortfolioCell(
+            alignment: Alignment.centerRight,
             child: Text(
-              tx.ticker,
-              style: AppText.mono(
-                context,
-                size: 13,
-                weight: FontWeight.w700,
-                color: t.primary,
+              isDividend ? '—' : formatDraftNumber(transaction.quantity),
+              style: AppText.tableCellNum(context),
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 108,
+          child: PortfolioCell(
+            alignment: Alignment.centerRight,
+            child: Text(
+              formatCurrency(transaction.price, currency: transaction.currency),
+              style: AppText.tableCellNum(context),
+            ),
+          ),
+        ),
+        SizedBox(
+          width: 92,
+          child: PortfolioCell(
+            alignment: Alignment.centerRight,
+            child: Text(
+              transaction.fee > 0 ? formatCurrency(transaction.fee) : '—',
+              style: AppText.tableCellNum(context).copyWith(
+                color: t.textMuted,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
         ),
-        _bodyCell(
-          context,
-          child: Text(
-            tx.name.isEmpty ? tx.ticker : tx.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppText.small(context).copyWith(color: t.textSecondary),
-          ),
+        SizedBox(
+          width: 118,
+          child: PortfolioCell(alignment: Alignment.centerRight, child: pnlCell),
         ),
-        _bodyCell(
-          context,
-          alignment: Alignment.centerRight,
-          child: Text(
-            isDividend ? '--' : formatDraftNumber(tx.quantity),
-            style: AppText.mono(context, size: 13),
-          ),
-        ),
-        _bodyCell(
-          context,
-          alignment: Alignment.centerRight,
-          child: Text(
-            formatCurrency(tx.price, currency: tx.currency),
-            style: AppText.mono(context, size: 13),
-          ),
-        ),
-        _bodyCell(
-          context,
-          alignment: Alignment.centerRight,
-          child: Text(
-            tx.fee > 0 ? formatCurrency(tx.fee) : '0 €',
-            style: AppText.mono(
-              context,
-              size: 11.5,
-              weight: FontWeight.w500,
-              color: t.textMuted,
-            ),
-          ),
-        ),
-        _bodyCell(context, alignment: Alignment.centerRight, child: pnlCell),
-        _bodyCell(
-          context,
+        Expanded(
+          flex: 18,
           child: notes.isEmpty
               ? Text(
-                  '--',
+                  '—',
                   style: AppText.mono(
                     context,
                     size: 11.5,
@@ -379,25 +342,72 @@ class _TransactionsSectionState extends ConsumerState<TransactionsSection> {
               : Tooltip(
                   message: notes,
                   child: Text(
-                    _truncate(notes, 25),
+                    _truncate(notes, 32),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: AppText.small(context).copyWith(color: t.textMuted),
+                    style: AppText.caption(context),
                   ),
                 ),
         ),
-        _bodyCell(
-          context,
-          alignment: Alignment.center,
-          child: AppIconButton(
-            icon: const Text('🗑️', style: TextStyle(fontSize: 14)),
-            size: 30,
-            iconSize: 14,
-            bordered: false,
-            danger: true,
-            tooltip: 'Elimina transazione',
-            semanticLabel: 'Elimina transazione #${tx.id}',
-            onPressed: () => unawaited(_deleteTransaction(tx)),
+        SizedBox(
+          width: 44,
+          child: PortfolioCell(
+            alignment: Alignment.centerRight,
+            child: PortfolioActionsReveal(
+              child: AppIconButton(
+                icon: const Icon(Icons.delete_outline),
+                size: AppSizes.iconButtonSm,
+                iconSize: AppSizes.iconSm,
+                minTargetSize: AppSizes.touchTarget,
+                tooltip: 'Elimina transazione',
+                semanticLabel: 'Elimina transazione #${transaction.id}',
+                danger: true,
+                onPressed: onDelete,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Cella titolo: tag di mercato, ticker mono collegato alla scheda e nome.
+class _TickerCell extends StatelessWidget {
+  const _TickerCell({required this.transaction});
+
+  final Transaction transaction;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return Row(
+      children: <Widget>[
+        AppMarketTag.forTicker(
+          transaction.ticker,
+          market: transaction.market,
+        ),
+        const SizedBox(width: AppSpacing.s6),
+        InkWell(
+          onTap: () => unawaited(showStockDetail(context, transaction.ticker)),
+          borderRadius: BorderRadius.circular(AppRadii.small),
+          child: Text(
+            transaction.ticker,
+            style: AppText.mono(
+              context,
+              size: 13,
+              weight: FontWeight.w700,
+              color: t.primary,
+            ),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.s6),
+        Expanded(
+          child: Text(
+            transaction.name.isEmpty ? transaction.ticker : transaction.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppText.caption(context).copyWith(color: t.textSecondary),
           ),
         ),
       ],
@@ -409,12 +419,18 @@ AppBadge _typeBadge(String type) {
   return switch (type) {
     'BUY' => const AppBadge.buy(),
     'SELL' => const AppBadge.sell(),
-    'DIVIDEND' => const AppBadge(
-      label: '💰 DIVIDENDO',
-      tone: BadgeTone.warning,
-    ),
+    'DIVIDEND' => const AppBadge(label: 'DIVIDENDO', tone: BadgeTone.warning),
     _ => AppBadge(label: type, tone: BadgeTone.neutral),
   };
+}
+
+/// Importo firmato (`+1.234,56 €` / `−120,00 €`), mai solo colore.
+String _signedMoney(num? value, String currency) {
+  if (value == null || !value.isFinite) return '—';
+  final String formatted = formatCurrency(value.abs(), currency: currency);
+  if (value > 0) return '+$formatted';
+  if (value < 0) return '−$formatted';
+  return formatted;
 }
 
 // --- Modal Registra Transazione ---------------------------------------------
@@ -461,13 +477,13 @@ class _TransactionDialogState extends ConsumerState<_TransactionDialog> {
       double.tryParse(controller.text.trim().replaceAll(',', '.'));
 
   String get _quantityLabel =>
-      _type == 'DIVIDEND' ? 'Quote Possedute (opzionale)' : 'Quantità Quote';
+      _type == 'DIVIDEND' ? 'Quote possedute (opzionale)' : 'Quantità quote';
 
   String get _quantityHint =>
       _type == 'DIVIDEND' ? '0 = importo totale nel prezzo' : 'Es. 50';
 
   String get _priceLabel =>
-      _type == 'DIVIDEND' ? 'Importo Totale Dividendo' : 'Prezzo Unitario';
+      _type == 'DIVIDEND' ? 'Importo totale dividendo' : 'Prezzo unitario';
 
   String get _priceHint => _type == 'DIVIDEND' ? 'Es. 120.00' : 'Es. 18.50';
 
@@ -588,178 +604,9 @@ class _TransactionDialogState extends ConsumerState<_TransactionDialog> {
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    return AlertDialog(
-      title: const Text('Registra Transazione (Trade Ledger)'),
-      content: SizedBox(
-        width: 480,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              const _FieldLabel('Tipo Operazione'),
-              const SizedBox(height: AppSpacing.s6),
-              DropdownButtonFormField<String>(
-                initialValue: _type,
-                isExpanded: true,
-                items: const <DropdownMenuItem<String>>[
-                  DropdownMenuItem<String>(
-                    value: 'BUY',
-                    child: Text(
-                      '🟢 Acquisto (BUY) - Incrementa o apre posizione',
-                    ),
-                  ),
-                  DropdownMenuItem<String>(
-                    value: 'SELL',
-                    child: Text(
-                      '🔴 Vendita (SELL) - Decrementa e calcola P&L realizzato',
-                    ),
-                  ),
-                  DropdownMenuItem<String>(
-                    value: 'DIVIDEND',
-                    child: Text('💰 Accredito Dividendo (DIVIDEND)'),
-                  ),
-                ],
-                onChanged: _saving
-                    ? null
-                    : (String? value) => setState(() => _type = value ?? 'BUY'),
-              ),
-              const SizedBox(height: AppSpacing.s14),
-              const _FieldLabel('Ticker Simbolo'),
-              const SizedBox(height: AppSpacing.s6),
-              TextField(
-                controller: _ticker,
-                enabled: !_saving,
-                textCapitalization: TextCapitalization.characters,
-                onChanged: _onTickerChanged,
-                decoration: const InputDecoration(
-                  hintText: 'Es. ENEL.MI, AAPL, MSFT...',
-                ),
-              ),
-              if (_suggestions.isNotEmpty) ...<Widget>[
-                const SizedBox(height: AppSpacing.s4),
-                _AutocompleteDropdown(
-                  suggestions: _suggestions,
-                  onSelected: _selectTicker,
-                ),
-              ],
-              const SizedBox(height: AppSpacing.s14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        _FieldLabel(_quantityLabel),
-                        const SizedBox(height: AppSpacing.s6),
-                        StepperInput(
-                          controller: _quantity,
-                          enabled: !_saving,
-                          min: 0,
-                          step: 1,
-                          expand: true,
-                          hint: _quantityHint,
-                          semanticsLabel: 'Quantità',
-                          increaseLabel: 'Aumenta quantità',
-                          decreaseLabel: 'Diminuisci quantità',
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.s12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        _FieldLabel(_priceLabel),
-                        const SizedBox(height: AppSpacing.s6),
-                        StepperInput(
-                          controller: _price,
-                          enabled: !_saving,
-                          min: 0,
-                          step: 0.5,
-                          expand: true,
-                          hint: _priceHint,
-                          semanticsLabel: 'Prezzo',
-                          increaseLabel: 'Aumenta prezzo',
-                          decreaseLabel: 'Diminuisci prezzo',
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.s14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        const _FieldLabel('Commissione (€)'),
-                        const SizedBox(height: AppSpacing.s6),
-                        TextField(
-                          controller: _fee,
-                          enabled: !_saving,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          decoration: const InputDecoration(
-                            hintText: 'Es. 2.95',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.s12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        const _FieldLabel('Data Operazione'),
-                        const SizedBox(height: AppSpacing.s6),
-                        TextField(
-                          controller: _date,
-                          readOnly: true,
-                          enabled: !_saving,
-                          onTap: _pickDate,
-                          decoration: const InputDecoration(
-                            hintText: 'gg/mm/aaaa',
-                            suffixIcon: Icon(Icons.calendar_today, size: 16),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.s14),
-              const _FieldLabel('Note Operazione'),
-              const SizedBox(height: AppSpacing.s6),
-              TextField(
-                controller: _notes,
-                enabled: !_saving,
-                decoration: const InputDecoration(
-                  hintText: 'Es. Primo ingresso, target raggiunto...',
-                ),
-              ),
-              if (_error != null) ...<Widget>[
-                const SizedBox(height: AppSpacing.s12),
-                Text(
-                  _error!,
-                  style: AppText.caption(context).copyWith(color: t.danger),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ),
+    return PortfolioModalShell(
+      title: 'Registra transazione',
+      onClose: _saving ? null : () => Navigator.of(context).pop(false),
       actions: <Widget>[
         AppButton(
           label: 'Annulla',
@@ -767,12 +614,171 @@ class _TransactionDialogState extends ConsumerState<_TransactionDialog> {
           onPressed: _saving ? null : () => Navigator.of(context).pop(false),
         ),
         AppButton(
-          label: 'Registra Transazione',
+          label: 'Registra transazione',
           loading: _saving,
           loadingLabel: 'Registrazione...',
           onPressed: _saving ? null : _submit,
         ),
       ],
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const _FieldLabel('Tipo operazione'),
+          const SizedBox(height: AppSpacing.s6),
+          DropdownButtonFormField<String>(
+            initialValue: _type,
+            isExpanded: true,
+            items: const <DropdownMenuItem<String>>[
+              DropdownMenuItem<String>(
+                value: 'BUY',
+                child: Text('Acquisto (BUY) — apre o incrementa la posizione'),
+              ),
+              DropdownMenuItem<String>(
+                value: 'SELL',
+                child: Text('Vendita (SELL) — chiude e calcola il P&L'),
+              ),
+              DropdownMenuItem<String>(
+                value: 'DIVIDEND',
+                child: Text('Dividendo (DIVIDEND) — accredito incassato'),
+              ),
+            ],
+            onChanged: _saving
+                ? null
+                : (String? value) => setState(() => _type = value ?? 'BUY'),
+          ),
+          const SizedBox(height: AppSpacing.s14),
+          const _FieldLabel('Ticker simbolo'),
+          const SizedBox(height: AppSpacing.s6),
+          TextField(
+            controller: _ticker,
+            enabled: !_saving,
+            textCapitalization: TextCapitalization.characters,
+            onChanged: _onTickerChanged,
+            decoration: const InputDecoration(
+              hintText: 'Es. ENEL.MI, AAPL, MSFT...',
+            ),
+          ),
+          if (_suggestions.isNotEmpty) ...<Widget>[
+            const SizedBox(height: AppSpacing.s4),
+            _AutocompleteDropdown(
+              suggestions: _suggestions,
+              onSelected: _selectTicker,
+            ),
+          ],
+          const SizedBox(height: AppSpacing.s14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _FieldLabel(_quantityLabel),
+                    const SizedBox(height: AppSpacing.s6),
+                    StepperInput(
+                      controller: _quantity,
+                      enabled: !_saving,
+                      min: 0,
+                      step: 1,
+                      expand: true,
+                      hint: _quantityHint,
+                      semanticsLabel: 'Quantità',
+                      increaseLabel: 'Aumenta quantità',
+                      decreaseLabel: 'Diminuisci quantità',
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _FieldLabel(_priceLabel),
+                    const SizedBox(height: AppSpacing.s6),
+                    StepperInput(
+                      controller: _price,
+                      enabled: !_saving,
+                      min: 0,
+                      step: 0.5,
+                      expand: true,
+                      hint: _priceHint,
+                      semanticsLabel: 'Prezzo',
+                      increaseLabel: 'Aumenta prezzo',
+                      decreaseLabel: 'Diminuisci prezzo',
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const _FieldLabel('Commissione (€)'),
+                    const SizedBox(height: AppSpacing.s6),
+                    TextField(
+                      controller: _fee,
+                      enabled: !_saving,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(hintText: 'Es. 2.95'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const _FieldLabel('Data operazione'),
+                    const SizedBox(height: AppSpacing.s6),
+                    TextField(
+                      controller: _date,
+                      readOnly: true,
+                      enabled: !_saving,
+                      onTap: _pickDate,
+                      decoration: const InputDecoration(
+                        hintText: 'gg/mm/aaaa',
+                        suffixIcon: Icon(Icons.calendar_today, size: 16),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s14),
+          const _FieldLabel('Note operazione'),
+          const SizedBox(height: AppSpacing.s6),
+          TextField(
+            controller: _notes,
+            enabled: !_saving,
+            decoration: const InputDecoration(
+              hintText: 'Es. Primo ingresso, target raggiunto...',
+            ),
+          ),
+          if (_error != null) ...<Widget>[
+            const SizedBox(height: AppSpacing.s12),
+            Text(
+              _error!,
+              style: AppText.caption(context).copyWith(color: t.danger),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -828,26 +834,29 @@ class _AutocompleteDropdown extends StatelessWidget {
                 horizontal: AppSpacing.s12,
                 vertical: AppSpacing.s10,
               ),
-              child: Text.rich(
-                TextSpan(
-                  children: <InlineSpan>[
-                    TextSpan(
-                      text: item.ticker,
-                      style: AppText.mono(
-                        context,
-                        size: 13,
-                        weight: FontWeight.w700,
-                        color: t.primary,
-                      ),
+              child: Row(
+                children: <Widget>[
+                  AppMarketTag.forTicker(item.ticker),
+                  const SizedBox(width: AppSpacing.s8),
+                  Text(
+                    item.ticker,
+                    style: AppText.mono(
+                      context,
+                      size: 13,
+                      weight: FontWeight.w700,
+                      color: t.primary,
                     ),
-                    TextSpan(
-                      text: ' — ${item.name}',
+                  ),
+                  const SizedBox(width: AppSpacing.s8),
+                  Expanded(
+                    child: Text(
+                      item.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: AppText.caption(context),
                     ),
-                  ],
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
           );
@@ -859,43 +868,3 @@ class _AutocompleteDropdown extends StatelessWidget {
 
 String _truncate(String value, int max) =>
     value.length <= max ? value : '${value.substring(0, max)}...';
-
-Widget _headerCell(
-  BuildContext context,
-  String label, {
-  Alignment alignment = Alignment.centerLeft,
-}) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: AppSpacing.s10,
-      vertical: AppSpacing.s8,
-    ),
-    child: Text(
-      label.toUpperCase(),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      textAlign: _textAlignFor(alignment),
-      style: AppText.tableHeader(context),
-    ),
-  );
-}
-
-Widget _bodyCell(
-  BuildContext context, {
-  required Widget child,
-  Alignment alignment = Alignment.centerLeft,
-}) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: AppSpacing.s10,
-      vertical: AppSpacing.s8,
-    ),
-    child: Align(alignment: alignment, child: child),
-  );
-}
-
-TextAlign _textAlignFor(Alignment alignment) {
-  if (alignment == Alignment.centerRight) return TextAlign.right;
-  if (alignment == Alignment.center) return TextAlign.center;
-  return TextAlign.left;
-}

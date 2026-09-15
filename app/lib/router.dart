@@ -10,6 +10,11 @@ import 'features/portfolio/portfolio_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/watchlist/watchlist_screen.dart';
 import 'shell/app_shell.dart';
+import 'theme/app_theme.dart';
+import 'theme/tokens.dart';
+import 'widgets/app_button.dart';
+import 'widgets/empty_state.dart';
+import 'widgets/skeleton.dart';
 
 /// Router dell'app (hash URL strategy di default: nessun `usePathUrlStrategy`).
 ///
@@ -88,27 +93,40 @@ class _AuthRefreshNotifier extends ChangeNotifier {
   }
 }
 
-/// Schermata di attesa durante il bootstrap della sessione.
+/// Schermata di attesa durante il bootstrap della sessione: marchio in
+/// tassello inchiostro su fondo pagina, nome in maiuscolo tracciato e spinner.
 class _SplashScreen extends StatelessWidget {
   const _SplashScreen();
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final AppTokens t = context.tokens;
     return Scaffold(
+      backgroundColor: t.bg,
       body: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.show_chart, size: 56, color: theme.colorScheme.primary),
-            const SizedBox(height: 12),
-            Text('Stock Monitor', style: theme.textTheme.titleLarge),
-            const SizedBox(height: 24),
-            const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2.5),
+          children: <Widget>[
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: t.surfaceInverse,
+                borderRadius: BorderRadius.circular(AppRadii.panel),
+              ),
+              child: Icon(
+                Icons.candlestick_chart,
+                size: 25,
+                color: t.textInverse,
+              ),
             ),
+            const SizedBox(height: AppSpacing.s14),
+            Text(
+              'STOCK MONITOR',
+              style: AppText.appTitle(context).copyWith(letterSpacing: 1.2),
+            ),
+            const SizedBox(height: AppSpacing.s24),
+            const AppSpinner(size: 22),
           ],
         ),
       ),
@@ -122,18 +140,27 @@ class _RouterErrorScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
     return Scaffold(
+      backgroundColor: t.bg,
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Pagina non trovata.'),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: () => context.go('/dashboard'),
-              child: const Text('Torna alla dashboard'),
-            ),
-          ],
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 420),
+          child: EmptyState(
+            icon: const Icon(Icons.explore_off_outlined),
+            title: 'Pagina non trovata.',
+            message:
+                'Il link che hai aperto non esiste o è stato spostato. '
+                'Torna alla dashboard per riprendere.',
+            actions: <Widget>[
+              AppButton(
+                label: 'Torna alla dashboard',
+                variant: AppButtonVariant.ghost,
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => context.go('/dashboard'),
+              ),
+            ],
+          ),
         ),
       ),
     );

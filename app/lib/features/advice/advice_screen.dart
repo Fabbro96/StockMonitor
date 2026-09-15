@@ -12,7 +12,10 @@ import '../../shell/topbar.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/app_callout.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_market_tag.dart';
+import '../../widgets/app_segmented.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/page_content.dart';
@@ -25,14 +28,36 @@ import 'advice_card.dart';
 import 'advice_dialogs.dart';
 import 'advice_providers.dart';
 
-/// Schermata `🧠 Analisi & Consigli IA` (parità `advice.html`/`advice.js`).
+/// Sezioni della pagina `Analisi` (nav interna ad ancore).
 ///
-/// Struttura: analisi istantanea su singolo titolo, riassunto globale del
-/// mercato, legenda, filtri (giorno/mercato/azione + ricerca client-side),
-/// lista consigli con tabella priorità e follow, paginazione `Carica Altri`.
-/// La topbar porta pallini di stato mercati e `Genera Analisi Macro Ora`.
+/// L'ordine riflette quello dei blocchi nella pagina: prima l'analisi
+/// istantanea sul singolo titolo, poi la sezione macro (riassunto, guida,
+/// filtri, archivio).
+enum _AdviceView {
+  /// Analisi istantanea su singolo titolo (input + report).
+  singolo(label: 'Singolo titolo', icon: Icons.manage_search),
+
+  /// Archivio macro: riassunto, guida, filtri e consigli raggruppati.
+  macro(label: 'Macro', icon: Icons.public);
+
+  const _AdviceView({required this.label, required this.icon});
+
+  /// Etichetta del segmento.
+  final String label;
+
+  /// Icona Material del segmento.
+  final IconData icon;
+}
+
+/// Schermata `Analisi & Consigli IA` (parità `advice.html`/`advice.js`).
+///
+/// Struttura: nav a segmenti (singolo titolo / macro) con azione di
+/// generazione, analisi istantanea su singolo titolo, riassunto globale del
+/// mercato, guida, filtri (giorno/mercato/azione + ricerca client-side),
+/// archivio dei consigli raggruppato per data e paginazione `Carica Altri`.
+/// La topbar porta i pallini di stato mercati.
 class AdviceScreen extends ConsumerStatefulWidget {
-  /// Crea la schermata Consigli.
+  /// Crea la schermata Analisi.
   const AdviceScreen({super.key});
 
   @override
@@ -52,6 +77,14 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
   bool _hasSearchText = false;
   final Set<int> _followBusy = <int>{};
 
+  /// Sezione evidenziata nella nav: segue lo scroll (spy sulle ancore).
+  _AdviceView _activeView = _AdviceView.singolo;
+
+  /// Ancore di scroll delle due sezioni.
+  final Map<_AdviceView, GlobalKey> _viewKeys = <_AdviceView, GlobalKey>{
+    for (final _AdviceView view in _AdviceView.values) view: GlobalKey(),
+  };
+
   @override
   void initState() {
     super.initState();
@@ -69,6 +102,51 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     _searchController.dispose();
     _topbar.clear(this);
     super.dispose();
+  }
+
+  // --- Navigazione interna -------------------------------------------------
+
+  /// Scorre all'ancora della sezione [view] ed evidenzia il segmento.
+  void _jumpTo(_AdviceView view) {
+    setState(() => _activeView = view);
+    final BuildContext? anchor = _viewKeys[view]?.currentContext;
+    if (anchor == null) return;
+    Scrollable.ensureVisible(
+      anchor,
+      alignment: 0,
+      duration: AppMotion.effective(context, AppMotion.medium),
+      curve: AppMotion.ease,
+    );
+  }
+
+  /// Evidenzia la sezione con l'area visibile maggiore nel viewport
+  /// ("table of contents" scroll-spy).
+  bool _onScroll(ScrollNotification notification) {
+    final RenderObject? viewport = notification.context?.findRenderObject();
+    if (viewport is! RenderBox) return false;
+    final double viewportTop = viewport.localToGlobal(Offset.zero).dy;
+    final double viewportBottom = viewportTop + viewport.size.height;
+    _AdviceView? current;
+    double best = 0;
+    for (final _AdviceView view in _AdviceView.values) {
+      final RenderObject? anchor = _viewKeys[view]?.currentContext
+          ?.findRenderObject();
+      if (anchor is! RenderBox) continue;
+      final double top = anchor.localToGlobal(Offset.zero).dy;
+      final double bottom = top + anchor.size.height;
+      final double visible =
+          (bottom < viewportBottom ? bottom : viewportBottom) -
+          (top > viewportTop ? top : viewportTop);
+      if (visible > best) {
+        best = visible;
+        current = view;
+      }
+    }
+    if (current != null && current != _activeView && mounted) {
+      final _AdviceView next = current;
+      setState(() => _activeView = next);
+    }
+    return false;
   }
 
   // --- Azioni -------------------------------------------------------------
@@ -255,49 +333,132 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     final bool firstError = listAsync.hasError && listState == null;
     final bool refreshing = listAsync.isLoading && listState != null;
 
-    return PageContent(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          // Azione primaria in alto a destra (il legacy la teneva in topbar;
-          // qui resta nel contenuto per non comprimere la topbar condivisa).
-          const Align(
-            alignment: Alignment.centerRight,
-            child: _AdviceGenerateButton(),
-          ),
-          const SizedBox(height: AppSpacing.s14),
-          _buildSingleStockCard(),
-          const SizedBox(height: AppSpacing.s14),
-          _buildMarketSummaryCard(filters, latestAsync),
-          const SizedBox(height: AppSpacing.s14),
-          _buildLegendCard(),
-          const SizedBox(height: AppSpacing.s14),
-          _buildFiltersCard(filters),
-          const SizedBox(height: AppSpacing.s14),
-          AppLoaderOverlay(
-            loading: generating || refreshing,
-            borderRadius: BorderRadius.circular(AppRadii.card),
-            child: _buildListSection(
-              listAsync,
-              filtered,
-              firstLoading,
-              firstError,
-            ),
-          ),
-          if (listState?.hasMore ?? false) ...<Widget>[
-            const SizedBox(height: AppSpacing.s18),
-            Center(
-              child: AppButton(
-                label: 'Carica Altri',
-                variant: AppButtonVariant.ghost,
-                loading: listState?.loadingMore ?? false,
-                loadingLabel: 'Caricamento...',
-                onPressed: _loadMore,
+    return Column(
+      children: <Widget>[
+        _buildViewNav(),
+        Expanded(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: _onScroll,
+            child: PageContent(
+              padding: _bodyPadding(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  KeyedSubtree(
+                    key: _viewKeys[_AdviceView.singolo],
+                    child: _buildSingleStockCard(),
+                  ),
+                  const SizedBox(height: AppSpacing.s18),
+                  Column(
+                    key: _viewKeys[_AdviceView.macro],
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      _buildMarketSummaryCard(filters, latestAsync),
+                      const SizedBox(height: AppSpacing.s14),
+                      _buildLegendCard(),
+                      const SizedBox(height: AppSpacing.s14),
+                      _buildFiltersCard(filters),
+                      const SizedBox(height: AppSpacing.s14),
+                      AppLoaderOverlay(
+                        loading: generating || refreshing,
+                        borderRadius: BorderRadius.circular(AppRadii.card),
+                        child: _buildListSection(
+                          listAsync,
+                          filtered,
+                          firstLoading,
+                          firstError,
+                        ),
+                      ),
+                      if (listState?.hasMore ?? false) ...<Widget>[
+                        const SizedBox(height: AppSpacing.s18),
+                        Center(
+                          child: AppButton(
+                            label: 'Carica Altri',
+                            variant: AppButtonVariant.ghost,
+                            loading: listState?.loadingMore ?? false,
+                            loadingLabel: 'Caricamento...',
+                            onPressed: _loadMore,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
               ),
             ),
-          ],
-        ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Nav interna pinnata: segmenti (singolo / macro) e generazione macro.
+  Widget _buildViewNav() {
+    final double pagePadding = AppSpacing.pagePadding(context.windowWidth);
+    final bool compact = context.isCompact;
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: AppTokens.contentMaxWidth),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            pagePadding,
+            pagePadding,
+            pagePadding,
+            AppSpacing.s12,
+          ),
+          child: LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              final Widget segmented = AppSegmented<_AdviceView>(
+                segments: <AppSegment<_AdviceView>>[
+                  for (final _AdviceView view in _AdviceView.values)
+                    AppSegment<_AdviceView>(
+                      value: view,
+                      label: view.label,
+                      icon: view.icon,
+                      tooltip: view == _AdviceView.singolo
+                          ? 'Analisi istantanea su singolo titolo'
+                          : 'Archivio macro e riassunto di mercato',
+                    ),
+                ],
+                selected: _activeView,
+                dense: compact,
+                expand: compact,
+                semanticsLabel: 'Sezioni analisi',
+                onSelected: _jumpTo,
+              );
+              final Widget generate = const _AdviceGenerateButton();
+              if (constraints.maxWidth < AppBreakpoints.compact) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    segmented,
+                    const SizedBox(height: AppSpacing.s10),
+                    generate,
+                  ],
+                );
+              }
+              return Row(
+                children: <Widget>[
+                  segmented,
+                  const Spacer(),
+                  generate,
+                ],
+              );
+            },
+          ),
+        ),
       ),
+    );
+  }
+
+  EdgeInsets _bodyPadding() {
+    final double pagePadding = AppSpacing.pagePadding(context.windowWidth);
+    return EdgeInsets.fromLTRB(
+      pagePadding,
+      0,
+      pagePadding,
+      context.isCompact ? 28 : pagePadding,
     );
   }
 
@@ -310,8 +471,13 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           const SectionHeader(
-            title: '⚡ Analisi Istantanea su Singolo Titolo (Gemini 3.7 Flash)',
-            subtitle: "Interroga l'IA per un report approfondito con Target Price, RSI, SMA e catalizzatori",
+            variant: SectionHeaderVariant.rule,
+            overline: 'Analisi',
+            icon: Icons.bolt_outlined,
+            title: 'Analisi istantanea su singolo titolo',
+            subtitle:
+                'Report approfondito con Gemini 3.8 Flash: target price, '
+                'stop loss, RSI, SMA e catalizzatori.',
           ),
           _buildTickerInput(),
           if (_analyzing) ...<Widget>[
@@ -320,16 +486,12 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
               child: Center(child: AppSpinner()),
             ),
           ] else if (_analysisError != null) ...<Widget>[
-            AdviceCallout(
-              background: context.tokens.dangerBg,
-              borderColor: context.tokens.dangerBorder,
-              accent: context.tokens.danger,
-              child: Text(
-                'Errore analisi: $_analysisError',
-                textAlign: TextAlign.center,
-                style: AppText.small(context)
-                    .copyWith(color: context.tokens.danger),
-              ),
+            AppCallout(
+              tone: AppCalloutTone.danger,
+              accent: true,
+              icon: const Icon(Icons.error_outline),
+              body: 'Errore analisi: $_analysisError',
+              liveRegion: true,
             ),
           ] else if (_analysis != null) ...<Widget>[
             _buildSingleResult(_analysis!),
@@ -352,7 +514,8 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
       ),
     );
     final Widget button = AppButton(
-      label: 'Analizza Titolo con IA ➔',
+      label: 'Analizza titolo con IA',
+      icon: const Icon(Icons.auto_awesome),
       loading: _analyzing,
       loadingLabel: 'Analisi in corso...',
       onPressed: _analyzing ? null : _analyzeTicker,
@@ -418,14 +581,16 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     final Widget metrics = LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final Widget target = _metricBox(
-          label: '🎯 Target Price Stimato',
+          icon: Icons.track_changes,
+          label: 'Target price stimato',
           value: formatCurrency(analysis.targetPrice, currency: currency),
           valueColor: t.primary,
           trailing: upside == null ? null : '(${formatPercent(upside)})',
           trailingColor: (upside ?? 0) >= 0 ? t.successText : t.danger,
         );
         final Widget stop = _metricBox(
-          label: '🛡️ Stop Loss Prudenziale',
+          icon: Icons.shield_outlined,
+          label: 'Stop loss prudenziale',
           value: (analysis.stopLoss ?? 0) > 0
               ? formatCurrency(analysis.stopLoss, currency: currency)
               : '--',
@@ -459,12 +624,14 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     final Widget bullBear = LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         final Widget bull = _bulletCallout(
-          title: '🟢 Bull Case & Catalizzatori',
+          icon: Icons.trending_up,
+          title: 'Bull case & catalizzatori',
           text: analysis.bullCase,
           success: true,
         );
         final Widget bear = _bulletCallout(
-          title: '🔴 Bear Case & Rischi',
+          icon: Icons.trending_down,
+          title: 'Bear case & rischi',
           text: analysis.bearCase,
           success: false,
         );
@@ -493,8 +660,9 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
 
     return Padding(
       padding: const EdgeInsets.only(top: AppSpacing.s14),
-      child: AdviceCallout(
-        accent: t.primary,
+      child: AppCallout(
+        accent: true,
+        accentColor: t.primary,
         accentWidth: 3,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -513,6 +681,7 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
                     color: t.primary,
                   ),
                 ),
+                AppMarketTag.forTicker(analysis.ticker),
                 if (analysis.name.trim().isNotEmpty)
                   Text(
                     analysis.name.trim(),
@@ -552,26 +721,39 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
                 spacing: AppSpacing.s10,
                 runSpacing: AppSpacing.s8,
                 children: <Widget>[
-                  Text.rich(
-                    TextSpan(
-                      style: AppText.caption(context)
-                          .copyWith(color: t.textSecondary),
-                      children: <InlineSpan>[
-                        const TextSpan(text: '💡 '),
-                        const TextSpan(
-                          text: 'Strategia: ',
-                          style: TextStyle(fontWeight: FontWeight.w700),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Icon(
+                        Icons.lightbulb_outline,
+                        size: AppSizes.iconSm,
+                        color: t.textMuted,
+                      ),
+                      const SizedBox(width: AppSpacing.s6),
+                      Flexible(
+                        child: Text.rich(
+                          TextSpan(
+                            style: AppText.caption(context)
+                                .copyWith(color: t.textSecondary),
+                            children: <InlineSpan>[
+                              const TextSpan(
+                                text: 'Strategia: ',
+                                style: TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              TextSpan(
+                                text: (strategy == null || strategy.isEmpty)
+                                    ? '--'
+                                    : strategy,
+                              ),
+                            ],
+                          ),
                         ),
-                        TextSpan(
-                          text: (strategy == null || strategy.isEmpty)
-                              ? '--'
-                              : strategy,
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                   AppButton(
-                    label: 'Apri Scheda Completa ➔',
+                    label: 'Apri scheda completa',
+                    icon: const Icon(Icons.arrow_outward),
                     variant: AppButtonVariant.ghost,
                     size: AppButtonSize.sm,
                     onPressed: () => _openStock(analysis.ticker),
@@ -586,6 +768,7 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
   }
 
   Widget _metricBox({
+    required IconData icon,
     required String label,
     required String value,
     required Color valueColor,
@@ -593,13 +776,19 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     Color? trailingColor,
   }) {
     final AppTokens t = context.tokens;
-    return AdviceCallout(
+    return AppCallout(
       padding: const EdgeInsets.all(AppSpacing.s10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(label, style: AppText.caption(context)),
-          const SizedBox(height: AppSpacing.s2),
+          Row(
+            children: <Widget>[
+              Icon(icon, size: AppSizes.iconXs, color: t.textMuted),
+              const SizedBox(width: AppSpacing.s6),
+              Expanded(child: Text(label, style: AppText.caption(context))),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s4),
           Text.rich(
             TextSpan(
               children: <InlineSpan>[
@@ -629,34 +818,19 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
   }
 
   Widget _bulletCallout({
+    required IconData icon,
     required String title,
     required String? text,
     required bool success,
   }) {
-    final AppTokens t = context.tokens;
     final String body = (text ?? '').trim().isEmpty ? '--' : text!.trim();
-    return AdviceCallout(
-      background: success ? t.successBg : t.dangerBg,
-      borderColor: success ? t.successBorder : t.dangerBorder,
-      accent: success ? t.success : t.danger,
+    return AppCallout(
+      tone: success ? AppCalloutTone.success : AppCalloutTone.danger,
+      accent: true,
+      icon: Icon(icon),
+      title: title,
+      body: body,
       padding: const EdgeInsets.all(AppSpacing.s10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Text(
-            title,
-            style: AppText.small(context).copyWith(
-              color: success ? t.successText : t.danger,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: AppSpacing.s4),
-          Text(
-            body,
-            style: AppText.captionFor(t).copyWith(color: t.textSecondary),
-          ),
-        ],
-      ),
     );
   }
 
@@ -670,9 +844,11 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          SectionHeader(
-            title: '🌐 Riassunto Globale del Mercato',
-            subtitle: 'Ultimi 7 Giorni • Gemini 3.7 Flash',
+          const SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            overline: 'Sintesi',
+            title: 'Riassunto globale del mercato',
+            subtitle: 'Ultimi 7 giorni • Gemini 3.8 Flash',
           ),
           Text(
             _marketSummaryText(filters, latestAsync),
@@ -718,40 +894,35 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
   Widget _buildLegendCard() {
     final List<_LegendItem> items = <_LegendItem>[
       const _LegendItem(
-        title: '🎯 Target Price',
-        body: "Prezzo obiettivo stimato per il titolo in base all'analisi fondamentale e tecnica recente.",
+        icon: Icons.track_changes,
+        title: 'Target price',
+        body: "Prezzo obiettivo stimato per il titolo in base all'analisi "
+            'fondamentale e tecnica recente.',
       ),
       const _LegendItem(
-        title: '🛡️ Livello di Confidenza',
-        body: "Grado di affidabilità del segnale (Bassa / Media / Alta) calcolato dall'IA.",
+        icon: Icons.shield_outlined,
+        title: 'Livello di confidenza',
+        body: "Grado di affidabilità del segnale (Bassa / Media / Alta) "
+            "calcolato dall'IA.",
       ),
       const _LegendItem(
-        title: '⏳ Timeframe (Orizzonte)',
-        body:
-            'Orizzonte temporale della strategia: Breve Termine (giorni) o '
+        icon: Icons.schedule,
+        title: 'Timeframe (orizzonte)',
+        body: 'Orizzonte temporale della strategia: Breve Termine (giorni) o '
             'Medio/Lungo Termine (settimane/mesi).',
       ),
     ];
 
     return AppCard(
-      accent: true,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              const Text('💡', style: TextStyle(fontSize: 15.2)),
-              const SizedBox(width: AppSpacing.s8),
-              Expanded(
-                child: Text(
-                  'Come interpretare le analisi macro',
-                  style: AppText.small(context)
-                      .copyWith(fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
+          const SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            overline: 'Guida',
+            title: 'Come interpretare le analisi',
+            subtitle: 'Le metriche dei report macro spiegate in breve',
           ),
-          const SizedBox(height: AppSpacing.s10),
           LayoutBuilder(
             builder: (BuildContext context, BoxConstraints constraints) {
               final bool threeColumns = constraints.maxWidth >= 720;
@@ -781,10 +952,18 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Text(
-          item.title,
-          style: AppText.small(context)
-              .copyWith(color: t.primary, fontWeight: FontWeight.w700),
+        Row(
+          children: <Widget>[
+            Icon(item.icon, size: AppSizes.iconSm, color: t.primary),
+            const SizedBox(width: AppSpacing.s6),
+            Expanded(
+              child: Text(
+                item.title,
+                style: AppText.formLabel(context)
+                    .copyWith(color: t.primary, fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: AppSpacing.s4),
         Text(
@@ -798,13 +977,13 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
   // --- Filtri --------------------------------------------------------------
 
   Widget _buildFiltersCard(AdviceFilters filters) {
-    final AppTokens t = context.tokens;
     final bool isToday = filters.date == _today;
     final bool isYesterday = filters.date == _yesterday;
     final bool isCustom = filters.date.isNotEmpty && !isToday && !isYesterday;
 
     final Widget dayFilter = _filterField(
-      '📅 Filtra per Giorno',
+      Icons.calendar_month_outlined,
+      'Filtra per giorno',
       Wrap(
         spacing: AppSpacing.s8,
         runSpacing: AppSpacing.s8,
@@ -822,9 +1001,8 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
                 ref.read(adviceFiltersProvider.notifier).setDate(_yesterday),
           ),
           AppPill(
-            label: isCustom
-                ? '📅 ${_displayDate(filters.date)}'
-                : 'Scegli giorno 📅',
+            label: isCustom ? _displayDate(filters.date) : 'Scegli giorno',
+            icon: const Icon(Icons.calendar_month_outlined),
             selected: isCustom,
             onPressed: _pickDate,
           ),
@@ -833,20 +1011,35 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     );
 
     final Widget marketFilter = _filterField(
-      '🏛️ Mercato',
+      Icons.public,
+      'Mercato',
       DropdownButtonFormField<String>(
         key: ValueKey<String>('advice-market-${filters.market}'),
         initialValue: filters.market,
         isExpanded: true,
         items: const <DropdownMenuItem<String>>[
-          DropdownMenuItem<String>(value: '', child: Text('Tutti i Mercati')),
+          DropdownMenuItem<String>(value: '', child: Text('Tutti i mercati')),
           DropdownMenuItem<String>(
             value: 'IT',
-            child: Text('🇮🇹 Borsa Italiana'),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                AppMarketTag(code: 'IT', tone: BadgeTone.primary),
+                SizedBox(width: AppSpacing.s6),
+                Flexible(child: Text('Borsa Italiana')),
+              ],
+            ),
           ),
           DropdownMenuItem<String>(
             value: 'US',
-            child: Text('🇺🇸 Borsa Americana'),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                AppMarketTag(code: 'US'),
+                SizedBox(width: AppSpacing.s6),
+                Flexible(child: Text('Borsa Americana')),
+              ],
+            ),
           ),
         ],
         onChanged: (String? value) =>
@@ -855,13 +1048,14 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     );
 
     final Widget actionFilter = _filterField(
-      '🎯 Azione Generale',
+      Icons.track_changes,
+      'Azione generale',
       DropdownButtonFormField<String>(
         key: ValueKey<String>('advice-action-${filters.action}'),
         initialValue: filters.action,
         isExpanded: true,
         items: const <DropdownMenuItem<String>>[
-          DropdownMenuItem<String>(value: '', child: Text('Tutte le Azioni')),
+          DropdownMenuItem<String>(value: '', child: Text('Tutte le azioni')),
           DropdownMenuItem<String>(
             value: 'ACCUMULO',
             child: Text('Accumulo / Buy'),
@@ -872,7 +1066,7 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
           ),
           DropdownMenuItem<String>(
             value: 'PRESA_PROFITTO',
-            child: Text('Presa Profitto / Sell'),
+            child: Text('Presa profitto / Sell'),
           ),
         ],
         onChanged: (String? value) =>
@@ -881,7 +1075,8 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     );
 
     final Widget searchFilter = _filterField(
-      '🔎 Cerca Ticker nei Blocchi',
+      Icons.search,
+      'Cerca ticker nei blocchi',
       TextField(
         controller: _searchController,
         onChanged: _onSearchChanged,
@@ -901,71 +1096,84 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
       ),
     );
 
+    final Widget resetButton = AppButton(
+      label: 'Mostra tutta la settimana',
+      icon: const Icon(Icons.restart_alt),
+      variant: AppButtonVariant.ghost,
+      size: AppButtonSize.sm,
+      onPressed: _resetFilters,
+    );
+
     return AppCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            spacing: AppSpacing.s10,
-            runSpacing: AppSpacing.s8,
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // Sotto 560px il bottone di reset non sta accanto al titolo: scende
+          // a piè di card, a larghezza piena.
+          final bool headerTrailing = constraints.maxWidth >= 560;
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
-              Text(
-                '🔍 Filtra Analisi di Mercato',
-                style: AppText.small(context)
-                    .copyWith(color: t.primary, fontWeight: FontWeight.w700),
+              SectionHeader(
+                variant: SectionHeaderVariant.rule,
+                overline: 'Archivio',
+                title: 'Filtra le analisi',
+                subtitle: 'Giorno, mercato, azione e ricerca testuale',
+                trailing: headerTrailing ? resetButton : null,
               ),
-              AppButton(
-                label: '↺ Mostra Tutta la Settimana',
-                variant: AppButtonVariant.ghost,
-                size: AppButtonSize.sm,
-                onPressed: _resetFilters,
+              LayoutBuilder(
+                builder: (BuildContext context, BoxConstraints constraints) {
+                  if (constraints.maxWidth < 820) {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        dayFilter,
+                        const SizedBox(height: AppSpacing.s12),
+                        marketFilter,
+                        const SizedBox(height: AppSpacing.s12),
+                        actionFilter,
+                        const SizedBox(height: AppSpacing.s12),
+                        searchFilter,
+                      ],
+                    );
+                  }
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: <Widget>[
+                      Flexible(child: dayFilter),
+                      const SizedBox(width: AppSpacing.s16),
+                      SizedBox(width: 200, child: marketFilter),
+                      const SizedBox(width: AppSpacing.s16),
+                      SizedBox(width: 220, child: actionFilter),
+                      const SizedBox(width: AppSpacing.s16),
+                      Expanded(child: searchFilter),
+                    ],
+                  );
+                },
               ),
+              if (!headerTrailing) ...<Widget>[
+                const SizedBox(height: AppSpacing.s14),
+                Align(alignment: Alignment.centerLeft, child: resetButton),
+              ],
             ],
-          ),
-          const SizedBox(height: AppSpacing.s14),
-          LayoutBuilder(
-            builder: (BuildContext context, BoxConstraints constraints) {
-              if (constraints.maxWidth < 820) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    dayFilter,
-                    const SizedBox(height: AppSpacing.s12),
-                    marketFilter,
-                    const SizedBox(height: AppSpacing.s12),
-                    actionFilter,
-                    const SizedBox(height: AppSpacing.s12),
-                    searchFilter,
-                  ],
-                );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: <Widget>[
-                  Flexible(child: dayFilter),
-                  const SizedBox(width: AppSpacing.s16),
-                  SizedBox(width: 200, child: marketFilter),
-                  const SizedBox(width: AppSpacing.s16),
-                  SizedBox(width: 220, child: actionFilter),
-                  const SizedBox(width: AppSpacing.s16),
-                  Expanded(child: searchFilter),
-                ],
-              );
-            },
-          ),
-        ],
+          );
+        },
       ),
     );
   }
 
-  Widget _filterField(String label, Widget child) {
+  Widget _filterField(IconData icon, String label, Widget child) {
+    final AppTokens t = context.tokens;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Text(label, style: AppText.formLabel(context)),
+        Row(
+          children: <Widget>[
+            Icon(icon, size: AppSizes.iconXs, color: t.textFaint),
+            const SizedBox(width: AppSpacing.s6),
+            Expanded(child: Text(label, style: AppText.formLabel(context))),
+          ],
+        ),
         const SizedBox(height: AppSpacing.s6),
         child,
       ],
@@ -994,6 +1202,7 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     if (firstError) {
       return AppCard(
         child: EmptyState(
+          icon: const Icon(Icons.error_outline),
           message: _errorMessage(
             asyncState.error!,
             'Errore nel caricamento dei consigli',
@@ -1001,6 +1210,7 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
           actions: <Widget>[
             AppButton(
               label: 'Riprova',
+              icon: const Icon(Icons.refresh),
               variant: AppButtonVariant.ghost,
               size: AppButtonSize.sm,
               onPressed: () => ref.invalidate(adviceListProvider),
@@ -1012,6 +1222,8 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     if (filtered.isEmpty) {
       return AppCard(
         child: EmptyState(
+          icon: const Icon(Icons.search_off),
+          title: 'Nessun risultato',
           message:
               'Nessuna analisi strategica trovata per i criteri selezionati. '
               'Usa il pulsante "Genera Analisi Macro Ora" o seleziona '
@@ -1021,37 +1233,75 @@ class _AdviceScreenState extends ConsumerState<AdviceScreen> {
     }
 
     final AdviceListState? state = asyncState.value;
+    final List<(String, List<Advice>)> groups = _groupByDay(filtered);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        for (int i = 0; i < filtered.length; i++) ...<Widget>[
-          if (i > 0) const SizedBox(height: AppSpacing.s14),
-          AdviceCard(
-            advice: filtered[i],
-            followed: state?.isFollowed(filtered[i]) ?? filtered[i].followed,
-            followBusy: _followBusy.contains(filtered[i].id),
-            onToggleFollow: () => _toggleFollow(filtered[i]),
-            onOpenStock: _openStock,
+        for (int g = 0; g < groups.length; g++) ...<Widget>[
+          if (g > 0) const SizedBox(height: AppSpacing.s22),
+          SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            overline: 'Archivio',
+            title: groups[g].$1,
+            trailing: AppBadge(
+              label: '${groups[g].$2.length} analisi',
+              tone: BadgeTone.neutral,
+            ),
           ),
+          for (int i = 0; i < groups[g].$2.length; i++) ...<Widget>[
+            if (i > 0) const SizedBox(height: AppSpacing.s14),
+            AdviceCard(
+              advice: groups[g].$2[i],
+              followed:
+                  state?.isFollowed(groups[g].$2[i]) ??
+                  groups[g].$2[i].followed,
+              followBusy: _followBusy.contains(groups[g].$2[i].id),
+              onToggleFollow: () => _toggleFollow(groups[g].$2[i]),
+              onOpenStock: _openStock,
+            ),
+          ],
         ],
       ],
     );
   }
+
+  /// Raggruppa l'archivio per giorno di elaborazione, in ordine di arrivo.
+  List<(String, List<Advice>)> _groupByDay(List<Advice> items) {
+    final Map<String, List<Advice>> grouped = <String, List<Advice>>{};
+    for (final Advice advice in items) {
+      final String key = advice.timestamp == null
+          ? 'Senza data'
+          : formatDate(advice.timestamp);
+      grouped.putIfAbsent(key, () => <Advice>[]).add(advice);
+    }
+    return grouped.entries
+        .map((MapEntry<String, List<Advice>> entry) => (entry.key, entry.value))
+        .toList(growable: false);
+  }
 }
 
-/// Voce della legenda "Come interpretare le analisi macro".
+/// Voce della guida "Come interpretare le analisi".
 class _LegendItem {
-  const _LegendItem({required this.title, required this.body});
+  const _LegendItem({
+    required this.icon,
+    required this.title,
+    required this.body,
+  });
 
+  final IconData icon;
   final String title;
   final String body;
 }
 
 /// Pallini di stato mercati in topbar (riuso del widget dashboard).
 ///
-/// Sotto 1024px forza il layout compatto (pallini + tooltip, senza label):
+/// Sotto 1024px forza il layout compatto (pallini + orari, senza label):
 /// tra 900 e 1024 la topbar con la sidebar aperta è troppo stretta per le
 /// label accanto a ricerca/help/tema.
+///
+/// Nota: [MarketStatusView] sceglie il layout leggendo la larghezza del
+/// MediaQuery, non i vincoli locali; finché il widget vive in un'altra lane
+/// questo wrapper è l'unico punto per forzare la variante compatta.
 class _AdviceMarketStatusAction extends ConsumerWidget {
   const _AdviceMarketStatusAction();
 
@@ -1074,7 +1324,7 @@ class _AdviceMarketStatusAction extends ConsumerWidget {
   }
 }
 
-/// Bottone `Genera Analisi Macro Ora` sopra le card, con loading e toast.
+/// Bottone `Genera Analisi Macro Ora` con loading e toast.
 class _AdviceGenerateButton extends ConsumerWidget {
   const _AdviceGenerateButton();
 
@@ -1083,6 +1333,7 @@ class _AdviceGenerateButton extends ConsumerWidget {
     final bool generating = ref.watch(adviceGenerationProvider);
     return AppButton(
       label: 'Genera Analisi Macro Ora',
+      icon: const Icon(Icons.auto_awesome),
       loading: generating,
       loadingLabel: 'Generazione...',
       onPressed: () => _generate(context, ref),

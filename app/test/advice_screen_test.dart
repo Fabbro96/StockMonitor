@@ -109,11 +109,11 @@ void main() {
     await _pump(tester);
 
     expect(
-      find.textContaining('Analisi Istantanea su Singolo Titolo'),
+      find.textContaining('Analisi istantanea su singolo titolo'),
       findsOneWidget,
     );
     expect(
-      find.textContaining('Consigli Strategici Prioritizzati'),
+      find.textContaining('Analisi strategiche prioritizzate'),
       findsWidgets,
     );
     expect(find.textContaining('ENEL.MI'), findsWidgets);
@@ -121,7 +121,7 @@ void main() {
     // Analisi: Target/Stop nella valuta dei details (USD → `$`) e upside
     // negativo col segno corretto.
     await tester.enterText(find.byType(TextField).first, 'aapl');
-    await tester.tap(find.text('Analizza Titolo con IA ➔'));
+    await tester.tap(find.text('Analizza titolo con IA'));
     await tester.pump();
     await tester.pump();
     expect(find.textContaining(r'$'), findsWidgets);

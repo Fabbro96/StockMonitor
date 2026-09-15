@@ -8,6 +8,15 @@ import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import '../widgets/app_button.dart';
 
+/// Gruppi del "table of contents" della sidebar.
+enum AppNavGroup {
+  /// Sintesi: dove sta andando il patrimonio.
+  sintesi,
+
+  /// Registro: cosa possiedi e cosa farne.
+  registro,
+}
+
 /// Voce di navigazione della sidebar, con il titolo usato anche dalla topbar.
 class AppNavDestination {
   /// Crea una destinazione di navigazione.
@@ -17,62 +26,75 @@ class AppNavDestination {
     required this.icon,
     required this.selectedIcon,
     required this.topbarTitle,
+    this.group = AppNavGroup.sintesi,
   });
 
-  /// Etichetta del link (parità con la sidebar attuale).
+  /// Etichetta del link.
   final String label;
 
   /// Percorso go_router.
   final String path;
 
-  /// Icona a riposo.
+  /// Icona a riposo (Material outlined).
   final IconData icon;
 
-  /// Icona quando la voce è attiva.
+  /// Icona quando la voce è attiva (Material filled).
   final IconData selectedIcon;
 
-  /// Titolo di pagina mostrato nella topbar (con emoji, parità copy).
+  /// Titolo di pagina mostrato nella topbar (testo semplice, senza emoji).
   final String topbarTitle;
+
+  /// Gruppo di appartenenza (le voci di fondo non hanno gruppo).
+  final AppNavGroup? group;
 }
 
-/// Destinazioni della sidebar nell'ordine dell'app attuale.
+/// Destinazioni della sidebar nell'ordine del "table of contents".
 const List<AppNavDestination> appNavDestinations = <AppNavDestination>[
   AppNavDestination(
     label: 'Dashboard',
     path: '/dashboard',
-    icon: Icons.dashboard_outlined,
-    selectedIcon: Icons.dashboard,
+    icon: Icons.space_dashboard_outlined,
+    selectedIcon: Icons.space_dashboard,
     topbarTitle: 'Dashboard',
   ),
   AppNavDestination(
-    label: 'Watchlist',
+    label: 'Mercati',
     path: '/watchlist',
-    icon: Icons.star_outline,
-    selectedIcon: Icons.star,
-    topbarTitle: '⭐ Watchlist & Radar Mercati',
+    icon: Icons.travel_explore,
+    selectedIcon: Icons.travel_explore,
+    topbarTitle: 'Mercati',
   ),
   AppNavDestination(
     label: 'Portafoglio',
     path: '/portfolio',
-    icon: Icons.work_outline,
-    selectedIcon: Icons.work,
-    topbarTitle: '💼 Gestione Portafoglio',
+    icon: Icons.account_balance_wallet_outlined,
+    selectedIcon: Icons.account_balance_wallet,
+    topbarTitle: 'Portafoglio',
+    group: AppNavGroup.registro,
   ),
   AppNavDestination(
-    label: 'Consigli',
+    label: 'Analisi',
     path: '/advice',
-    icon: Icons.psychology_outlined,
-    selectedIcon: Icons.psychology,
-    topbarTitle: '🧠 Analisi & Consigli IA',
-  ),
-  AppNavDestination(
-    label: 'Impostazioni',
-    path: '/settings',
-    icon: Icons.settings_outlined,
-    selectedIcon: Icons.settings,
-    topbarTitle: 'Impostazioni',
+    icon: Icons.insights_outlined,
+    selectedIcon: Icons.insights,
+    topbarTitle: 'Analisi',
+    group: AppNavGroup.registro,
   ),
 ];
+
+/// Voce di fondo della sidebar (fuori dai gruppi): impostazioni.
+///
+/// È pubblica perché i consumatori che disegnano una navigazione alternativa
+/// (es. barra inferiore su mobile) possano riusare la stessa destinazione
+/// senza duplicare icona, percorso e titolo.
+const AppNavDestination appSettingsDestination = AppNavDestination(
+  label: 'Impostazioni',
+  path: '/settings',
+  icon: Icons.tune,
+  selectedIcon: Icons.tune,
+  topbarTitle: 'Impostazioni',
+  group: null,
+);
 
 /// Percorso corrente letto dal router; fuori da go_router ricade su [Uri.base].
 String appLocationOf(BuildContext context) {
@@ -86,8 +108,12 @@ String appLocationOf(BuildContext context) {
 /// Titolo di topbar per il percorso corrente (match per prefisso, così anche
 /// le sotto-rotte restano associate alla sezione).
 String appTopbarTitle(String location) {
-  for (final AppNavDestination destination in appNavDestinations) {
-    if (location == destination.path || location.startsWith('${destination.path}/')) {
+  for (final AppNavDestination destination in <AppNavDestination>[
+    ...appNavDestinations,
+    appSettingsDestination,
+  ]) {
+    if (location == destination.path ||
+        location.startsWith('${destination.path}/')) {
       return destination.topbarTitle;
     }
   }
@@ -115,21 +141,24 @@ class SidebarCollapsedController extends Notifier<bool> {
   }
 }
 
-/// True = sidebar desktop compressa (62px).
+/// True = sidebar desktop compressa.
 final sidebarCollapsedProvider =
-    NotifierProvider<SidebarCollapsedController, bool>(SidebarCollapsedController.new);
+    NotifierProvider<SidebarCollapsedController, bool>(
+      SidebarCollapsedController.new,
+    );
 
-/// Sidebar di navigazione: desktop 232px compressa a 62px, mobile (drawer)
-/// 260px off-canvas. In modalità [drawer] le etichette sono sempre visibili.
+/// Sidebar di navigazione: desktop 248px compressa a 64px, mobile (drawer)
+/// 268px off-canvas.
 ///
-/// Voci attive = alone `primaryGlow` + testo `primary` + `aria-current="page"`
-/// equivalente (`selected` semantics). Le voci compresse mantengono un nome
-/// accessibile (tooltip + semantics), come il clipping CSS del vecchio frontend.
+/// Struttura da "table of contents": micro-etichette di gruppo (`SINTESI`,
+/// `REGISTRO`), voci a 36px, Impostazioni in un blocco di fondo sopra la riga
+/// utente. La voce attiva usa fondo `primaryGlow`, testo d'accento e una barra
+/// da 2px clippata a sinistra (Stack, mai `Border` asimmetrico + radius).
 class AppSidebar extends ConsumerStatefulWidget {
   /// Crea la sidebar.
   const AppSidebar({super.key, this.drawer = false, this.onNavigate});
 
-  /// True = variante drawer mobile (larghezza 260, nessun collapse).
+  /// True = variante drawer mobile (larghezza 268, nessun collapse).
   final bool drawer;
 
   /// Callback chiamata dopo la navigazione (chiude il drawer su mobile).
@@ -153,10 +182,13 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    final bool collapsed = !widget.drawer && ref.watch(sidebarCollapsedProvider);
+    final bool collapsed =
+        !widget.drawer && ref.watch(sidebarCollapsedProvider);
     final double width = widget.drawer
         ? AppTokens.sidebarMobileWidth
-        : (collapsed ? AppTokens.sidebarCollapsedWidth : AppTokens.sidebarWidth);
+        : (collapsed
+              ? AppTokens.sidebarCollapsedWidth
+              : AppTokens.sidebarWidth);
     final String location = appLocationOf(context);
     final String username =
         ref.watch(authControllerProvider).value?.user?.username ?? 'Utente';
@@ -167,46 +199,73 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
       width: width,
       decoration: BoxDecoration(
         color: t.surface,
-        border: widget.drawer ? null : Border(right: BorderSide(color: t.border)),
+        border: widget.drawer
+            ? null
+            : Border(right: BorderSide(color: t.border)),
       ),
       child: Column(
         children: <Widget>[
           _SidebarHeader(
             collapsed: collapsed,
-            onToggleCollapsed:
-                widget.drawer ? null : () => ref.read(sidebarCollapsedProvider.notifier).toggle(),
+            onToggleCollapsed: widget.drawer
+                ? null
+                : () => ref.read(sidebarCollapsedProvider.notifier).toggle(),
           ),
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-              children: <Widget>[
-                for (final AppNavDestination destination in appNavDestinations)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 2),
-                    child: _NavItem(
-                      destination: destination,
-                      active: _isActive(location, destination),
-                      collapsed: collapsed,
-                      onTap: () {
-                        context.go(destination.path);
-                        widget.onNavigate?.call();
-                      },
-                    ),
+            // La larghezza animata può passare per misure intermedie: le voci
+            // si adattano alla larghezza reale, non solo allo stato del
+            // provider, così l'animazione 64↔248 non produce overflow.
+            child: LayoutBuilder(
+              builder: (BuildContext context, BoxConstraints constraints) {
+                final bool tight = collapsed || constraints.maxWidth < 120;
+                return ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 10,
                   ),
-              ],
+                  children: <Widget>[
+                    for (final AppNavGroup group
+                        in AppNavGroup.values) ...<Widget>[
+                      _GroupLabel(group: group, collapsed: tight),
+                      for (final AppNavDestination destination
+                          in appNavDestinations)
+                        if (destination.group == group)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 2),
+                            child: _NavItem(
+                              destination: destination,
+                              active: _isActive(location, destination),
+                              collapsed: tight,
+                              onTap: () {
+                                context.go(destination.path);
+                                widget.onNavigate?.call();
+                              },
+                            ),
+                          ),
+                    ],
+                  ],
+                );
+              },
             ),
           ),
           _SidebarFooter(
             username: username,
             collapsed: collapsed,
+            settingsActive: _isActive(location, appSettingsDestination),
+            onSettings: () {
+              context.go(appSettingsDestination.path);
+              widget.onNavigate?.call();
+            },
             onLogout: _confirmLogout,
-          ),        ],
+          ),
+        ],
       ),
     );
   }
 
   bool _isActive(String location, AppNavDestination destination) {
-    return location == destination.path || location.startsWith('${destination.path}/');
+    return location == destination.path ||
+        location.startsWith('${destination.path}/');
   }
 
   Future<void> _confirmLogout() async {
@@ -236,6 +295,61 @@ class _AppSidebarState extends ConsumerState<AppSidebar> {
   }
 }
 
+/// Micro-etichetta di gruppo (o riga sottile in modalità compressa).
+class _GroupLabel extends StatelessWidget {
+  const _GroupLabel({required this.group, required this.collapsed});
+
+  final AppNavGroup group;
+  final bool collapsed;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    if (collapsed) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Container(height: AppSizes.rule, color: t.borderSubtle),
+      );
+    }
+    final String label = switch (group) {
+      AppNavGroup.sintesi => 'Sintesi',
+      AppNavGroup.registro => 'Registro',
+    };
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 12, 10, 6),
+      child: Text(
+        label.toUpperCase(),
+        style: AppText.microFor(t).copyWith(color: t.textFaint),
+      ),
+    );
+  }
+}
+
+/// Marchio dell'app: tassello con icona, usato anche dal drawer.
+class _BrandMark extends StatelessWidget {
+  const _BrandMark({required this.size});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: t.surfaceInverse,
+        borderRadius: BorderRadius.circular(AppRadii.control),
+      ),
+      child: Icon(
+        Icons.candlestick_chart,
+        size: size * 0.6,
+        color: t.textInverse,
+      ),
+    );
+  }
+}
+
 class _SidebarHeader extends StatelessWidget {
   const _SidebarHeader({required this.collapsed, this.onToggleCollapsed});
 
@@ -247,35 +361,50 @@ class _SidebarHeader extends StatelessWidget {
     final AppTokens t = context.tokens;
     return Container(
       height: AppTokens.topbarHeight,
-      padding: collapsed
-          ? EdgeInsets.zero
-          : const EdgeInsets.only(left: 16, right: 8),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.border)),
       ),
-      child: Row(
-        mainAxisAlignment: collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
-        children: <Widget>[
-          if (!collapsed) ...<Widget>[
-            const Text('📈', style: TextStyle(fontSize: 16.8)),
-            const SizedBox(width: AppSpacing.s8),
-            Expanded(
-              child: Text(
-                'Stock Monitor',
-                style: AppText.appTitle(context),
-                overflow: TextOverflow.ellipsis,
-              ),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          // Sotto 120px (compressa o frame intermedio dell'animazione) resta
+          // solo il comando di espansione: niente overflow.
+          final bool tight = collapsed || constraints.maxWidth < 120;
+          return Padding(
+            padding: tight
+                ? EdgeInsets.zero
+                : const EdgeInsets.only(left: 14, right: 6),
+            child: Row(
+              mainAxisAlignment: tight
+                  ? MainAxisAlignment.center
+                  : MainAxisAlignment.start,
+              children: <Widget>[
+                if (!tight) ...<Widget>[
+                  const _BrandMark(size: 28),
+                  const SizedBox(width: AppSpacing.s10),
+                  Expanded(
+                    child: Text(
+                      'STOCK MONITOR',
+                      style: AppText.appTitle(context)
+                          .copyWith(letterSpacing: 1.1),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+                if (onToggleCollapsed != null)
+                  AppIconButton(
+                    icon: Icon(
+                      tight ? Icons.chevron_right : Icons.chevron_left,
+                    ),
+                    tooltip: tight ? 'Espandi menu' : 'Comprimi menu',
+                    semanticLabel: tight ? 'Espandi menu' : 'Comprimi menu',
+                    size: 28,
+                    iconSize: AppSizes.icon,
+                    onPressed: onToggleCollapsed,
+                  ),
+              ],
             ),
-          ],
-          if (onToggleCollapsed != null)
-            AppIconButton(
-              icon: Icon(collapsed ? Icons.chevron_right : Icons.chevron_left),
-              tooltip: collapsed ? 'Espandi menu' : 'Comprimi menu',
-              semanticLabel: collapsed ? 'Espandi menu' : 'Comprimi menu',
-              bordered: false,
-              onPressed: onToggleCollapsed,
-            ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -307,20 +436,24 @@ class _NavItemState extends State<_NavItem> {
     final bool active = widget.active;
 
     Widget item = Container(
+      height: widget.collapsed ? 40 : 36,
       padding: widget.collapsed
-          ? const EdgeInsets.symmetric(vertical: 10)
-          : const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+          ? EdgeInsets.zero
+          : const EdgeInsets.symmetric(horizontal: 10),
       decoration: BoxDecoration(
-        color: active ? t.primaryGlow : Colors.transparent,
-        borderRadius: BorderRadius.circular(AppRadii.input),
+        color: active
+            ? t.primaryGlow
+            : (_hovered ? t.surfaceHover : Colors.transparent),
+        borderRadius: BorderRadius.circular(AppRadii.control),
       ),
       child: Row(
-        mainAxisAlignment:
-            widget.collapsed ? MainAxisAlignment.center : MainAxisAlignment.start,
+        mainAxisAlignment: widget.collapsed
+            ? MainAxisAlignment.center
+            : MainAxisAlignment.start,
         children: <Widget>[
           Icon(
             active ? widget.destination.selectedIcon : widget.destination.icon,
-            size: 18,
+            size: AppSizes.icon,
             color: active
                 ? t.primary
                 : (_hovered ? t.textPrimary : t.textSecondary),
@@ -339,15 +472,33 @@ class _NavItemState extends State<_NavItem> {
       ),
     );
 
-    item = Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: widget.onTap,
-        onHover: (bool value) => setState(() => _hovered = value),
-        borderRadius: BorderRadius.circular(AppRadii.input),
-        hoverColor: t.surfaceHover,
-        focusColor: t.primaryGlow,
-        child: item,
+    item = Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(AppRadii.control),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: <Widget>[
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: widget.onTap,
+              onHover: (bool value) => setState(() => _hovered = value),
+              borderRadius: BorderRadius.circular(AppRadii.control),
+              hoverColor: Colors.transparent,
+              focusColor: t.primaryGlow,
+              child: item,
+            ),
+          ),
+          if (active)
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: AppSizes.accentStrip,
+              child: ColoredBox(color: t.primary),
+            ),
+        ],
       ),
     );
 
@@ -368,58 +519,120 @@ class _SidebarFooter extends StatelessWidget {
   const _SidebarFooter({
     required this.username,
     required this.collapsed,
+    required this.settingsActive,
+    required this.onSettings,
     required this.onLogout,
   });
 
   final String username;
   final bool collapsed;
+  final bool settingsActive;
+  final VoidCallback onSettings;
   final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
     return Container(
-      padding: collapsed
-          ? const EdgeInsets.symmetric(vertical: 12)
-          : const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 10),
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: t.border)),
       ),
-      child: Row(
-        mainAxisAlignment:
-            collapsed ? MainAxisAlignment.center : MainAxisAlignment.spaceBetween,
-        children: <Widget>[
-          if (collapsed) ...<Widget>[
-            Tooltip(
-              message: username,
-              child: Icon(Icons.person_outline, size: 16, color: t.textSecondary),
-            ),
-            const SizedBox(width: AppSpacing.s4),
-          ] else ...<Widget>[
-            Icon(Icons.person_outline, size: 16, color: t.textSecondary),
-            const SizedBox(width: AppSpacing.s8),
-            Expanded(
-              child: Text(
-                username,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: t.textPrimary,
-                  fontSize: 13.4,
-                  fontWeight: FontWeight.w600,
-                  fontFamilyFallback: AppTokens.fontFallback,
-                ),
+      child: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final bool tight = collapsed || constraints.maxWidth < 140;
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              _NavItem(
+                destination: appSettingsDestination,
+                active: settingsActive,
+                collapsed: tight,
+                onTap: onSettings,
               ),
-            ),
-          ],
-          AppIconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: 'Disconnetti',
-            semanticLabel: 'Disconnetti',
-            bordered: false,
-            danger: true,
-            onPressed: () => onLogout(),
-          ),
-        ],
+              const SizedBox(height: AppSpacing.s8),
+              Container(height: AppSizes.rule, color: t.borderSubtle),
+              const SizedBox(height: AppSpacing.s8),
+              if (tight)
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Tooltip(
+                      message: username,
+                      child: _UserTile(username: username, size: 28),
+                    ),
+                    const SizedBox(height: AppSpacing.s2),
+                    AppIconButton(
+                      icon: const Icon(Icons.logout),
+                      tooltip: 'Disconnetti',
+                      semanticLabel: 'Disconnetti',
+                      size: 28,
+                      iconSize: AppSizes.icon,
+                      danger: true,
+                      onPressed: onLogout,
+                    ),
+                  ],
+                )
+              else
+                Row(
+                  children: <Widget>[
+                    _UserTile(username: username, size: 28),
+                    const SizedBox(width: AppSpacing.s10),
+                    Expanded(
+                      child: Text(
+                        username,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.smallFor(t)
+                            .copyWith(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    AppIconButton(
+                      icon: const Icon(Icons.logout),
+                      tooltip: 'Disconnetti',
+                      semanticLabel: 'Disconnetti',
+                      danger: true,
+                      onPressed: onLogout,
+                    ),
+                  ],
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Tassello quadrato con l'iniziale dell'utente.
+class _UserTile extends StatelessWidget {
+  const _UserTile({required this.username, required this.size});
+
+  final String username;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final String initial = username.trim().isEmpty
+        ? '?'
+        : username.trim()[0].toUpperCase();
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: t.primaryGlow,
+        border: Border.all(color: t.primary.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(AppRadii.tag),
+      ),
+      child: Text(
+        initial,
+        style: AppText.mono(
+          context,
+          size: 12.5,
+          weight: FontWeight.w700,
+          color: t.primary,
+        ),
       ),
     );
   }

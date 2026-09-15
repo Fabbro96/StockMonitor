@@ -89,12 +89,11 @@ final topbarActionsProvider =
       TopbarActionsController.new,
     );
 
-/// Barra superiore sticky: titolo pagina, azioni contestuali, ricerca globale
-/// (`Cerca... ` + `Ctrl K`) e toggle tema con tooltip
-/// `Passa al tema scuro`/`Passa al tema chiaro`.
+/// Barra superiore sticky: titolo pagina in chiaro (senza emoji), azioni
+/// contestuali, ricerca globale a forma di campo (`Cerca...` + `Ctrl K`) e
+/// azioni icona: aiuto `?` e toggle tema.
 ///
-/// Desktop: alta 60px; mobile (<640px): 56px e ricerca a sola icona
-/// (`.search-text`/`.kbd-badge` nascosti dal CSS).
+/// Desktop: alta 64px; mobile (<640px): 56px e ricerca a sola icona.
 class AppTopbar extends ConsumerWidget {
   /// Crea la topbar.
   const AppTopbar({
@@ -126,7 +125,7 @@ class AppTopbar extends ConsumerWidget {
 
     return Container(
       height: compact ? AppTokens.topbarHeightMobile : AppTokens.topbarHeight,
-      padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 22, vertical: 8),
+      padding: EdgeInsets.symmetric(horizontal: compact ? 12 : 20, vertical: 8),
       decoration: BoxDecoration(
         color: t.surface,
         border: Border(bottom: BorderSide(color: t.border)),
@@ -153,6 +152,7 @@ class AppTopbar extends ConsumerWidget {
             action,
             const SizedBox(width: AppSpacing.s8),
           ],
+          const SizedBox(width: AppSpacing.s4),
           _SearchButton(
             compact: compact,
             onPressed: () {
@@ -164,14 +164,14 @@ class AppTopbar extends ConsumerWidget {
               }
             },
           ),
-          const SizedBox(width: AppSpacing.s8),
+          const SizedBox(width: AppSpacing.s6),
           AppIconButton(
             icon: const Icon(Icons.help_outline),
             tooltip: 'Scorciatoie da tastiera (?)',
             semanticLabel: 'Scorciatoie da tastiera',
             onPressed: () => unawaited(showShortcutsHelp(context)),
           ),
-          const SizedBox(width: AppSpacing.s8),
+          const SizedBox(width: AppSpacing.s6),
           AppIconButton(
             icon: Icon(
               isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
@@ -189,6 +189,8 @@ class AppTopbar extends ConsumerWidget {
   }
 }
 
+/// Ricerca globale: a riposo è un campo con bordo (aspetto `.input`), non un
+/// bottone pieno. Sotto 640px resta la sola icona.
 class _SearchButton extends StatefulWidget {
   const _SearchButton({required this.compact, required this.onPressed});
 
@@ -207,7 +209,7 @@ class _SearchButtonState extends State<_SearchButton> {
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
     final bool highlight = _hovered || _focused;
-    final Color border = highlight ? t.primary : t.border;
+    final Color border = _focused ? t.primary : (highlight ? t.borderStrong : t.border);
     final Color foreground = highlight ? t.textPrimary : t.textSecondary;
 
     return Tooltip(
@@ -215,19 +217,18 @@ class _SearchButtonState extends State<_SearchButton> {
       child: AnimatedContainer(
         duration: AppMotion.effective(context, AppMotion.fast),
         curve: AppMotion.ease,
-        height: 34,
-        padding: const EdgeInsets.symmetric(horizontal: 10),
+        height: widget.compact ? AppSizes.iconButton : AppSizes.control,
+        width: widget.compact ? AppSizes.iconButton : null,
+        padding: widget.compact
+            ? EdgeInsets.zero
+            : const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
           color: _hovered ? t.surfaceHover : t.surface,
           border: Border.all(color: border),
-          borderRadius: BorderRadius.circular(AppRadii.input),
+          borderRadius: BorderRadius.circular(AppRadii.control),
           boxShadow: _focused
               ? <BoxShadow>[
-                  BoxShadow(
-                    color: t.primaryGlow,
-                    blurRadius: 0,
-                    spreadRadius: 2,
-                  ),
+                  BoxShadow(color: t.focusRing, blurRadius: 0, spreadRadius: 2),
                 ]
               : null,
         ),
@@ -237,25 +238,21 @@ class _SearchButtonState extends State<_SearchButton> {
             onTap: widget.onPressed,
             onHover: (bool value) => setState(() => _hovered = value),
             onFocusChange: (bool value) => setState(() => _focused = value),
-            borderRadius: BorderRadius.circular(AppRadii.input),
+            borderRadius: BorderRadius.circular(AppRadii.control),
             hoverColor: Colors.transparent,
             focusColor: Colors.transparent,
             child: Row(
               mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: <Widget>[
-                Icon(Icons.search, size: 15, color: foreground),
+                Icon(Icons.search, size: AppSizes.iconSm, color: foreground),
                 if (!widget.compact) ...<Widget>[
                   const SizedBox(width: AppSpacing.s8),
                   Text(
                     'Cerca...',
-                    style: TextStyle(
-                      color: foreground,
-                      fontSize: 13.1,
-                      fontWeight: FontWeight.w400,
-                      fontFamilyFallback: AppTokens.fontFallback,
-                    ),
+                    style: AppText.smallFor(t).copyWith(color: foreground),
                   ),
-                  const SizedBox(width: AppSpacing.s8),
+                  const SizedBox(width: AppSpacing.s10),
                   const AppKbd('Ctrl K'),
                 ],
               ],

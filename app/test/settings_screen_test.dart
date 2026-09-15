@@ -8,6 +8,7 @@ import 'package:stock_monitor/core/models/user.dart';
 import 'package:stock_monitor/core/session/auth_controller.dart';
 import 'package:stock_monitor/features/settings/settings_providers.dart';
 import 'package:stock_monitor/features/settings/settings_screen.dart';
+import 'package:stock_monitor/widgets/app_card.dart';
 
 /// Fake di [SettingsApi]: impostazioni con vocabolario legacy (`long_term`) e
 /// una regola alert BOTH già configurata.
@@ -26,7 +27,7 @@ class _FakeSettingsApi extends SettingsApi {
     apiStatus: ApiStatus(
       telegram: true,
       gemini: true,
-      geminiModel: 'gemini-3.7-flash',
+      geminiModel: 'gemini-3.8-flash',
     ),
   );
 
@@ -133,35 +134,40 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
-    expect(
-      find.text('💶 Quanti soldi vuoi investire? (Capitale / Budget Totale)'),
-      findsOneWidget,
-    );
+    expect(find.text('Budget di investimento'), findsOneWidget);
     expect(find.text('Capitale da Investire (€)'), findsOneWidget);
     expect(find.text('2.500 €'), findsOneWidget);
     expect(find.text('50.000 €'), findsOneWidget);
-    expect(find.text('🎯 Strategia di Investimento & Rischio'), findsOneWidget);
+    expect(find.text('Strategia di investimento'), findsOneWidget);
     expect(find.text('Long Term (Cassettista / Valore)'), findsOneWidget);
     expect(find.text('Italia (MIB)'), findsOneWidget);
     expect(find.text('USA (S&P500/Nasdaq)'), findsOneWidget);
-    expect(find.text('🔔 Notifiche & Invio Report'), findsOneWidget);
+    expect(find.text('Report programmati'), findsOneWidget);
     expect(find.text('Orario di invio report (primo invio)'), findsOneWidget);
     expect(find.text('Orario di invio report 2'), findsOneWidget);
     expect(find.text('Invia Messaggio Test Telegram'), findsOneWidget);
-    expect(
-      find.text('⚡ Regole Alert Istantanee (Take Profit / Stop Loss)'),
-      findsOneWidget,
-    );
+    expect(find.text('Regole alert'), findsOneWidget);
     expect(find.text('BOTH'), findsWidgets);
-    expect(find.text('Attivo'), findsOneWidget);
-    expect(find.text('🔒 Sicurezza & Password'), findsOneWidget);
+    // `Attivo` compare anche nella tabella regole alert: qui si verifica il
+    // numero esatto di badge nella card "Stato integrazioni" (Gemini + Telegram).
+    expect(
+      find.descendant(
+        of: find.ancestor(
+          of: find.text('Stato integrazioni'),
+          matching: find.byType(AppCard),
+        ),
+        matching: find.text('Attivo'),
+      ),
+      findsNWidgets(2),
+    );
+    expect(find.text('Sicurezza e password'), findsOneWidget);
     expect(find.text('Aggiorna'), findsOneWidget);
     // Non admin: la sezione utenti non compare.
-    expect(find.text('👥 Gestione Utenti (Solo Amministratore)'), findsNothing);
-    expect(find.text('📡 Stato Integrazioni & Motore AI'), findsOneWidget);
-    expect(find.text('gemini-3.7-flash'), findsOneWidget);
-    expect(find.text('✅ Attivo'), findsWidgets);
-    expect(find.text('🖥️ Server'), findsOneWidget);
+    expect(find.text('Utenti e accessi'), findsNothing);
+    expect(find.text('Stato integrazioni'), findsOneWidget);
+    expect(find.text('gemini-3.8-flash'), findsOneWidget);
+    expect(find.text('Multi-fonte attivo'), findsOneWidget);
+    expect(find.text('Server'), findsOneWidget);
     expect(find.text('Salva Impostazioni'), findsOneWidget);
   });
 
@@ -204,20 +210,27 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
 
-    expect(
-      find.text('👥 Gestione Utenti (Solo Amministratore)'),
-      findsOneWidget,
-    );
-    expect(find.text('➕ Crea Nuovo Utente'), findsOneWidget);
-    expect(find.text('Crea Utente'), findsOneWidget);
+    expect(find.text('Utenti e accessi'), findsOneWidget);
+    expect(find.text('Crea nuovo utente'), findsOneWidget);
+    expect(find.text('Crea utente'), findsOneWidget);
     expect(find.text('fabbro'), findsOneWidget);
     expect(find.text(' (Tu)'), findsOneWidget);
-    expect(find.text('👑 Amministratore'), findsWidgets);
-    expect(find.text('👤 Utente'), findsOneWidget);
+    expect(find.text('Amministratore'), findsWidgets);
+    expect(find.text('Utente'), findsOneWidget);
     expect(find.text('Mai'), findsOneWidget);
     // Reset password su ogni utente; delete solo sull'utente non-self.
-    expect(find.byTooltip('🔑 Reimposta password'), findsNWidgets(2));
+    expect(find.byTooltip('Reimposta password'), findsNWidgets(2));
     expect(find.byTooltip('Elimina utente'), findsOneWidget);
+
+    // A11y: le azioni di riga hanno un'area sensibile ≥32px.
+    final Size resetTarget = tester.getSize(
+      find.byTooltip('Reimposta password').first,
+    );
+    expect(resetTarget.width, greaterThanOrEqualTo(32));
+    expect(resetTarget.height, greaterThanOrEqualTo(32));
+    final Size deleteTarget = tester.getSize(find.byTooltip('Elimina utente'));
+    expect(deleteTarget.width, greaterThanOrEqualTo(32));
+    expect(deleteTarget.height, greaterThanOrEqualTo(32));
   });
 
   testWidgets('layout compatto: la tabella alert diventa card senza overflow', (

@@ -7,11 +7,12 @@ import '../widgets/app_button.dart';
 import '../widgets/badges.dart';
 
 /// Mostra il dialog delle scorciatoie da tastiera
-/// (`⌨️ Scorciatoie da Tastiera`).
+/// (`Scorciatoie da Tastiera`).
 ///
-/// Si chiude con `esc`, tap sul backdrop, la X o il bottone `Ho capito`.
-/// Sotto 640px compare come bottom-sheet (radius 12 in alto), come i modali
-/// del frontend.
+/// Pannello in stile registro: intestazione con icona, elenco a righe nude
+/// separate da hairline e tasti in [AppKbd]. Si chiude con `esc`, tap sul
+/// backdrop, la X o il bottone `Ho capito`. Sotto 640px compare come
+/// bottom-sheet con raggio 10 in alto.
 Future<void> showShortcutsHelp(BuildContext context) {
   final AppTokens t = context.tokens;
   final bool reduceMotion = MediaQuery.disableAnimationsOf(context);
@@ -61,12 +62,12 @@ class _ShortcutsHelpDialog extends StatelessWidget {
     final bool compact = context.isCompact;
 
     final BorderRadius radius = compact
-        ? const BorderRadius.vertical(top: Radius.circular(AppRadii.modal))
-        : BorderRadius.circular(AppRadii.card);
+        ? const BorderRadius.vertical(top: Radius.circular(AppRadii.sheet))
+        : BorderRadius.circular(AppRadii.sheet);
 
     return Semantics(
       namesRoute: true,
-      label: '⌨️ Scorciatoie da Tastiera',
+      label: 'Scorciatoie da Tastiera',
       child: CallbackShortcuts(
         bindings: <ShortcutActivator, VoidCallback>{
           const SingleActivator(LogicalKeyboardKey.escape): () =>
@@ -77,57 +78,62 @@ class _ShortcutsHelpDialog extends StatelessWidget {
           child: Padding(
             padding: const EdgeInsets.all(16),
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 560),
+              constraints: const BoxConstraints(maxWidth: 520),
               child: Container(
                 decoration: BoxDecoration(
-                  color: t.surface,
+                  color: t.surfaceRaised,
                   border: Border.all(color: t.border),
                   borderRadius: radius,
                   boxShadow: t.shadowLg,
                 ),
                 clipBehavior: Clip.antiAlias,
-                padding: const EdgeInsets.all(22),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: <Widget>[
-                    _header(context, t),
-                    const SizedBox(height: AppSpacing.s16),
-                    Text(
-                      'Naviga e gestisci il tuo portafoglio ad alta velocità '
-                      'con questi comandi globali:',
-                      style: AppText.caption(context),
-                    ),
-                    const SizedBox(height: AppSpacing.s12),
-                    _ShortcutRow(
-                      action: 'Apri Command Palette / Cerca',
-                      keys: <Widget>[
-                        const AppKbd('Ctrl'),
-                        _separator(t, ' + '),
-                        const AppKbd('K'),
-                        _separator(t, ' / '),
-                        const AppKbd('/'),
+                // `Material` non solo per l'inchiostro: senza di esso i testi
+                // di un dialog fuori dallo Scaffold ereditano lo stile di
+                // fallback (mono, decorazioni di debug) invece del tema.
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        _header(context, t),
+                        const SizedBox(height: AppSpacing.s14),
+                        Text(
+                          'Naviga e gestisci il tuo portafoglio ad alta velocità '
+                          'con questi comandi globali:',
+                          style: AppText.caption(context),
+                        ),
+                        const SizedBox(height: AppSpacing.s14),
+                        const _ShortcutRow(
+                          action: 'Apri Command Palette / Cerca',
+                          keys: <Widget>[
+                            AppKbd('Ctrl'),
+                            AppKbd('K'),
+                            AppKbd('/'),
+                          ],
+                        ),
+                        const _ShortcutRow(
+                          action: 'Apri questa Guida',
+                          keys: <Widget>[AppKbd('?')],
+                        ),
+                        const _ShortcutRow(
+                          action: 'Chiudi Finestre e Modal',
+                          keys: <Widget>[AppKbd('Esc')],
+                          divider: false,
+                        ),
+                        const SizedBox(height: AppSpacing.s16),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: AppButton(
+                            label: 'Ho capito',
+                            onPressed: () => Navigator.of(context).maybePop(),
+                          ),
+                        ),
                       ],
                     ),
-                    const SizedBox(height: AppSpacing.s8),
-                    const _ShortcutRow(
-                      action: 'Apri questa Guida',
-                      keys: <Widget>[AppKbd('?')],
-                    ),
-                    const SizedBox(height: AppSpacing.s8),
-                    const _ShortcutRow(
-                      action: 'Chiudi Finestre e Modal',
-                      keys: <Widget>[AppKbd('Esc')],
-                    ),
-                    const SizedBox(height: AppSpacing.s16),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: AppButton(
-                        label: 'Ho capito',
-                        onPressed: () => Navigator.of(context).maybePop(),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -145,9 +151,15 @@ class _ShortcutsHelpDialog extends StatelessWidget {
       ),
       child: Row(
         children: <Widget>[
+          Icon(
+            Icons.keyboard_outlined,
+            size: AppSizes.iconLg,
+            color: t.textSecondary,
+          ),
+          const SizedBox(width: AppSpacing.s8),
           Expanded(
             child: Text(
-              '⌨️ Scorciatoie da Tastiera',
+              'Scorciatoie da Tastiera',
               style: AppText.modalTitle(context),
             ),
           ),
@@ -158,7 +170,6 @@ class _ShortcutsHelpDialog extends StatelessWidget {
             semanticLabel: 'Chiudi',
             size: 30,
             iconSize: 17,
-            bordered: false,
             danger: true,
             onPressed: () => Navigator.of(context).maybePop(),
           ),
@@ -166,37 +177,31 @@ class _ShortcutsHelpDialog extends StatelessWidget {
       ),
     );
   }
-
-  Widget _separator(AppTokens t, String text) {
-    return Text(
-      text,
-      style: TextStyle(
-        color: t.textMuted,
-        fontSize: 11.8,
-        height: 1.4,
-        fontFamily: AppTokens.monoFontFamily,
-        fontFamilyFallback: AppTokens.monoFontFallback,
-      ),
-    );
-  }
 }
 
+/// Riga del registro scorciatoie: azione a sinistra, tasti a destra,
+/// separata dalla successiva da una hairline.
 class _ShortcutRow extends StatelessWidget {
-  const _ShortcutRow({required this.action, required this.keys});
+  const _ShortcutRow({
+    required this.action,
+    required this.keys,
+    this.divider = true,
+  });
 
   final String action;
   final List<Widget> keys;
+  final bool divider;
 
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: t.surfaceHover,
-        border: Border.all(color: t.border),
-        borderRadius: BorderRadius.circular(AppRadii.input),
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: divider
+          ? BoxDecoration(
+              border: Border(bottom: BorderSide(color: t.borderSubtle)),
+            )
+          : null,
       child: Row(
         children: <Widget>[
           Expanded(
@@ -208,7 +213,7 @@ class _ShortcutRow extends StatelessWidget {
           ),
           const SizedBox(width: AppSpacing.s10),
           Wrap(
-            spacing: 2,
+            spacing: 4,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: keys,
           ),

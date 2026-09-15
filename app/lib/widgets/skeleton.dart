@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
-/// Wrapper "pulse" del CSS (`.skeleton`, `pulse 1.4s ease-in-out`):
-/// opacità 1 → 0.45. Con `prefers-reduced-motion` resta statico.
+/// Wrapper "pulse": opacità 1 → 0.5 in 1.4s. Con `prefers-reduced-motion`
+/// resta statico.
 class SkeletonPulse extends StatefulWidget {
   /// Crea l'animazione pulse attorno a [child].
   const SkeletonPulse({super.key, required this.child});
 
-  /// Contenuto da animare (di norma un blocco grigio).
+  /// Contenuto da animare (di norma un blocco `track`).
   final Widget child;
 
   @override
@@ -21,7 +21,7 @@ class _SkeletonPulseState extends State<SkeletonPulse> with SingleTickerProvider
     duration: const Duration(milliseconds: 1400),
   )..repeat(reverse: true);
 
-  late final Animation<double> _opacity = Tween<double>(begin: 1, end: 0.45).animate(
+  late final Animation<double> _opacity = Tween<double>(begin: 1, end: 0.5).animate(
     CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
   );
 
@@ -38,14 +38,14 @@ class _SkeletonPulseState extends State<SkeletonPulse> with SingleTickerProvider
   }
 }
 
-/// Blocco grigio skeleton (`surfaceActive`, raggio 6 di default).
+/// Blocco skeleton (colore `track`, raggio 4 di default).
 class SkeletonBox extends StatelessWidget {
   /// Crea un blocco skeleton.
   const SkeletonBox({
     super.key,
     this.width,
     this.height,
-    this.radius = 6,
+    this.radius = AppRadii.control,
     this.margin,
   });
 
@@ -69,7 +69,7 @@ class SkeletonBox extends StatelessWidget {
         height: height,
         margin: margin,
         decoration: BoxDecoration(
-          color: context.tokens.surfaceActive,
+          color: context.tokens.track,
           borderRadius: BorderRadius.circular(radius),
         ),
       ),
@@ -77,7 +77,27 @@ class SkeletonBox extends StatelessWidget {
   }
 }
 
-/// Placeholder di un valore stat (`.skeleton-value`: 110×26).
+/// Riga di testo skeleton (h12, raggio 3).
+class SkeletonLine extends StatelessWidget {
+  /// Crea una riga di testo skeleton.
+  const SkeletonLine({super.key, this.width, this.height = 12, this.margin});
+
+  /// Larghezza (null = intrinseca).
+  final double? width;
+
+  /// Altezza della riga.
+  final double height;
+
+  /// Margine esterno.
+  final EdgeInsetsGeometry? margin;
+
+  @override
+  Widget build(BuildContext context) {
+    return SkeletonBox(width: width, height: height, radius: AppRadii.tag, margin: margin);
+  }
+}
+
+/// Placeholder di un valore stat (110×26).
 class SkeletonValue extends StatelessWidget {
   /// Crea il placeholder del valore.
   const SkeletonValue({super.key});
@@ -88,22 +108,25 @@ class SkeletonValue extends StatelessWidget {
   }
 }
 
-/// Placeholder di una riga tabella (`.skeleton-row`: h44, mb8).
+/// Placeholder di una riga tabella (h40, mb8).
 class SkeletonRow extends StatelessWidget {
   /// Crea il placeholder di riga.
-  const SkeletonRow({super.key});
+  const SkeletonRow({super.key, this.height = AppSizes.rowCompact});
+
+  /// Altezza della riga.
+  final double height;
 
   @override
   Widget build(BuildContext context) {
-    return const SkeletonBox(
+    return SkeletonBox(
       width: double.infinity,
-      height: 44,
-      margin: EdgeInsets.only(bottom: 8),
+      height: height,
+      margin: const EdgeInsets.only(bottom: AppSpacing.s8),
     );
   }
 }
 
-/// Placeholder di uno stat (`.skeleton-stat`: h72, raggio card).
+/// Placeholder di uno stat (h72, raggio pannello).
 class SkeletonStat extends StatelessWidget {
   /// Crea il placeholder di stat card.
   const SkeletonStat({super.key});
@@ -114,7 +137,7 @@ class SkeletonStat extends StatelessWidget {
   }
 }
 
-/// Placeholder di una card (`.skeleton-card`: min-h 88).
+/// Placeholder di una card (min-h 88).
 class SkeletonCard extends StatelessWidget {
   /// Crea il placeholder di card.
   const SkeletonCard({super.key, this.height = 88});
@@ -128,10 +151,24 @@ class SkeletonCard extends StatelessWidget {
   }
 }
 
-/// Spinner del CSS (`.spinner`: 26px, bordo tenue, arco primary).
+/// Placeholder di un grafico (h240, raggio pannello).
+class SkeletonChart extends StatelessWidget {
+  /// Crea il placeholder di grafico.
+  const SkeletonChart({super.key, this.height = 240});
+
+  /// Altezza del blocco.
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    return SkeletonBox(width: double.infinity, height: height, radius: AppRadii.card);
+  }
+}
+
+/// Spinner: track `track`, arco d'accento.
 class AppSpinner extends StatelessWidget {
   /// Crea lo spinner.
-  const AppSpinner({super.key, this.size = 26, this.strokeWidth = 2});
+  const AppSpinner({super.key, this.size = 24, this.strokeWidth = 2});
 
   /// Diametro.
   final double size;
@@ -147,14 +184,14 @@ class AppSpinner extends StatelessWidget {
       child: CircularProgressIndicator(
         strokeWidth: strokeWidth,
         color: context.tokens.primarySolid,
-        backgroundColor: context.tokens.border,
+        backgroundColor: context.tokens.track,
       ),
     );
   }
 }
 
-/// Overlay di caricamento (`.loader-overlay`): superficie al 85% + spinner,
-/// sopra il contenuto, senza rimuoverlo dal layout.
+/// Overlay di caricamento: superficie all'85% + spinner, sopra il contenuto,
+/// senza rimuoverlo dal layout.
 class AppLoaderOverlay extends StatelessWidget {
   /// Avvolge [child] con l'overlay quando [loading] è true.
   const AppLoaderOverlay({
@@ -170,7 +207,7 @@ class AppLoaderOverlay extends StatelessWidget {
   /// Contenuto sotto l'overlay.
   final Widget child;
 
-  /// Raggio di ritaglio dell'overlay (es. raggio card).
+  /// Raggio di ritaglio dell'overlay (es. raggio pannello).
   final BorderRadius? borderRadius;
 
   @override

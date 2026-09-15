@@ -11,27 +11,71 @@ import '../../core/models/watchlist_item.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
-import '../../widgets/badges.dart';
+import '../../widgets/app_market_tag.dart';
 import '../../widgets/stepper_input.dart';
 import '../../widgets/toast.dart';
 import 'watchlist_providers.dart';
 
-/// Modal "Aggiungi Titolo al Radar" (parità con `#addWatchlistModal`).
+/// Modal "Aggiungi titolo al radar" (parità con `#addWatchlistModal`).
+///
+/// Contenitore adattivo: dialog centrato sopra i 640px, bottom-sheet quasi
+/// full-height sotto (stessa logica della scheda titolo).
 Future<void> showWatchlistAddDialog(BuildContext context) {
+  if (context.isCompact) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: context.tokens.surface,
+      barrierColor: context.tokens.scrim,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.sheet)),
+      ),
+      builder: (BuildContext sheetContext) => ConstrainedBox(
+        // Il foglio cresce con il contenuto e si ferma quasi a schermo pieno
+        // quando compare la tastiera.
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.92,
+        ),
+        child: const WatchlistAddDialog(),
+      ),
+    );
+  }
   return showDialog<void>(
     context: context,
-    builder: (BuildContext context) => const WatchlistAddDialog(),
+    barrierColor: context.tokens.scrim,
+    builder: (BuildContext _) => const WatchlistAddDialog(),
   );
 }
 
-/// Modal "Imposta Alert di Prezzo" (parità con `#editAlertModal`).
+/// Modal "Imposta alert di prezzo" (parità con `#editAlertModal`):
+/// dialog su desktop, bottom-sheet sotto i 640px.
 Future<void> showWatchlistAlertDialog(
   BuildContext context,
   WatchlistItem item,
 ) {
+  if (context.isCompact) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: context.tokens.surface,
+      barrierColor: context.tokens.scrim,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadii.sheet)),
+      ),
+      builder: (BuildContext sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.92,
+        ),
+        child: WatchlistAlertDialog(item: item),
+      ),
+    );
+  }
   return showDialog<void>(
     context: context,
-    builder: (BuildContext context) => WatchlistAlertDialog(item: item),
+    barrierColor: context.tokens.scrim,
+    builder: (BuildContext _) => WatchlistAlertDialog(item: item),
   );
 }
 
@@ -151,75 +195,84 @@ class _WatchlistAddDialogState extends ConsumerState<WatchlistAddDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final AppTokens t = context.tokens;
+    final List<Widget> actions = <Widget>[
+      AppButton(
+        label: 'Annulla',
+        variant: AppButtonVariant.ghost,
+        onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+      ),
+      AppButton(
+        label: 'Aggiungi a Mercati',
+        loading: _submitting,
+        onPressed: _submit,
+      ),
+    ];
+
+    if (context.isCompact) {
+      return _SheetLayout(
+        title: 'Aggiungi titolo al radar',
+        actions: actions,
+        child: _form(context),
+      );
+    }
+
     return AlertDialog(
-      title: const Text('⭐ Aggiungi Titolo al Radar'),
-      content: SizedBox(
-        width: 460,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: <Widget>[
-              const _FieldLabel('Ticker o Simbolo Titolo'),
-              const SizedBox(height: AppSpacing.s6),
-              TextField(
-                controller: _tickerController,
-                autofocus: true,
-                textCapitalization: TextCapitalization.characters,
-                onChanged: _onTickerChanged,
-                decoration: InputDecoration(
-                  hintText: 'Es. NVDA, TSLA, RACE.MI, ENEL.MI, AAPL...',
-                  errorText: _tickerError,
-                ),
-              ),
-              if (_suggestions.isNotEmpty) _suggestionsPanel(t),
-              const SizedBox(height: AppSpacing.s14),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  Expanded(
-                    child: _AlertStepper(
-                      label: '🔔 Alert Se Sale Sopra (€/\$)',
-                      controller: _alertAboveController,
-                      hint: 'Es. 150.00',
-                      semanticsLabel: 'Alert se sale sopra (€/\$)',
-                    ),
-                  ),
-                  const SizedBox(width: AppSpacing.s12),
-                  Expanded(
-                    child: _AlertStepper(
-                      label: '🔔 Alert Se Scende Sotto (€/\$)',
-                      controller: _alertBelowController,
-                      hint: 'Es. 120.00',
-                      semanticsLabel: 'Alert se scende sotto (€/\$)',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.s14),
-              const _FieldLabel('Note Operative / Strategia (Opzionale)'),
-              const SizedBox(height: AppSpacing.s6),
-              TextField(
-                controller: _notesController,
-                decoration: const InputDecoration(
-                  hintText: 'Es. Attendere rottura resistenza a 20€...',
-                ),
-              ),
-            ],
+      title: const Text('Aggiungi titolo al radar'),
+      content: SizedBox(width: 460, child: SingleChildScrollView(child: _form(context))),
+      actions: actions,
+    );
+  }
+
+  Widget _form(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        const _FieldLabel('Ticker o simbolo titolo'),
+        const SizedBox(height: AppSpacing.s6),
+        TextField(
+          controller: _tickerController,
+          autofocus: true,
+          textCapitalization: TextCapitalization.characters,
+          onChanged: _onTickerChanged,
+          decoration: InputDecoration(
+            hintText: 'Es. NVDA, TSLA, RACE.MI, ENEL.MI, AAPL...',
+            errorText: _tickerError,
           ),
         ),
-      ),
-      actions: <Widget>[
-        AppButton(
-          label: 'Annulla',
-          variant: AppButtonVariant.ghost,
-          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+        if (_suggestions.isNotEmpty) _suggestionsPanel(t),
+        const SizedBox(height: AppSpacing.s14),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Expanded(
+              child: _AlertStepper(
+                label: 'Alert se sale sopra (€/\$)',
+                controller: _alertAboveController,
+                hint: 'Es. 150,00',
+                semanticsLabel: 'Alert se sale sopra (€/\$)',
+              ),
+            ),
+            const SizedBox(width: AppSpacing.s12),
+            Expanded(
+              child: _AlertStepper(
+                label: 'Alert se scende sotto (€/\$)',
+                controller: _alertBelowController,
+                hint: 'Es. 120,00',
+                semanticsLabel: 'Alert se scende sotto (€/\$)',
+              ),
+            ),
+          ],
         ),
-        AppButton(
-          label: 'Aggiungi a Watchlist',
-          loading: _submitting,
-          onPressed: _submit,
+        const SizedBox(height: AppSpacing.s14),
+        const _FieldLabel('Note operative / strategia (opzionale)'),
+        const SizedBox(height: AppSpacing.s6),
+        TextField(
+          controller: _notesController,
+          decoration: const InputDecoration(
+            hintText: 'Es. Attendere rottura resistenza a 20 €...',
+          ),
         ),
       ],
     );
@@ -230,9 +283,9 @@ class _WatchlistAddDialogState extends ConsumerState<WatchlistAddDialog> {
       margin: const EdgeInsets.only(top: AppSpacing.s6),
       constraints: const BoxConstraints(maxHeight: 172),
       decoration: BoxDecoration(
-        color: t.surface,
+        color: t.surfaceRaised,
         border: Border.all(color: t.border),
-        borderRadius: BorderRadius.circular(AppRadii.input),
+        borderRadius: BorderRadius.circular(AppRadii.control),
         boxShadow: t.shadowMd,
       ),
       child: ListView.builder(
@@ -269,7 +322,7 @@ class _WatchlistAddDialogState extends ConsumerState<WatchlistAddDialog> {
                   ),
                   if (suggestion.market.isNotEmpty) ...<Widget>[
                     const SizedBox(width: AppSpacing.s6),
-                    AppBadge(label: suggestion.market, tone: BadgeTone.neutral),
+                    AppMarketTag.forTicker(suggestion.ticker, market: suggestion.market),
                   ],
                 ],
               ),
@@ -345,50 +398,141 @@ class _WatchlistAlertDialogState extends ConsumerState<WatchlistAlertDialog> {
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    return AlertDialog(
-      title: const Text('🔔 Imposta Alert di Prezzo'),
-      content: SizedBox(
-        width: 380,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+    final List<Widget> actions = <Widget>[
+      AppButton(
+        label: 'Annulla',
+        variant: AppButtonVariant.ghost,
+        onPressed: _saving ? null : () => Navigator.of(context).pop(),
+      ),
+      AppButton(
+        label: 'Salva alert',
+        loading: _saving,
+        onPressed: _save,
+      ),
+    ];
+
+    final Widget form = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
           children: <Widget>[
+            AppMarketTag.forTicker(widget.item.ticker, market: widget.item.market),
+            const SizedBox(width: AppSpacing.s6),
             Text(
-              'Imposta soglie per ${widget.item.ticker}',
-              style: AppText.small(context).copyWith(
-                color: t.primary,
-                fontWeight: FontWeight.w700,
+              widget.item.ticker,
+              style: AppText.mono(context, size: 13, weight: FontWeight.w700, color: t.primary),
+            ),
+            const SizedBox(width: AppSpacing.s6),
+            Expanded(
+              child: Text(
+                widget.item.name?.isNotEmpty == true
+                    ? widget.item.name!
+                    : 'Soglie di prezzo',
+                style: AppText.caption(context),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-            ),
-            const SizedBox(height: AppSpacing.s14),
-            _AlertStepper(
-              label: 'Avvisami se il prezzo sale sopra (€/\$):',
-              controller: _aboveController,
-              hint: 'Nessun limite superiore',
-              semanticsLabel: 'Avvisa se il prezzo sale sopra (€/\$)',
-            ),
-            const SizedBox(height: AppSpacing.s14),
-            _AlertStepper(
-              label: 'Avvisami se il prezzo scende sotto (€/\$):',
-              controller: _belowController,
-              hint: 'Nessun limite inferiore',
-              semanticsLabel: 'Avvisa se il prezzo scende sotto (€/\$)',
             ),
           ],
         ),
-      ),
-      actions: <Widget>[
-        AppButton(
-          label: 'Annulla',
-          variant: AppButtonVariant.ghost,
-          onPressed: _saving ? null : () => Navigator.of(context).pop(),
+        const SizedBox(height: AppSpacing.s14),
+        _AlertStepper(
+          label: 'Avvisami se il prezzo sale sopra (€/\$):',
+          controller: _aboveController,
+          hint: 'Nessun limite superiore',
+          semanticsLabel: 'Avvisa se il prezzo sale sopra (€/\$)',
         ),
-        AppButton(
-          label: 'Salva Alert',
-          loading: _saving,
-          onPressed: _save,
+        const SizedBox(height: AppSpacing.s14),
+        _AlertStepper(
+          label: 'Avvisami se il prezzo scende sotto (€/\$):',
+          controller: _belowController,
+          hint: 'Nessun limite inferiore',
+          semanticsLabel: 'Avvisa se il prezzo scende sotto (€/\$)',
         ),
       ],
+    );
+
+    if (context.isCompact) {
+      return _SheetLayout(
+        title: 'Imposta alert di prezzo',
+        actions: actions,
+        child: form,
+      );
+    }
+
+    return AlertDialog(
+      title: const Text('Imposta alert di prezzo'),
+      content: SizedBox(
+        width: 380,
+        child: SingleChildScrollView(child: form),
+      ),
+      actions: actions,
+    );
+  }
+}
+
+/// Struttura del bottom-sheet: intestazione con chiusura, contenuto
+/// scorrevole e azioni in basso.
+class _SheetLayout extends StatelessWidget {
+  const _SheetLayout({
+    required this.title,
+    required this.child,
+    required this.actions,
+  });
+
+  final String title;
+  final Widget child;
+  final List<Widget> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return SafeArea(
+      top: false,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.s16, AppSpacing.s10, AppSpacing.s8, 0),
+            child: Row(
+              children: <Widget>[
+                Expanded(child: Text(title, style: AppText.modalTitle(context))),
+                AppIconButton(
+                  icon: const Icon(Icons.close),
+                  tooltip: 'Chiudi',
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            height: AppSizes.rule,
+            margin: const EdgeInsets.only(top: AppSpacing.s10),
+            color: t.borderSubtle,
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(AppSpacing.s16, AppSpacing.s14, AppSpacing.s16, AppSpacing.s8),
+              child: child,
+            ),
+          ),
+          Container(height: AppSizes.rule, color: t.borderSubtle),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(AppSpacing.s16, AppSpacing.s10, AppSpacing.s16, AppSpacing.s10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: <Widget>[
+                for (int i = 0; i < actions.length; i++) ...<Widget>[
+                  if (i > 0) const SizedBox(width: AppSpacing.s8),
+                  actions[i],
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

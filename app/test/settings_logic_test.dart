@@ -204,7 +204,7 @@ void main() {
           apiStatus: ApiStatus(
             telegram: true,
             gemini: true,
-            geminiModel: 'gemini-3.7-flash',
+            geminiModel: 'gemini-3.8-flash',
           ),
         )
         ..putResult = const UserSettings(
@@ -251,7 +251,7 @@ void main() {
       expect(saved?.budget, 20000);
       // Il PUT non restituisce apiStatus: resta quello letto dal GET.
       expect(saved?.apiStatus?.telegram, isTrue);
-      expect(saved?.apiStatus?.geminiModel, 'gemini-3.7-flash');
+      expect(saved?.apiStatus?.geminiModel, 'gemini-3.8-flash');
     });
   });
 

@@ -3,8 +3,7 @@ import 'dart:math' as math;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/semantics.dart' show SemanticsRole;
-import 'package:flutter/services.dart'
-    show KeyDownEvent, KeyEvent, KeyRepeatEvent, LogicalKeyboardKey;
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -22,10 +21,17 @@ import '../../core/models/stock.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/app_callout.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_delta.dart';
+import '../../widgets/app_key_value.dart';
+import '../../widgets/app_market_tag.dart';
+import '../../widgets/app_segmented.dart';
 import '../../widgets/badges.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/range_bar.dart';
 import '../../widgets/skeleton.dart';
+import '../../widgets/stat_card.dart';
 import '../../widgets/toast.dart';
 
 /// Placeholder unico per i dati opzionali mancanti (mai `undefined`/crash).
@@ -41,19 +47,43 @@ const Map<String, String> _timeframes = <String, String>{
   '5A': '5y',
 };
 
-const List<String> _tabLabels = <String>[
-  '📈 Grafico & Dati',
-  '⚡ Indicatori Tecnici',
-  '📊 Fondamentali',
-  '🤖 Analisi AI Gemini',
-];
+/// Etichette accessibili dei timeframe (tooltip del controllo segmentato).
+const Map<String, String> _timeframeTooltips = <String, String>{
+  '1G': 'Ultima giornata',
+  '1S': 'Ultima settimana',
+  '1M': 'Ultimo mese',
+  '6M': 'Ultimi 6 mesi',
+  '1A': 'Ultimo anno',
+  '5A': 'Ultimi 5 anni',
+};
+
+/// Sezioni della scheda titolo (linguaggio Registro: icona Material, niente
+/// emoji nei titoli).
+enum _StockTab {
+  /// Grafico, dati di mercato, indicatori e fondamentali.
+  dettagli(label: 'Dettagli', icon: Icons.show_chart),
+
+  /// Analisi Gemini on-demand.
+  analisi(label: 'Analisi IA', icon: Icons.auto_awesome),
+
+  /// Feed notizie del titolo (non ancora esposto dall'API).
+  notizie(label: 'Notizie', icon: Icons.newspaper);
+
+  const _StockTab({required this.label, required this.icon});
+
+  /// Etichetta del segmento.
+  final String label;
+
+  /// Icona Material del segmento.
+  final IconData icon;
+}
 
 /// Apre la scheda titolo (stock detail) di [ticker].
 ///
-/// Contenitore adattivo: dialog centrato max-width 920 su desktop/web,
-/// bottom-sheet quasi full-height su mobile (<640). [onChanged] viene chiamato
-/// dopo mutazioni che possono interessare la pagina chiamante (es. aggiunta in
-/// Watchlist).
+/// Contenitore adattivo del linguaggio Registro: dialogo centrato (max 720,
+/// raggio 10, ombra ampia) sopra 640px, bottom sheet con maniglia e barra
+/// azioni fissa sotto 640px. [onChanged] viene chiamato dopo mutazioni che
+/// possono interessare la pagina chiamante (es. aggiunta in Watchlist).
 Future<void> showStockDetail(
   BuildContext context,
   String ticker, {
@@ -62,20 +92,22 @@ Future<void> showStockDetail(
   final String normalized = ticker.trim().toUpperCase();
   if (normalized.isEmpty) return Future<void>.value();
 
-  final bool compact = context.isCompact;
-  if (compact) {
+  final AppTokens t = context.tokens;
+  if (context.isCompact) {
     return showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: context.tokens.surface,
-      barrierColor: context.tokens.scrim,
+      backgroundColor: t.surface,
+      barrierColor: t.scrim,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
-          top: Radius.circular(AppRadii.modal),
+          top: Radius.circular(AppRadii.sheet),
         ),
       ),
-      builder: (BuildContext _) => FractionallySizedBox(
-        heightFactor: 0.95,
+      builder: (BuildContext sheetContext) => ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.88,
+        ),
         child: SafeArea(
           top: false,
           child: _EscapePop(
@@ -88,21 +120,37 @@ Future<void> showStockDetail(
 
   return showDialog<void>(
     context: context,
-    barrierColor: context.tokens.scrim,
+    barrierColor: t.scrim,
     builder: (BuildContext dialogContext) => Dialog(
-      backgroundColor: context.tokens.surface,
+      // La superficie (fondo, bordo, ombra ampia) è dipinta dal DecoratedBox:
+      // il Material del Dialog resta trasparente per non sovrapporre ombre.
+      backgroundColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
+      elevation: 0,
       insetPadding: const EdgeInsets.all(24),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.card),
-        side: BorderSide(color: context.tokens.border),
+        borderRadius: BorderRadius.circular(AppRadii.sheet),
       ),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 920,
-          maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.9,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: t.surface,
+          borderRadius: BorderRadius.circular(AppRadii.sheet),
+          border: Border.all(color: t.border),
+          boxShadow: t.shadowLg,
         ),
-        child: _StockDetailModal(ticker: normalized, onChanged: onChanged),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(AppRadii.sheet),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 720,
+              maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.9,
+            ),
+            child: _StockDetailModal(
+              ticker: normalized,
+              onChanged: onChanged,
+            ),
+          ),
+        ),
       ),
     ),
   );
@@ -122,6 +170,28 @@ class _EscapePop extends StatelessWidget {
             Navigator.of(context).maybePop(),
       },
       child: Focus(autofocus: true, child: child),
+    );
+  }
+}
+
+/// Maniglia del bottom sheet: 36×4 su `track`, solo affordance di trascinamento.
+class _SheetHandle extends StatelessWidget {
+  const _SheetHandle();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpacing.s8, bottom: AppSpacing.s2),
+      child: Center(
+        child: Container(
+          width: 36,
+          height: 4,
+          decoration: BoxDecoration(
+            color: context.tokens.track,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -153,11 +223,7 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
   /// Memoria trascurabile (6 serie al massimo per l'apertura del modal).
   final Map<String, List<Candle>> _candleCache = <String, List<Candle>>{};
 
-  int _tabIndex = 0;
-  late final List<FocusNode> _tabFocusNodes = List<FocusNode>.generate(
-    _tabLabels.length,
-    (int index) => FocusNode(debugLabel: 'stock-tab-$index'),
-  );
+  _StockTab _tab = _StockTab.dettagli;
 
   bool _addingToWatchlist = false;
 
@@ -172,14 +238,6 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
     super.initState();
     _loadDetails();
     _loadCandles();
-  }
-
-  @override
-  void dispose() {
-    for (final FocusNode node in _tabFocusNodes) {
-      node.dispose();
-    }
-    super.dispose();
   }
 
   // --- Data loading -------------------------------------------------------
@@ -292,8 +350,8 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
         message: result.message.isNotEmpty
             ? result.message
             : (exists
-                  ? '${widget.ticker} è già nella Watchlist.'
-                  : '${widget.ticker} aggiunto alla Watchlist!'),
+                  ? '${widget.ticker} è già in Mercati.'
+                  : '${widget.ticker} aggiunto a Mercati!'),
         type: exists ? AppToastType.info : AppToastType.success,
       );
       widget.onChanged?.call();
@@ -304,7 +362,7 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
       if (!mounted) return;
       showAppToast(
         context,
-        message: 'Errore durante il salvataggio in Watchlist.',
+        message: 'Errore durante il salvataggio in Mercati.',
         type: AppToastType.error,
       );
     } finally {
@@ -370,26 +428,29 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
 
   @override
   Widget build(BuildContext context) {
+    final bool compact = context.isCompact;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
+        if (compact) const _SheetHandle(),
         _buildHeader(context),
-        _buildTabBar(context),
+        _buildTabStrip(context),
         Flexible(
           child: Scrollbar(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
               child: Semantics(
                 container: true,
                 role: SemanticsRole.tabPanel,
                 child: KeyedSubtree(
-                  key: ValueKey<int>(_tabIndex),
+                  key: ValueKey<_StockTab>(_tab),
                   child: _buildTabPanel(context),
                 ),
               ),
             ),
           ),
         ),
+        if (compact) _buildStickyActions(context),
       ],
     );
   }
@@ -401,39 +462,18 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
         .toUpperCase();
     final String name = (details?.name?.trim().isNotEmpty ?? false)
         ? details!.name!
-        : (_detailsLoading ? 'Caricamento dati...' : widget.ticker);
-
-    final String price = _detailsLoading
-        ? '--'
-        : _currencyText(details?.currentPrice);
-
-    final num? changeAbs = details?.changeAbs;
-    final num? changePercent = details?.changePercent;
-    final List<String> changeParts = <String>[
-      if (changeAbs != null) _signedNumber(changeAbs),
-      if (changePercent != null) '(${formatPercent(changePercent)})',
-    ];
-    final String changeText = changeParts.isEmpty
-        ? _dash
-        : changeParts.join(' ');
-    final bool changeKnown = changeAbs != null || changePercent != null;
-    final Color changeColor = !changeKnown
-        ? t.textSecondary
-        : ((changePercent ?? changeAbs ?? 0) >= 0 ? t.success : t.danger);
+        : (_detailsLoading ? 'Caricamento dati…' : widget.ticker);
+    final bool loaded = !_detailsLoading;
+    final double? changePercent = details?.changePercent?.toDouble();
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(18, 16, 10, 12),
+      padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.borderSubtle)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Text(
-            _flagFor(market),
-            style: const TextStyle(fontSize: 24, height: 1.1),
-          ),
-          const SizedBox(width: AppSpacing.s10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -444,19 +484,35 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
                   runSpacing: AppSpacing.s4,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: <Widget>[
-                    Text(widget.ticker, style: AppText.modalTitle(context)),
-                    AppBadge(
-                      label: market,
-                      tone: market == 'IT' ? BadgeTone.success : BadgeTone.cyan,
+                    Text(
+                      widget.ticker,
+                      style: AppText.mono(
+                        context,
+                        size: 17,
+                        weight: FontWeight.w700,
+                      ),
+                    ),
+                    AppMarketTag.forTicker(
+                      widget.ticker,
+                      market: market,
+                      tooltip: 'Mercato $market',
                     ),
                     if (_heldHolding != null)
                       const AppBadge(
-                        label: '💼 In Portafoglio',
+                        label: 'IN PORTAFOGLIO',
                         tone: BadgeTone.success,
+                        icon: Icon(Icons.work_outline),
+                      ),
+                    if (details?.stale == true)
+                      const AppBadge(
+                        label: 'CACHE',
+                        tone: BadgeTone.warning,
+                        tooltip:
+                            'Prezzo non aggiornato: dato servito dalla cache.',
                       ),
                   ],
                 ),
-                const SizedBox(height: AppSpacing.s2),
+                const SizedBox(height: AppSpacing.s4),
                 Text(
                   name,
                   style: AppText.caption(context),
@@ -471,26 +527,35 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
             crossAxisAlignment: CrossAxisAlignment.end,
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Text(
-                price,
-                style: AppText.mono(context, size: 19, weight: FontWeight.w700),
-              ),
-              const SizedBox(height: AppSpacing.s2),
-              Text(
-                changeText,
-                style: AppText.mono(
-                  context,
-                  size: 12,
-                  weight: FontWeight.w700,
-                  color: changeColor,
+              if (!loaded)
+                const SkeletonBox(width: 88, height: 20)
+              else
+                Text(
+                  _currencyText(details?.currentPrice),
+                  style: AppText.mono(
+                    context,
+                    size: 19,
+                    weight: FontWeight.w700,
+                  ),
                 ),
-              ),
+              const SizedBox(height: AppSpacing.s4),
+              if (!loaded)
+                const SkeletonBox(width: 64, height: 12)
+              else if (changePercent != null)
+                AppDelta(
+                  value: changePercent,
+                  suffix: '%',
+                  size: 12.5,
+                  semanticsLabel: 'Variazione odierna',
+                )
+              else
+                Text(_dash, style: AppText.delta(context)),
             ],
           ),
           AppIconButton(
             icon: const Icon(Icons.close),
             tooltip: 'Chiudi finestra',
-            semanticLabel: 'Chiudi finestra',
+            semanticLabel: 'Chiudi la scheda titolo',
             bordered: false,
             onPressed: () => Navigator.of(context).pop(),
           ),
@@ -499,93 +564,272 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
     );
   }
 
-  Widget _buildTabBar(BuildContext context) {
+  Widget _buildTabStrip(BuildContext context) {
     final AppTokens t = context.tokens;
+    final bool compact = context.isCompact;
     return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: compact ? AppSpacing.s8 : AppSpacing.s10,
+      ),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.border)),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: AppSpacing.s12),
-        child: Semantics(
-          container: true,
-          role: SemanticsRole.tabBar,
-          child: Row(
-            children: <Widget>[
-              for (int index = 0; index < _tabLabels.length; index++)
-                _StockTabButton(
-                  label: _tabLabels[index],
-                  selected: _tabIndex == index,
-                  focusNode: _tabFocusNodes[index],
-                  onTap: () => setState(() => _tabIndex = index),
-                  onKeyEvent: (KeyEvent event) => _onTabKey(index, event),
-                ),
-            ],
-          ),
-        ),
+      child: AppSegmented<_StockTab>(
+        expand: true,
+        dense: compact,
+        selected: _tab,
+        semanticsLabel: 'Sezioni della scheda titolo',
+        onSelected: (_StockTab value) => setState(() => _tab = value),
+        segments: <AppSegment<_StockTab>>[
+          for (final _StockTab tab in _StockTab.values)
+            AppSegment<_StockTab>(
+              value: tab,
+              label: tab.label,
+              icon: tab.icon,
+            ),
+        ],
       ),
     );
   }
 
-  KeyEventResult _onTabKey(int index, KeyEvent event) {
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
-    }
-    final LogicalKeyboardKey key = event.logicalKey;
-    int? next;
-    if (key == LogicalKeyboardKey.arrowRight) {
-      next = (index + 1) % _tabLabels.length;
-    } else if (key == LogicalKeyboardKey.arrowLeft) {
-      next = (index - 1 + _tabLabels.length) % _tabLabels.length;
-    } else if (key == LogicalKeyboardKey.home) {
-      next = 0;
-    } else if (key == LogicalKeyboardKey.end) {
-      next = _tabLabels.length - 1;
-    }
-    if (next == null) return KeyEventResult.ignored;
-    setState(() => _tabIndex = next!);
-    _tabFocusNodes[next].requestFocus();
-    return KeyEventResult.handled;
-  }
-
   Widget _buildTabPanel(BuildContext context) {
-    return switch (_tabIndex) {
-      0 => _buildChartTab(context),
-      1 => _buildTechnicalsTab(context),
-      2 => _buildFundamentalsTab(context),
-      _ => _buildAiTab(context),
+    return switch (_tab) {
+      _StockTab.dettagli => _buildDettagliTab(context),
+      _StockTab.analisi => _buildAnalisiTab(context),
+      _StockTab.notizie => _buildNotizieTab(context),
     };
   }
 
-  // --- Tab 1: chart & data ------------------------------------------------
+  // --- Tab 1: dettagli ----------------------------------------------------
 
-  Widget _buildChartTab(BuildContext context) {
+  Widget _buildDettagliTab(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final StockDetails? details = _details;
+    final TechnicalIndicators? tech = details?.technical;
+    final Holding? held = _heldHolding;
+    final double? low = details?.fiftyTwoWeekLow;
+    final double? high = details?.fiftyTwoWeekHigh;
+    final num? rawPct = details?.fiftyTwoWeekPct;
+    final double position = (rawPct == null || !rawPct.isFinite)
+        ? 50
+        : rawPct.toDouble().clamp(0, 100).toDouble();
+    final double? dividendYield = details?.dividendYield;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        if (held != null) ...<Widget>[
+          _HeldPositionCallout(holding: held),
+          const SizedBox(height: AppSpacing.s12),
+        ],
+        _buildChartCard(context),
+        if (!context.isCompact) ...<Widget>[
+          const SizedBox(height: AppSpacing.s10),
+          _buildActions(context),
+        ],
+        const SizedBox(height: AppSpacing.s12),
+        if (_detailsLoading) ...<Widget>[
+          const _AdaptiveSplit(
+            left: SkeletonCard(height: 150),
+            right: SkeletonCard(height: 150),
+          ),
+          const SizedBox(height: AppSpacing.s12),
+          const _AdaptiveSplit(
+            left: SkeletonCard(height: 176),
+            right: SkeletonCard(height: 176),
+          ),
+        ] else ...<Widget>[
+          _AdaptiveSplit(
+            left: _InfoCard(
+              title: 'Indicatori tecnici',
+              icon: Icons.speed,
+              children: <Widget>[
+                AppKeyValue(
+                  label: 'RSI (14)',
+                  value: _numberText(tech?.rsi14),
+                  trailing: AppBadge(
+                    label: (tech?.rsiStatus?.isNotEmpty ?? false)
+                        ? tech!.rsiStatus!
+                        : 'Neutro',
+                    tone: _rsiTone(tech?.rsiBadge),
+                  ),
+                ),
+                AppKeyValue(
+                  label: 'SMA 20',
+                  value: _currencyText(tech?.sma20),
+                ),
+                AppKeyValue(
+                  label: 'SMA 50',
+                  value: _currencyText(tech?.sma50),
+                ),
+                AppKeyValue(
+                  label: 'Trend',
+                  value: (tech?.trend?.isNotEmpty ?? false)
+                      ? tech!.trend!
+                      : 'Neutro',
+                  divider: false,
+                  valueColor: t.primary,
+                ),
+              ],
+            ),
+            right: AppCard(
+              dense: true,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  const AppCardHeader(
+                    title: 'Range 52 settimane',
+                    icon: Icons.straighten,
+                  ),
+                  const SizedBox(height: AppSpacing.s10),
+                  RangeBar(
+                    positionPercent: position,
+                    lowLabel: 'Min: ${_currencyText(low)}',
+                    highLabel: 'Max: ${_currencyText(high)}',
+                    showPosition: true,
+                    minWidth: 180,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.s12),
+          _AdaptiveSplit(
+            left: _InfoCard(
+              title: 'Dati di mercato',
+              icon: Icons.bar_chart,
+              children: <Widget>[
+                AppKeyValue(
+                  label: 'Prezzo prec.',
+                  value: _currencyText(details?.previousClose),
+                ),
+                AppKeyValue(
+                  label: 'Variazione',
+                  valueWidget: (details?.changePercent == null)
+                      ? null
+                      : AppDelta(
+                          value: details!.changePercent!.toDouble(),
+                          suffix: '%',
+                          size: 13,
+                          semanticsLabel: 'Variazione odierna',
+                        ),
+                ),
+                AppKeyValue(
+                  label: 'Min giorno',
+                  value: _currencyText(details?.dayLow),
+                ),
+                AppKeyValue(
+                  label: 'Max giorno',
+                  value: _currencyText(details?.dayHigh),
+                ),
+                AppKeyValue(
+                  label: 'Volume',
+                  value: _compactText(details?.volume),
+                ),
+                AppKeyValue(
+                  label: 'Volume medio',
+                  value: _compactText(details?.avgVolume),
+                  divider: false,
+                ),
+              ],
+            ),
+            right: _InfoCard(
+              title: 'Fondamentali',
+              icon: Icons.account_balance,
+              children: <Widget>[
+                AppKeyValue(
+                  label: 'Capitalizzazione',
+                  value: _compactText(details?.marketCap),
+                ),
+                AppKeyValue(
+                  label: 'P/E (trailing)',
+                  value: _numberText(details?.peRatio),
+                ),
+                AppKeyValue(
+                  label: 'EPS',
+                  value: _currencyText(details?.eps),
+                ),
+                AppKeyValue(
+                  label: 'Beta',
+                  value: _numberText(details?.beta),
+                ),
+                AppKeyValue(
+                  label: 'Dividend yield',
+                  value: dividendYield == null
+                      ? '$_dash%'
+                      : '${_numberText(dividendYield)}%',
+                ),
+                AppKeyValue(
+                  label: 'Settore',
+                  value: (details?.sector?.trim().isNotEmpty ?? false)
+                      ? details!.sector!
+                      : _dash,
+                ),
+                AppKeyValue(
+                  label: 'Industria',
+                  value: (details?.industry?.trim().isNotEmpty ?? false)
+                      ? details!.industry!
+                      : _dash,
+                  divider: false,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.s12),
+          AppCard(
+            dense: true,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const AppCardHeader(
+                  title: 'Descrizione',
+                  icon: Icons.notes,
+                  dense: true,
+                ),
+                const SizedBox(height: AppSpacing.s8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 132),
+                  child: SingleChildScrollView(
+                    child: Text(
+                      (details?.summary?.trim().isNotEmpty ?? false)
+                          ? details!.summary!
+                          : 'Nessuna descrizione disponibile.',
+                      style: AppText.small(context),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  /// Card del grafico: controlli, tela del chart e legenda.
+  Widget _buildChartCard(BuildContext context) {
     final AppTokens t = context.tokens;
     final AppChartPalette palette = t.chart;
-    final double chartHeight = context.isCompact ? 240 : 320;
+    final bool compact = context.isCompact;
+    final double chartHeight = compact ? 240 : 320;
     final double volumeHeight = chartHeight * 0.22;
-    // Il padding verticale del box (10 sopra + 4 sotto) va sottratto: le due
-    // altezze interne più il gap devono entrare nello spazio utile, altrimenti
-    // la Column interna overflowa di 14px.
-    const double chartPaddingVertical = 10 + 4;
-    final double priceHeight = chartHeight -
-        volumeHeight -
-        AppSpacing.s6 -
-        chartPaddingVertical;
+    // Il prezzo occupa l'altezza residua sopra il volume e il gap tra i due.
+    final double priceHeight =
+        chartHeight - volumeHeight - AppSpacing.s6;
     final bool intraday = _timeframe == '1G' || _timeframe == '1S';
 
     final Widget chart;
     if (_candlesLoading && _candles.isEmpty) {
-      chart = Center(child: AppSpinner());
+      chart = const Center(child: AppSpinner());
     } else if (_candles.isEmpty) {
-      chart = Center(
-        child: Text(
-          _candlesFailed
-              ? 'Dati non disponibili per questo intervallo.'
-              : 'Nessun dato disponibile.',
-          style: AppText.caption(context),
-        ),
+      chart = EmptyState(
+        icon: const Icon(Icons.show_chart),
+        message: _candlesFailed
+            ? 'Dati non disponibili per questo intervallo.'
+            : 'Nessun dato disponibile.',
       );
     } else {
       chart = _ChartView(
@@ -599,87 +843,51 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        if (context.isCompact)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              _timeframeControls(context),
-              const SizedBox(height: AppSpacing.s8),
-              _chartActions(context),
-            ],
-          )
-        else
-          Row(
-            children: <Widget>[
-              Expanded(child: _timeframeControls(context)),
-              const SizedBox(width: AppSpacing.s8),
-              _chartActions(context),
-            ],
-          ),
-        const SizedBox(height: AppSpacing.s12),
-        SizedBox(
-          height: chartHeight,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: t.surfaceHover,
-              borderRadius: BorderRadius.circular(AppRadii.heatmap),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(6, 10, 10, 4),
-              child: chart,
-            ),
-          ),
-        ),
-        const SizedBox(height: AppSpacing.s8),
-        SizedBox(
-          width: double.infinity,
-          child: Wrap(
-            alignment: WrapAlignment.spaceBetween,
-            spacing: AppSpacing.s12,
-            runSpacing: AppSpacing.s4,
-            children: <Widget>[
-              if (_heldHolding != null)
-                Text(
-                  '🟠 Linea Tratteggiata: Prezzo Medio Carico Portafoglio',
-                  style: AppText.caption(context),
-                ),
-              Text(
-                'Volumi visualizzati in basso',
-                style: AppText.caption(context),
-              ),
-            ],
-          ),
-        ),
-      ],
+    return AppCard(
+      padding: const EdgeInsets.all(AppSpacing.s12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _buildTimeframeControls(context),
+          const SizedBox(height: AppSpacing.s10),
+          // Il grafico sta sulla superficie del pannello: le candele rialziste
+          // "vuote" (`candleUpFill` = superficie) restano leggibili come
+          // contorni anche senza colore.
+          SizedBox(height: chartHeight, child: chart),
+          const SizedBox(height: AppSpacing.s8),
+          _buildChartLegend(context),
+        ],
+      ),
     );
   }
 
-  Widget _timeframeControls(BuildContext context) {
+  Widget _buildTimeframeControls(BuildContext context) {
     return Wrap(
       spacing: AppSpacing.s6,
       runSpacing: AppSpacing.s6,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: <Widget>[
         for (final String label in _timeframes.keys)
           AppPill(
             label: label,
             selected: _timeframe == label,
+            tooltip: _timeframeTooltips[label],
             onPressed: () {
               if (_timeframe == label) return;
               setState(() => _timeframe = label);
               _loadCandles();
             },
           ),
-        const SizedBox(width: AppSpacing.s2),
+        const SizedBox(width: AppSpacing.s4),
         AppPill(
-          label: '📈 Area',
+          label: 'Area',
+          icon: const Icon(Icons.show_chart),
           selected: !_candleMode,
           onPressed: () => setState(() => _candleMode = false),
         ),
         AppPill(
-          label: '📊 Candele',
+          label: 'Candele',
+          icon: const Icon(Icons.candlestick_chart),
           selected: _candleMode,
           onPressed: () => setState(() => _candleMode = true),
         ),
@@ -687,22 +895,50 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
     );
   }
 
-  Widget _chartActions(BuildContext context) {
+  Widget _buildChartLegend(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final bool hasAvg = (_heldHolding?.avgPurchasePrice ?? 0) > 0;
     return Wrap(
+      alignment: WrapAlignment.spaceBetween,
+      spacing: AppSpacing.s12,
+      runSpacing: AppSpacing.s4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: <Widget>[
+        if (hasAvg)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              _DashedSwatch(color: t.chart.breakeven),
+              const SizedBox(width: AppSpacing.s6),
+              Text(
+                'Prezzo medio di carico',
+                style: AppText.caption(context),
+              ),
+            ],
+          ),
+        Text('Volumi in basso', style: AppText.caption(context)),
+      ],
+    );
+  }
+
+  Widget _buildActions(BuildContext context) {
+    return Wrap(
+      alignment: WrapAlignment.end,
       spacing: AppSpacing.s8,
       runSpacing: AppSpacing.s8,
       children: <Widget>[
         AppButton(
-          label: '⭐ Salva in Watchlist',
+          label: 'Salva in Mercati',
+          icon: const Icon(Icons.bookmark_add_outlined),
           variant: AppButtonVariant.ghost,
           size: AppButtonSize.sm,
           loading: _addingToWatchlist,
-          loadingLabel: 'Salvataggio...',
+          loadingLabel: 'Salvataggio…',
           onPressed: _addingToWatchlist ? null : _addToWatchlist,
         ),
         AppButton(
-          label: '➕ Aggiungi al Portafoglio',
-          variant: AppButtonVariant.primary,
+          label: 'Aggiungi al portafoglio',
+          icon: const Icon(Icons.add),
           size: AppButtonSize.sm,
           onPressed: _addToPortfolio,
         ),
@@ -710,77 +946,47 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
     );
   }
 
-  // --- Tab 2: technicals --------------------------------------------------
-
-  Widget _buildTechnicalsTab(BuildContext context) {
+  /// Barra azioni fissa in fondo al bottom sheet (<640px).
+  Widget _buildStickyActions(BuildContext context) {
     final AppTokens t = context.tokens;
-    final TechnicalIndicators? tech = _details?.technical;
-    final double? low = _details?.fiftyTwoWeekLow;
-    final double? high = _details?.fiftyTwoWeekHigh;
-    final num? rawPct = _details?.fiftyTwoWeekPct;
-    final double position = (rawPct == null || !rawPct.isFinite)
-        ? 50
-        : rawPct.toDouble().clamp(0, 100).toDouble();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        _MetricGrid(
-          desktopColumns: 4,
-          cards: <Widget>[
-            _MetricCard(
-              label: 'RSI (14 Periodi)',
-              value: _numberText(tech?.rsi14),
-              badge: AppBadge(
-                label: (tech?.rsiStatus?.isNotEmpty ?? false)
-                    ? tech!.rsiStatus!
-                    : 'Neutro',
-                tone: _rsiTone(tech?.rsiBadge),
-              ),
-            ),
-            _MetricCard(
-              label: 'Media Mobile 20 (SMA 20)',
-              value: _currencyText(tech?.sma20),
-              subtitle: 'Trend breve termine',
-            ),
-            _MetricCard(
-              label: 'Media Mobile 50 (SMA 50)',
-              value: _currencyText(tech?.sma50),
-              subtitle: 'Trend medio termine',
-            ),
-            _MetricCard(
-              label: 'Configurazione Trend',
-              value: (tech?.trend?.isNotEmpty ?? false)
-                  ? tech!.trend!
-                  : 'Neutro',
-              valueColor: t.primary,
-            ),
-          ],
-        ),
-        const SizedBox(height: AppSpacing.s14),
-        AppCard(
-          subtle: true,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+    return Container(
+      decoration: BoxDecoration(
+        color: t.surface,
+        border: Border(top: BorderSide(color: t.border)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          child: Row(
             children: <Widget>[
-              Text(
-                'RANGE 52 SETTIMANE',
-                style: AppText.sectionLabel(context)
-                    .copyWith(color: t.textMuted, fontWeight: FontWeight.w700),
+              Expanded(
+                child: AppButton(
+                  label: 'Mercati',
+                  icon: const Icon(Icons.bookmark_add_outlined),
+                  variant: AppButtonVariant.ghost,
+                  size: AppButtonSize.md,
+                  loading: _addingToWatchlist,
+                  loadingLabel: 'Salvataggio…',
+                  tooltip: '${widget.ticker} in Mercati',
+                  onPressed: _addingToWatchlist ? null : _addToWatchlist,
+                ),
               ),
-              const SizedBox(height: AppSpacing.s10),
-              RangeBar(
-                positionPercent: position,
-                lowLabel: 'Min: ${_currencyText(low)}',
-                highLabel: 'Max: ${_currencyText(high)}',
-                showPosition: true,
-                minWidth: 200,
+              const SizedBox(width: AppSpacing.s8),
+              Expanded(
+                child: AppButton(
+                  label: 'Portafoglio',
+                  icon: const Icon(Icons.add),
+                  size: AppButtonSize.md,
+                  semanticLabel: 'Aggiungi ${widget.ticker} al portafoglio',
+                  tooltip: 'Aggiungi al portafoglio',
+                  onPressed: _addToPortfolio,
+                ),
               ),
             ],
           ),
         ),
-      ],
+      ),
     );
   }
 
@@ -794,362 +1000,230 @@ class _StockDetailModalState extends ConsumerState<_StockDetailModal> {
     };
   }
 
-  // --- Tab 3: fundamentals ------------------------------------------------
+  // --- Tab 2: analisi IA --------------------------------------------------
 
-  Widget _buildFundamentalsTab(BuildContext context) {
-    final StockDetails? details = _details;
-    final num? dividendYield = details?.dividendYield;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        _MetricGrid(
-          desktopColumns: 3,
-          cards: <Widget>[
-            _MetricCard(
-              label: 'Capitalizzazione',
-              value: _compactText(details?.marketCap),
-            ),
-            _MetricCard(
-              label: 'P/E Ratio (Trailing)',
-              value: _numberText(details?.peRatio),
-            ),
-            _MetricCard(
-              label: 'EPS (Utile per Azione)',
-              value: _currencyText(details?.eps),
-            ),
-            _MetricCard(
-              label: 'Beta (Volatilità)',
-              value: _numberText(details?.beta),
-            ),
-            _MetricCard(
-              label: 'Dividend Yield',
-              value: dividendYield == null
-                  ? '$_dash%'
-                  : '${_numberText(dividendYield)}%',
-            ),
-            _MetricCard(
-              label: 'Volume Medio',
-              value: _compactText(details?.avgVolume ?? details?.volume),
-            ),
-          ],
-        ),
-        const SizedBox(height: AppSpacing.s14),
-        AppCard(
-          subtle: true,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 120),
-            child: SingleChildScrollView(
-              child: Text(
-                (details?.summary?.trim().isNotEmpty ?? false)
-                    ? details!.summary!
-                    : 'Nessuna descrizione disponibile.',
-                style: AppText.small(context),
-              ),
+  Widget _buildAnalisiTab(BuildContext context) {
+    if (_aiResult != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _buildAiToolbar(context),
+          const SizedBox(height: AppSpacing.s12),
+          _AiResultView(
+            analysis: _aiResult!,
+            currency: _currency,
+            holdingCurrency: _heldHolding?.currency ?? _currency,
+          ),
+        ],
+      );
+    }
+
+    if (_aiLoading) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: const <Widget>[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: SkeletonLine(width: 190),
+          ),
+          SizedBox(height: AppSpacing.s14),
+          SkeletonCard(height: 96),
+          SizedBox(height: AppSpacing.s12),
+          SkeletonCard(height: 170),
+        ],
+      );
+    }
+
+    if (_aiError != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          AppCallout(
+            tone: AppCalloutTone.danger,
+            accent: true,
+            icon: const Icon(Icons.error_outline),
+            body:
+                "Impossibile completare l'analisi per ${widget.ticker}: $_aiError",
+            liveRegion: true,
+          ),
+          const SizedBox(height: AppSpacing.s10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: AppButton(
+              label: 'Riprova',
+              icon: const Icon(Icons.refresh),
+              variant: AppButtonVariant.ghost,
+              size: AppButtonSize.sm,
+              onPressed: _runAi,
             ),
           ),
+        ],
+      );
+    }
+
+    return EmptyState(
+      icon: const Icon(Icons.auto_awesome),
+      title: 'Analisi Gemini 3.8 Flash',
+      message:
+          'Interroga il modello su fondamentali, indicatori tecnici, '
+          'catalizzatori e posizione in portafoglio.',
+      actions: <Widget>[
+        AppButton(
+          label: 'Elabora analisi',
+          icon: const Icon(Icons.auto_awesome),
+          size: AppButtonSize.sm,
+          onPressed: _runAi,
         ),
       ],
     );
   }
 
-  // --- Tab 4: AI analysis -------------------------------------------------
-
-  Widget _buildAiTab(BuildContext context) {
-    final AppTokens t = context.tokens;
-    final Widget body;
-    if (_aiLoading) {
-      body = AppCard(
-        subtle: true,
-        child: const SizedBox(height: 140, child: Center(child: AppSpinner())),
-      );
-    } else if (_aiError != null) {
-      body = StockDetailCallout(
-        background: t.dangerBg,
-        borderColor: t.dangerBorder,
-        child: Text(
-          "Impossibile completare l'analisi per ${widget.ticker}: $_aiError",
-          textAlign: TextAlign.center,
-          style: AppText.small(context).copyWith(color: t.danger),
-        ),
-      );
-    } else if (_aiResult != null) {
-      body = _AiResultView(
-        analysis: _aiResult!,
-        currency: _currency,
-        holdingCurrency: _heldHolding?.currency ?? _currency,
-      );
-    } else {
-      body = AppCard(
-        subtle: true,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: AppSpacing.s24),
+  Widget _buildAiToolbar(BuildContext context) {
+    return Row(
+      children: <Widget>[
+        Expanded(
           child: Text(
-            'Clicca "Elabora Analisi Ora" per interrogare l\'IA su '
-            'fondamentali, indicatori tecnici, catalizzatori e posizione '
-            'in portafoglio.',
-            textAlign: TextAlign.center,
+            'Analisi Gemini 3.8 Flash',
             style: AppText.caption(context),
+            overflow: TextOverflow.ellipsis,
           ),
         ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: <Widget>[
-        Row(
-          children: <Widget>[
-            Expanded(
-              child: Text(
-                '🧠 Analisi Istantanea Gemini 3.7 Flash',
-                style: AppText.cardTitle(context).copyWith(color: t.primary),
-              ),
-            ),
-            const SizedBox(width: AppSpacing.s10),
-            AppButton(
-              label: _aiAttempted
-                  ? '⚡ Rielabora Analisi'
-                  : '⚡ Elabora Analisi Ora',
-              variant: AppButtonVariant.primary,
-              size: AppButtonSize.sm,
-              loading: _aiLoading,
-              loadingLabel: 'Analisi in corso...',
-              onPressed: _aiLoading ? null : _runAi,
-            ),
-          ],
+        const SizedBox(width: AppSpacing.s10),
+        AppButton(
+          label: _aiAttempted ? 'Rielabora' : 'Elabora analisi',
+          icon: const Icon(Icons.refresh),
+          variant: AppButtonVariant.ghost,
+          size: AppButtonSize.sm,
+          loading: _aiLoading,
+          loadingLabel: 'Analisi…',
+          onPressed: _aiLoading ? null : _runAi,
         ),
-        const SizedBox(height: AppSpacing.s12),
-        body,
       ],
+    );
+  }
+
+  // --- Tab 3: notizie -----------------------------------------------------
+
+  /// Il backend non espone (ancora) un feed notizie per il titolo: la sezione
+  /// resta uno stato vuoto esplicito, senza inventare dati. Quando `news`
+  /// arriverà nel deep dive basterà sostituire [EmptyState] con le righe
+  /// `AppKeyValue` (titolo + tag fonte).
+  Widget _buildNotizieTab(BuildContext context) {
+    return const EmptyState(
+      icon: Icon(Icons.newspaper),
+      title: 'Notizie',
+      message:
+          'Il feed notizie non è ancora collegato a questo ambiente. '
+          'Quando sarà disponibile, le notizie del titolo compariranno qui '
+          'con la fonte.',
     );
   }
 }
 
 // --- Reusable modal pieces -------------------------------------------------
 
-class _StockTabButton extends StatefulWidget {
-  const _StockTabButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-    this.focusNode,
-    this.onKeyEvent,
-  });
+/// Posizione detenuta, in testa alla sezione Dettagli: righe da registro
+/// (quantità, carico medio, P&L) con striscia d'accento sul segno del P&L.
+class _HeldPositionCallout extends StatelessWidget {
+  const _HeldPositionCallout({required this.holding});
 
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  final FocusNode? focusNode;
-  final KeyEventResult Function(KeyEvent event)? onKeyEvent;
-
-  @override
-  State<_StockTabButton> createState() => _StockTabButtonState();
-}
-
-class _StockTabButtonState extends State<_StockTabButton> {
-  bool _focused = false;
-
-  void _handleTap() {
-    // Anche il click sposta il focus sulla tab (pattern roving tabindex).
-    widget.focusNode?.requestFocus();
-    widget.onTap();
-  }
+  final Holding holding;
 
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
-    final bool selected = widget.selected;
-    final Color foreground = selected ? t.primary : t.textSecondary;
-    return Semantics(
-      container: true,
-      role: SemanticsRole.tab,
-      selected: selected,
-      button: true,
-      child: Focus(
-        focusNode: widget.focusNode,
-        // Roving tabindex: solo la tab selezionata è raggiungibile con Tab.
-        // Le altre restano focusabili via frecce/Home/End (requestFocus
-        // programmatico, che skipTraversal non blocca).
-        skipTraversal: !selected,
-        onFocusChange: (bool value) => setState(() => _focused = value),
-        onKeyEvent: (FocusNode _, KeyEvent event) =>
-            widget.onKeyEvent?.call(event) ?? KeyEventResult.ignored,
-        child: InkWell(
-          onTap: _handleTap,
-          // Il nodo di focus è quello esterno: l'InkWell non deve creare un
-          // secondo tab stop.
-          canRequestFocus: false,
-          hoverColor: t.surfaceHover,
-          borderRadius: BorderRadius.circular(AppRadii.small),
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: AppSpacing.s12,
-              vertical: AppSpacing.s10,
-            ),
-            decoration: BoxDecoration(
-              color: _focused ? t.primaryGlow : null,
-              border: Border(
-                bottom: BorderSide(
-                  color: selected ? t.primary : Colors.transparent,
-                  width: 2,
-                ),
-              ),
-            ),
-            child: Text(
-              widget.label,
-              style: AppText.button(context).copyWith(
-                color: foreground,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MetricGrid extends StatelessWidget {
-  const _MetricGrid({required this.cards, this.desktopColumns = 4});
-
-  final List<Widget> cards;
-  final int desktopColumns;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (BuildContext context, BoxConstraints constraints) {
-        final int columns = constraints.maxWidth >= 760 ? desktopColumns : 2;
-        const double gap = AppSpacing.s10;
-        final double itemWidth =
-            (constraints.maxWidth - gap * (columns - 1)) / columns;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: <Widget>[
-            for (final Widget card in cards)
-              SizedBox(width: itemWidth, child: card),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _MetricCard extends StatelessWidget {
-  const _MetricCard({
-    required this.label,
-    required this.value,
-    this.subtitle,
-    this.badge,
-    this.valueColor,
-  });
-
-  final String label;
-  final String value;
-  final String? subtitle;
-  final Widget? badge;
-  final Color? valueColor;
-
-  @override
-  Widget build(BuildContext context) {
-    final AppTokens t = context.tokens;
-    return AppCard(
-      subtle: true,
-      padding: const EdgeInsets.all(AppSpacing.s12),
+    final bool up = holding.pnlPercent >= 0;
+    return AppCallout(
+      accent: true,
+      accentColor: up ? t.success : t.danger,
+      padding: const EdgeInsets.all(AppSpacing.s10),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(
-            label,
-            style: AppText.sectionLabel(context).copyWith(color: t.textMuted),
+          Row(
+            children: <Widget>[
+              Icon(
+                Icons.work_outline,
+                size: AppSizes.iconSm,
+                color: t.textSecondary,
+              ),
+              const SizedBox(width: AppSpacing.s6),
+              Expanded(
+                child: Text(
+                  'Posizione in portafoglio',
+                  style: AppText.microFor(t),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s8),
+              AppDelta(
+                value: holding.pnlPercent.toDouble(),
+                suffix: '%',
+                size: 12.5,
+                semanticsLabel: 'P&L in percentuale',
+              ),
+            ],
           ),
           const SizedBox(height: AppSpacing.s6),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: AppText.mono(
-              context,
-              size: 18,
-              weight: FontWeight.w700,
-              color: valueColor,
-            ),
+          AppKeyValue(
+            label: 'Quantità',
+            value: NumberFormat('#,##0.####', 'it_IT').format(holding.quantity),
+            dense: true,
           ),
-          if (badge != null)
-            Padding(
-              padding: const EdgeInsets.only(top: AppSpacing.s8),
-              child: badge,
+          AppKeyValue(
+            label: 'Carico medio',
+            value: formatCurrency(
+              holding.avgPurchasePrice,
+              currency: holding.currency,
             ),
-          if (subtitle != null)
-            Padding(
-              padding: const EdgeInsets.only(top: AppSpacing.s4),
-              child: Text(subtitle!, style: AppText.caption(context)),
+            dense: true,
+          ),
+          AppKeyValue(
+            label: 'P&L',
+            value: formatCurrency(
+              holding.pnlAbsolute,
+              currency: holding.currency,
             ),
+            dense: false,
+            valueColor: up ? t.successText : t.danger,
+          ),
         ],
       ),
     );
   }
 }
 
-/// Callout della scheda titolo (`.callout`, `.callout-accent`, `.callout-*`).
-///
-/// Pubblica per i widget test (`border_paint_test.dart`): l'accent sinistro è
-/// una striscia clippata su [Stack] (un [Border] asimmetrico non è compatibile
-/// con `borderRadius`).
-class StockDetailCallout extends StatelessWidget {
-  const StockDetailCallout({
-    super.key,
-    required this.child,
-    required this.background,
-    required this.borderColor,
-    this.accentColor,
+/// Pannello informativo a righe etichetta/valore (dati, fondamentali).
+class _InfoCard extends StatelessWidget {
+  const _InfoCard({
+    required this.title,
+    required this.icon,
+    required this.children,
   });
 
-  final Widget child;
-  final Color background;
-  final Color borderColor;
-  final Color? accentColor;
+  final String title;
+  final IconData icon;
+  final List<Widget> children;
 
   @override
   Widget build(BuildContext context) {
-    if (accentColor == null) {
-      return Container(
-        padding: const EdgeInsets.all(AppSpacing.s10),
-        decoration: BoxDecoration(
-          color: background,
-          border: Border.all(color: borderColor),
-          borderRadius: BorderRadius.circular(AppRadii.input),
-        ),
-        child: child,
-      );
-    }
-    // Accent sinistro come striscia clippata su Stack: un Border con lati di
-    // colori diversi non è compatibile con borderRadius (assert a ogni paint).
-    return Container(
-      decoration: BoxDecoration(
-        color: background,
-        border: Border.all(color: borderColor),
-        borderRadius: BorderRadius.circular(AppRadii.input),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Stack(
+    return AppCard(
+      dense: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Padding(padding: const EdgeInsets.all(AppSpacing.s10), child: child),
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 3,
-            child: ColoredBox(color: accentColor!),
-          ),
+          AppCardHeader(title: title, icon: icon),
+          const SizedBox(height: AppSpacing.s8),
+          ...children,
         ],
       ),
     );
   }
 }
 
+/// Spezza i contenuti in due colonne sopra 560px, altrimenti li impila.
 class _AdaptiveSplit extends StatelessWidget {
   const _AdaptiveSplit({required this.left, required this.right});
 
@@ -1183,6 +1257,8 @@ class _AdaptiveSplit extends StatelessWidget {
   }
 }
 
+// --- AI result --------------------------------------------------------------
+
 class _AiResultView extends StatelessWidget {
   const _AiResultView({
     required this.analysis,
@@ -1199,6 +1275,7 @@ class _AiResultView extends StatelessWidget {
     final AppTokens t = context.tokens;
     final HoldingContext? holding = analysis.holdingContext;
     final double? upside = analysis.upsidePotentialPct;
+    final String? verdict = analysis.technicalVerdict;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1210,207 +1287,143 @@ class _AiResultView extends StatelessWidget {
               label: _actionLabel(analysis),
               tone: _actionTone(analysis.action),
             ),
-            const Spacer(),
-            Text.rich(
-              TextSpan(
-                text: 'Confidenza: ',
-                children: <InlineSpan>[
-                  TextSpan(
-                    text: (analysis.confidence?.isNotEmpty ?? false)
-                        ? analysis.confidence!
-                        : 'MEDIA',
-                    style: TextStyle(
-                      color: t.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const TextSpan(text: ' • Orizzonte: '),
-                  TextSpan(
-                    text: (analysis.timeframe?.isNotEmpty ?? false)
-                        ? analysis.timeframe!
-                        : 'Medio Termine',
-                    style: TextStyle(
-                      color: t.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
+            const SizedBox(width: AppSpacing.s10),
+            Expanded(
+              child: Text(
+                'Confidenza: ${(analysis.confidence?.isNotEmpty ?? false) ? analysis.confidence! : 'MEDIA'}'
+                ' · Orizzonte: ${(analysis.timeframe?.isNotEmpty ?? false) ? analysis.timeframe! : 'Medio termine'}',
+                textAlign: TextAlign.right,
+                style: AppText.caption(context),
               ),
-              textAlign: TextAlign.right,
-              style: AppText.caption(context),
             ),
           ],
         ),
         if (holding != null) ...<Widget>[
-          const SizedBox(height: AppSpacing.s10),
-          StockDetailCallout(
-            background: t.primaryGlow,
-            borderColor: t.primary,
-            accentColor: t.primary,
+          const SizedBox(height: AppSpacing.s12),
+          AppCallout(
+            tone: AppCalloutTone.info,
+            accent: true,
+            padding: const EdgeInsets.all(AppSpacing.s10),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Text(
-                  '💼 Posizione nel tuo Portafoglio',
-                  style: AppText.caption(context)
-                      .copyWith(color: t.primary, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: AppSpacing.s4),
-                Wrap(
-                  alignment: WrapAlignment.spaceBetween,
-                  spacing: AppSpacing.s12,
-                  runSpacing: AppSpacing.s4,
+                Row(
                   children: <Widget>[
-                    Text.rich(
-                      TextSpan(
-                        text: 'Possiedi: ',
-                        children: <InlineSpan>[
-                          TextSpan(
-                            text: NumberFormat(
-                              '#,##0.##',
-                              'it_IT',
-                            ).format(holding.quantity),
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const TextSpan(text: ' azioni a carico '),
-                          TextSpan(
-                            text: formatCurrency(
-                              holding.avgPurchasePrice,
-                              currency: holdingCurrency,
-                            ),
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                        ],
-                      ),
-                      style: AppText.mono(context, size: 12),
+                    Icon(
+                      Icons.work_outline,
+                      size: AppSizes.iconSm,
+                      color: t.primary,
                     ),
-                    Text(
-                      'P&L: ${formatCurrency(holding.currentPnlAbs, currency: holdingCurrency)} '
-                      '(${formatPercent(holding.currentPnlPct)})',
-                      style: AppText.mono(
-                        context,
-                        size: 12,
-                        weight: FontWeight.w700,
-                        color: holding.currentPnlPct >= 0
-                            ? t.success
-                            : t.danger,
+                    const SizedBox(width: AppSpacing.s6),
+                    Expanded(
+                      child: Text(
+                        'Posizione nel tuo portafoglio',
+                        style: AppText.microFor(t).copyWith(color: t.primary),
+                        overflow: TextOverflow.ellipsis,
                       ),
+                    ),
+                    const SizedBox(width: AppSpacing.s8),
+                    AppDelta(
+                      value: holding.currentPnlPct,
+                      suffix: '%',
+                      size: 12.5,
+                      semanticsLabel: 'P&L della posizione',
                     ),
                   ],
+                ),
+                const SizedBox(height: AppSpacing.s6),
+                AppKeyValue(
+                  label: 'Azioni',
+                  value: NumberFormat('#,##0.####', 'it_IT').format(
+                    holding.quantity,
+                  ),
+                  dense: true,
+                ),
+                AppKeyValue(
+                  label: 'Carico medio',
+                  value: formatCurrency(
+                    holding.avgPurchasePrice,
+                    currency: holdingCurrency,
+                  ),
+                  dense: true,
+                ),
+                AppKeyValue(
+                  label: 'P&L',
+                  value: formatCurrency(
+                    holding.currentPnlAbs,
+                    currency: holdingCurrency,
+                  ),
+                  dense: false,
+                  valueColor: holding.currentPnlPct >= 0
+                      ? t.successText
+                      : t.danger,
                 ),
               ],
             ),
           ),
         ],
-        const SizedBox(height: AppSpacing.s10),
+        const SizedBox(height: AppSpacing.s12),
         _AdaptiveSplit(
-          left: StockDetailCallout(
-            background: t.surfaceHover,
-            borderColor: t.border,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Text(
-                  '🎯 Target Price Stimato',
-                  style: AppText.caption(context),
-                ),
-                const SizedBox(height: AppSpacing.s4),
-                Text.rich(
-                  TextSpan(
-                    text: formatCurrency(
-                      analysis.targetPrice,
-                      currency: currency,
-                    ),
-                    children: <InlineSpan>[
-                      if (upside != null)
-                        TextSpan(
-                          text: ' (${formatPercent(upside)})',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: upside > 0 ? t.success : t.danger,
-                          ),
-                        ),
-                    ],
-                  ),
-                  style: AppText.mono(
-                    context,
-                    size: 17,
-                    weight: FontWeight.w700,
-                    color: t.primary,
-                  ),
-                ),
-              ],
-            ),
+          left: StatCard(
+            label: 'Target price',
+            value: formatCurrency(analysis.targetPrice, currency: currency),
+            delta: upside,
+            deltaLabel: '%',
+            smallValue: true,
+            icon: const Icon(Icons.flag_outlined),
+            tooltip: 'Prezzo obiettivo stimato dal modello',
           ),
-          right: StockDetailCallout(
-            background: t.surfaceHover,
-            borderColor: t.border,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                Text(
-                  '🛡️ Stop Loss Consigliato',
-                  style: AppText.caption(context),
-                ),
-                const SizedBox(height: AppSpacing.s4),
-                Text(
-                  formatCurrency(analysis.stopLoss, currency: currency),
-                  style: AppText.mono(
-                    context,
-                    size: 17,
-                    weight: FontWeight.w700,
-                    color: t.danger,
-                  ),
-                ),
-              ],
-            ),
+          right: StatCard(
+            label: 'Stop loss consigliato',
+            value: formatCurrency(analysis.stopLoss, currency: currency),
+            smallValue: true,
+            valueColor: t.danger,
+            icon: const Icon(Icons.shield_outlined),
+            tooltip: 'Livello di uscita per limitare le perdite',
           ),
         ),
-        const SizedBox(height: AppSpacing.s10),
-        Text(
-          (analysis.summary?.isNotEmpty ?? false) ? analysis.summary! : _dash,
-          style: AppText.small(context),
+        const SizedBox(height: AppSpacing.s12),
+        _AiSection(
+          title: 'Sintesi',
+          icon: Icons.notes,
+          body: analysis.summary,
         ),
         const SizedBox(height: AppSpacing.s10),
         _AdaptiveSplit(
-          left: StockDetailCallout(
-            background: t.successBg,
-            borderColor: t.successBorder,
-            child: _CaseText(
-              title: '🟢 Bull Case & Punti di Forza',
-              body: (analysis.bullCase?.isNotEmpty ?? false)
-                  ? analysis.bullCase!
-                  : _dash,
+          left: AppCard(
+            accent: true,
+            accentColor: t.success,
+            child: _CaseBlock(
+              title: 'Bull case e punti di forza',
+              body: analysis.bullCase,
               titleColor: t.success,
             ),
           ),
-          right: StockDetailCallout(
-            background: t.dangerBg,
-            borderColor: t.dangerBorder,
-            child: _CaseText(
-              title: '🔴 Bear Case & Rischi Chiave',
-              body: (analysis.bearCase?.isNotEmpty ?? false)
-                  ? analysis.bearCase!
-                  : _dash,
+          right: AppCard(
+            accent: true,
+            accentColor: t.danger,
+            child: _CaseBlock(
+              title: 'Bear case e rischi',
+              body: analysis.bearCase,
               titleColor: t.danger,
             ),
           ),
         ),
         const SizedBox(height: AppSpacing.s10),
-        StockDetailCallout(
-          background: t.surfaceHover,
-          borderColor: t.border,
-          child: _CaseText(
-            title: '💡 Strategia Operativa Suggerita',
-            body: (analysis.operationalStrategy?.isNotEmpty ?? false)
-                ? analysis.operationalStrategy!
-                : _dash,
-            titleColor: t.primary,
-          ),
+        _AiSection(
+          title: 'Strategia operativa',
+          icon: Icons.route,
+          body: analysis.operationalStrategy,
         ),
+        if (verdict != null && verdict.trim().isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppSpacing.s10),
+          _AiSection(
+            title: 'Verdetto tecnico',
+            icon: Icons.speed,
+            body: verdict,
+          ),
+        ],
       ],
     );
   }
@@ -1430,15 +1443,47 @@ class _AiResultView extends StatelessWidget {
   }
 }
 
-class _CaseText extends StatelessWidget {
-  const _CaseText({
+/// Blocco di testo dell'analisi IA dentro un [AppCard] intitolato.
+class _AiSection extends StatelessWidget {
+  const _AiSection({
+    required this.title,
+    required this.icon,
+    required this.body,
+  });
+
+  final String title;
+  final IconData icon;
+  final String? body;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      dense: true,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          AppCardHeader(title: title, icon: icon, dense: true),
+          const SizedBox(height: AppSpacing.s8),
+          Text(
+            (body?.trim().isNotEmpty ?? false) ? body! : _dash,
+            style: AppText.small(context),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CaseBlock extends StatelessWidget {
+  const _CaseBlock({
     required this.title,
     required this.body,
     required this.titleColor,
   });
 
   final String title;
-  final String body;
+  final String? body;
   final Color titleColor;
 
   @override
@@ -1448,12 +1493,14 @@ class _CaseText extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
         Text(
-          title,
-          style: AppText.caption(context)
-              .copyWith(color: titleColor, fontWeight: FontWeight.w700),
+          title.toUpperCase(),
+          style: AppText.micro(context).copyWith(color: titleColor),
         ),
-        const SizedBox(height: AppSpacing.s4),
-        Text(body, style: AppText.small(context)),
+        const SizedBox(height: AppSpacing.s6),
+        Text(
+          (body?.trim().isNotEmpty ?? false) ? body! : _dash,
+          style: AppText.small(context),
+        ),
       ],
     );
   }
@@ -1581,11 +1628,9 @@ class _ChartView extends StatelessWidget {
       avgPrice: avgPrice,
     );
     if (data == null) {
-      return Center(
-        child: Text(
-          'Nessun dato disponibile.',
-          style: AppText.caption(context),
-        ),
+      return const EmptyState(
+        icon: Icon(Icons.show_chart),
+        message: 'Nessun dato disponibile.',
       );
     }
     // Un unico campionamento per prezzo e volumi: i due grafici devono
@@ -1610,6 +1655,7 @@ class _ChartView extends StatelessWidget {
                   view: view,
                   maxX: maxX,
                   palette: palette,
+                  avgPrice: avgPrice,
                 )
               : _AreaView(
                   data: data,
@@ -1652,45 +1698,92 @@ class _AreaView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final TextStyle tooltipStyle = AppText.mono(
+      context,
+      size: 11,
+      color: t.textInverse,
+    );
+    final LineChartBarData priceBar = LineChartBarData(
+      spots: <FlSpot>[
+        for (int i = 0; i < view.length; i++)
+          FlSpot(i.toDouble(), view[i].close),
+      ],
+      isCurved: false,
+      barWidth: 2,
+      color: palette.line,
+      dotData: const FlDotData(show: false),
+      belowBarData: BarAreaData(
+        show: true,
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[palette.top, palette.bottom],
+        ),
+      ),
+    );
+    final double? avg = avgPrice;
+    final LineChartBarData? avgBar = (avg == null || !avg.isFinite)
+        ? null
+        : LineChartBarData(
+            spots: <FlSpot>[FlSpot(0, avg), FlSpot(maxX, avg)],
+            isCurved: false,
+            barWidth: 1.5,
+            color: palette.breakeven,
+            dashArray: const <int>[6, 4],
+            dotData: const FlDotData(show: false),
+            belowBarData: BarAreaData(show: false),
+          );
+
     return LineChart(
       LineChartData(
         minX: 0,
         maxX: maxX,
         minY: data.minY,
         maxY: data.maxY,
-        gridData: _gridData(palette, data),
+        gridData: _gridData(palette),
         borderData: FlBorderData(show: false),
         titlesData: _titlesData(context, palette: palette),
-        lineTouchData: const LineTouchData(enabled: true),
-        lineBarsData: <LineChartBarData>[
-          LineChartBarData(
-            spots: <FlSpot>[
-              for (int i = 0; i < view.length; i++)
-                FlSpot(i.toDouble(), view[i].close),
+        lineTouchData: LineTouchData(
+          enabled: true,
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipColor: (LineBarSpot _) => t.surfaceInverse,
+            tooltipBorderRadius: BorderRadius.circular(AppRadii.control),
+            getTooltipItems: (List<LineBarSpot> spots) => <LineTooltipItem?>[
+              for (final LineBarSpot spot in spots)
+                LineTooltipItem(_axisPrice(spot.y), tooltipStyle),
             ],
-            isCurved: false,
-            barWidth: 2,
-            color: palette.line,
-            dotData: const FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: <Color>[palette.top, palette.bottom],
-              ),
-            ),
           ),
-          if (avgPrice != null && avgPrice!.isFinite)
-            LineChartBarData(
-              spots: <FlSpot>[FlSpot(0, avgPrice!), FlSpot(maxX, avgPrice!)],
-              isCurved: false,
-              barWidth: 2,
-              color: palette.breakeven,
-              dashArray: const <int>[6, 4],
-              dotData: const FlDotData(show: false),
-              belowBarData: BarAreaData(show: false),
-            ),
+          // Mirino tratteggiato sul punto toccato (colore `crosshair`).
+          getTouchedSpotIndicator:
+              (LineChartBarData bar, List<int> indexes) {
+                if (!identical(bar, priceBar)) {
+                  return const <TouchedSpotIndicatorData>[];
+                }
+                return <TouchedSpotIndicatorData>[
+                  for (final int _ in indexes)
+                    TouchedSpotIndicatorData(
+                      FlLine(
+                        color: palette.crosshair,
+                        strokeWidth: 1,
+                        dashArray: const <int>[4, 3],
+                      ),
+                      FlDotData(
+                        show: true,
+                        getDotPainter: (_, _, _, _) => FlDotCirclePainter(
+                          radius: 2.5,
+                          color: palette.line,
+                          strokeColor: palette.line,
+                          strokeWidth: 1,
+                        ),
+                      ),
+                    ),
+                ];
+              },
+        ),
+        lineBarsData: <LineChartBarData>[
+          priceBar,
+          ?avgBar,
         ],
       ),
       duration: Duration.zero,
@@ -1704,37 +1797,88 @@ class _CandlestickView extends StatelessWidget {
     required this.view,
     required this.maxX,
     required this.palette,
+    required this.avgPrice,
   });
 
   final _ChartData data;
   final List<_ChartPoint> view;
   final double maxX;
   final AppChartPalette palette;
+  final double? avgPrice;
 
   @override
   Widget build(BuildContext context) {
-    return CandlestickChart(
+    final AppTokens t = context.tokens;
+    final TextStyle tooltipStyle = AppText.mono(
+      context,
+      size: 11,
+      color: t.textInverse,
+    );
+
+    final Widget chart = CandlestickChart(
       CandlestickChartData(
         minX: 0,
         maxX: maxX,
         minY: data.minY,
         maxY: data.maxY,
-        gridData: _gridData(palette, data),
+        gridData: _gridData(palette),
         borderData: FlBorderData(show: false),
         titlesData: _titlesData(context, palette: palette),
         candlestickPainter: DefaultCandlestickPainter(
+          // Rialziste vuote (contorno, corpo = superficie), ribassiste piene:
+          // la direzione resta leggibile anche senza colore.
           candlestickStyleProvider: (CandlestickSpot spot, int _) {
-            final Color color = spot.isUp ? palette.up : palette.down;
+            if (spot.isUp) {
+              return CandlestickStyle(
+                lineColor: palette.candleUpStroke,
+                lineWidth: 1.2,
+                bodyStrokeColor: palette.candleUpStroke,
+                bodyStrokeWidth: 1,
+                bodyFillColor: palette.candleUpFill,
+                bodyWidth: 4,
+                bodyRadius: 0.5,
+              );
+            }
             return CandlestickStyle(
-              lineColor: color,
+              lineColor: palette.candleDownStroke,
               lineWidth: 1.2,
-              bodyStrokeColor: color,
+              bodyStrokeColor: palette.candleDownStroke,
               bodyStrokeWidth: 0,
-              bodyFillColor: color,
+              bodyFillColor: palette.candleDownFill,
               bodyWidth: 4,
-              bodyRadius: 1,
+              bodyRadius: 0.5,
             );
           },
+        ),
+        candlestickTouchData: CandlestickTouchData(
+          handleBuiltInTouches: true,
+          touchTooltipData: CandlestickTouchTooltipData(
+            getTooltipColor: (CandlestickSpot _) => t.surfaceInverse,
+            tooltipBorderRadius: BorderRadius.circular(AppRadii.control),
+            getTooltipItems:
+                (FlCandlestickPainter painter, CandlestickSpot spot, int _) =>
+                    CandlestickTooltipItem(
+                      'A ${_axisPrice(spot.open)} · C ${_axisPrice(spot.close)}',
+                      textStyle: tooltipStyle,
+                    ),
+          ),
+        ),
+        // Mirino tratteggiato (colore `crosshair`) su entrambi gli assi.
+        touchedPointIndicator: AxisSpotIndicator(
+          painter: AxisLinesIndicatorPainter(
+            verticalLineProvider: (double x) => VerticalLine(
+              x: x,
+              color: palette.crosshair,
+              strokeWidth: 1,
+              dashArray: const <int>[4, 3],
+            ),
+            horizontalLineProvider: (double y) => HorizontalLine(
+              y: y,
+              color: palette.crosshair,
+              strokeWidth: 1,
+              dashArray: const <int>[4, 3],
+            ),
+          ),
         ),
         candlestickSpots: <CandlestickSpot>[
           for (int i = 0; i < view.length; i++)
@@ -1748,6 +1892,44 @@ class _CandlestickView extends StatelessWidget {
         ],
       ),
       duration: Duration.zero,
+    );
+
+    final double? avg = avgPrice;
+    if (avg == null || !avg.isFinite) return chart;
+    // Linea tratteggiata del prezzo medio di carico sopra le candele: overlay
+    // senza tocchi, con gli stessi assi del chart sottostante per allinearsi.
+    return Stack(
+      children: <Widget>[
+        chart,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: LineChart(
+              LineChartData(
+                minX: 0,
+                maxX: maxX,
+                minY: data.minY,
+                maxY: data.maxY,
+                gridData: const FlGridData(show: false),
+                borderData: FlBorderData(show: false),
+                titlesData: _titlesData(context, palette: palette),
+                lineTouchData: const LineTouchData(enabled: false),
+                lineBarsData: <LineChartBarData>[
+                  LineChartBarData(
+                    spots: <FlSpot>[FlSpot(0, avg), FlSpot(maxX, avg)],
+                    isCurved: false,
+                    barWidth: 1.5,
+                    color: palette.breakeven,
+                    dashArray: const <int>[6, 4],
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(show: false),
+                  ),
+                ],
+              ),
+              duration: Duration.zero,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1817,7 +1999,12 @@ class _VolumeView extends StatelessWidget {
                       meta: meta,
                       child: Text(
                         label,
-                        style: TextStyle(color: palette.text, fontSize: 10.5),
+                        style: AppText.mono(
+                          context,
+                          size: 10.5,
+                          weight: FontWeight.w500,
+                          color: palette.text,
+                        ),
                       ),
                     );
                   },
@@ -1850,6 +2037,51 @@ class _VolumeView extends StatelessWidget {
   }
 }
 
+/// Campione tratteggiato di legenda (riga di 18px nel colore della serie).
+class _DashedSwatch extends StatelessWidget {
+  const _DashedSwatch({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      size: const Size(18, 8),
+      painter: _DashedSwatchPainter(color: color),
+    );
+  }
+}
+
+class _DashedSwatchPainter extends CustomPainter {
+  const _DashedSwatchPainter({required this.color});
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+    const double dash = 4;
+    const double gap = 3;
+    double x = 0;
+    final double y = size.height / 2;
+    while (x < size.width) {
+      canvas.drawLine(
+        Offset(x, y),
+        Offset(math.min(x + dash, size.width), y),
+        paint,
+      );
+      x += dash + gap;
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedSwatchPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 // --- Chart helpers ---------------------------------------------------------
 
 List<_ChartPoint> _samplePoints(List<_ChartPoint> points, int maxPoints) {
@@ -1863,12 +2095,10 @@ List<_ChartPoint> _samplePoints(List<_ChartPoint> points, int maxPoints) {
   return sampled;
 }
 
-FlGridData _gridData(AppChartPalette palette, _ChartData data) {
-  final double interval = math.max((data.maxY - data.minY) / 4, 0.0001);
+FlGridData _gridData(AppChartPalette palette) {
   return FlGridData(
     show: true,
     drawVerticalLine: false,
-    horizontalInterval: interval,
     getDrawingHorizontalLine: (double _) =>
         FlLine(color: palette.grid, strokeWidth: 1),
   );
@@ -1892,7 +2122,12 @@ FlTitlesData _titlesData(
           meta: meta,
           child: Text(
             _axisPrice(value),
-            style: TextStyle(color: palette.text, fontSize: 10.5),
+            style: AppText.mono(
+              context,
+              size: 10.5,
+              weight: FontWeight.w500,
+              color: palette.text,
+            ),
           ),
         ),
       ),
@@ -1935,17 +2170,4 @@ DateTime? _parseCandleTime(dynamic raw) {
     }
   }
   return null;
-}
-
-String _flagFor(String market) {
-  return switch (market) {
-    'IT' => '🇮🇹',
-    'EU' => '🇪🇺',
-    _ => '🇺🇸',
-  };
-}
-
-String _signedNumber(num value) {
-  final String formatted = NumberFormat('#,##0.00', 'it_IT').format(value);
-  return value > 0 ? '+$formatted' : formatted;
 }

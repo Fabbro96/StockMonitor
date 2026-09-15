@@ -213,11 +213,10 @@ class _ToastItemState extends State<_ToastItem> {
     };
     final Duration duration = _reduceMotion ? Duration.zero : AppMotion.overlay;
 
-    // Accent bar sinistro come striscia clippata su Stack: un Border con lati
-    // di colori diversi non è compatibile con borderRadius (assert a ogni
-    // paint). Stessa tecnica di AppCard.accent.
+    // Striscia accent sinistra clippata su Stack: un Border con lati di colori
+    // diversi non è compatibile con borderRadius (assert a ogni paint).
     final Widget content = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
@@ -229,7 +228,7 @@ class _ToastItemState extends State<_ToastItem> {
               padding: const EdgeInsets.only(left: AppSpacing.s10),
               child: AppButton(
                 label: widget.data.actionLabel!,
-                variant: AppButtonVariant.ghost,
+                variant: AppButtonVariant.quiet,
                 size: AppButtonSize.sm,
                 onPressed: () {
                   widget.data.onAction?.call();
@@ -241,9 +240,8 @@ class _ToastItemState extends State<_ToastItem> {
             padding: const EdgeInsets.only(left: AppSpacing.s6),
             child: AppIconButton(
               icon: const Icon(Icons.close),
-              size: 22,
-              iconSize: 15,
-              bordered: false,
+              size: 24,
+              iconSize: AppSizes.iconSm,
               tooltip: 'Chiudi notifica',
               onPressed: _dismiss,
             ),
@@ -254,9 +252,9 @@ class _ToastItemState extends State<_ToastItem> {
 
     final Widget toast = Container(
       decoration: BoxDecoration(
-        color: t.surface,
+        color: t.surfaceRaised,
         border: Border.all(color: t.border),
-        borderRadius: BorderRadius.circular(AppRadii.input),
+        borderRadius: BorderRadius.circular(AppRadii.panel),
         boxShadow: t.shadowMd,
       ),
       clipBehavior: Clip.antiAlias,
@@ -267,7 +265,7 @@ class _ToastItemState extends State<_ToastItem> {
             left: 0,
             top: 0,
             bottom: 0,
-            width: 3,
+            width: AppSizes.accentStrip,
             child: ColoredBox(color: accent),
           ),
         ],

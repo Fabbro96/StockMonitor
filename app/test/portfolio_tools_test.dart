@@ -263,12 +263,12 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Calcola Ordini ➔'));
+      await tester.tap(find.text('Calcola ordini'));
       await tester.pumpAndSettle();
       expect(find.textContaining('Portafoglio vuoto'), findsOneWidget);
 
       api.preview = const RebalancePreview();
-      await tester.tap(find.text('Calcola Ordini ➔'));
+      await tester.tap(find.text('Calcola ordini'));
       await tester.pumpAndSettle();
       expect(find.textContaining('già allineato'), findsOneWidget);
     });

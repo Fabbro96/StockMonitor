@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 
-/// Stato vuoto centrato (`.table-empty`): icona opzionale, messaggio e azioni.
+/// Stato vuoto centrato: icona in un riquadro squadrato, titolo opzionale,
+/// messaggio e azioni.
 ///
 /// Usato sotto tabelle, card e liste quando non ci sono dati o il filtro non
 /// produce risultati.
@@ -11,6 +13,7 @@ class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,
     required this.message,
+    this.title,
     this.icon,
     this.actions = const <Widget>[],
     this.padding,
@@ -19,44 +22,58 @@ class EmptyState extends StatelessWidget {
   /// Messaggio centrale (es. `Nessun titolo nel radar.`).
   final String message;
 
-  /// Icona/emoji opzionale sopra il messaggio.
+  /// Titolo opzionale sopra il messaggio.
+  final String? title;
+
+  /// Icona Material opzionale sopra il messaggio.
   final Widget? icon;
 
   /// Azioni sotto il messaggio (bottoni, link), centrate.
   final List<Widget> actions;
 
-  /// Padding esterno; default 26×16 come `.table-empty`.
+  /// Padding esterno; default 28×20.
   final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context) {
     final AppTokens t = context.tokens;
     return Padding(
-      padding: padding ?? const EdgeInsets.symmetric(horizontal: 16, vertical: 26),
+      padding: padding ?? const EdgeInsets.symmetric(horizontal: 16, vertical: 28),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
           if (icon != null) ...<Widget>[
-            IconTheme.merge(
-              data: IconThemeData(color: t.textMuted, size: 22),
-              child: icon!,
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: t.surfaceSunken,
+                border: Border.all(color: t.border),
+                borderRadius: BorderRadius.circular(AppRadii.control),
+              ),
+              child: IconTheme.merge(
+                data: IconThemeData(color: t.textMuted, size: AppSizes.iconLg),
+                child: Center(child: icon!),
+              ),
             ),
-            const SizedBox(height: AppSpacing.s10),
+            const SizedBox(height: AppSpacing.s12),
+          ],
+          if (title != null) ...<Widget>[
+            Text(
+              title!,
+              textAlign: TextAlign.center,
+              style: AppText.cardTitle(context),
+            ),
+            const SizedBox(height: AppSpacing.s4),
           ],
           Text(
             message,
             textAlign: TextAlign.center,
-            style: TextStyle(
-              color: t.textMuted,
-              fontSize: 13.6,
-              fontWeight: FontWeight.w400,
-              height: 1.5,
-              fontFamilyFallback: AppTokens.fontFallback,
-            ),
+            style: AppText.captionFor(t).copyWith(fontSize: 13),
           ),
           if (actions.isNotEmpty) ...<Widget>[
-            const SizedBox(height: AppSpacing.s12),
+            const SizedBox(height: AppSpacing.s14),
             Wrap(
               alignment: WrapAlignment.center,
               spacing: AppSpacing.s8,
@@ -70,8 +87,8 @@ class EmptyState extends StatelessWidget {
   }
 }
 
-/// Nota a piè di tabella (`.table-note`): testo muted a sinistra e contenuto
-/// a destra, con wrap su mobile.
+/// Nota a piè di tabella: testo muted a sinistra e contenuto a destra, con
+/// wrap su mobile.
 class TableNote extends StatelessWidget {
   /// Crea una nota di tabella.
   const TableNote({super.key, required this.left, this.right});
@@ -96,7 +113,7 @@ class TableNote extends StatelessWidget {
           DefaultTextStyle.merge(
             style: TextStyle(
               color: t.textMuted,
-              fontSize: 12.5,
+              fontSize: 12,
               fontWeight: FontWeight.w400,
               fontFamilyFallback: AppTokens.fontFallback,
             ),

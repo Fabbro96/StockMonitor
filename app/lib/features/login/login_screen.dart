@@ -11,11 +11,14 @@ import '../../core/storage.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
+import '../../widgets/app_callout.dart';
+import '../../widgets/app_card.dart';
 
-/// Schermata di login, parità visiva e di copy con `frontend/login.html`:
-/// logo 📈, titolo `Stock Monitor`, sottotitolo, campi utente/password con
-/// toggle mostra/nascondi, alert errore (`role=alert`), bottone `Accedi` con
-/// stato `Verifica in corso...` e badge di sicurezza.
+/// Schermata di login in linguaggio Registro: pannello sollevato da 400px sul
+/// fondo pagina, tassello-marchio con candela, titolo `Stock Monitor`,
+/// sottotitolo, campi con etichetta sopra, alert errore (`role=alert`
+/// equivalente via live region), bottone `Accedi` con stato
+/// `Verifica in corso...` e nota di sicurezza.
 ///
 /// Su piattaforma non web, quando la build non ha un default `API_BASE_URL`
 /// il campo `Indirizzo server` è sempre visibile e prefillato dal valore
@@ -202,28 +205,18 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               reduceMotion: reduceMotion,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 400),
-                child: Container(
+                child: AppCard.raised(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 28,
-                    vertical: 32,
-                  ),
-                  decoration: BoxDecoration(
-                    color: t.surface,
-                    border: Border.all(color: t.border),
-                    borderRadius: BorderRadius.circular(AppRadii.card),
-                    boxShadow: t.shadowMd,
+                    horizontal: 26,
+                    vertical: 30,
                   ),
                   child: AutofillGroup(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       mainAxisSize: MainAxisSize.min,
                       children: <Widget>[
-                        const Text(
-                          '📈',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 30.4, height: 1.2),
-                        ),
-                        const SizedBox(height: AppSpacing.s6),
+                        const Center(child: _LoginMark(size: 40)),
+                        const SizedBox(height: AppSpacing.s14),
                         Text(
                           'Stock Monitor',
                           textAlign: TextAlign.center,
@@ -237,10 +230,20 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                         const SizedBox(height: AppSpacing.s24),
                         if (error != null) ...<Widget>[
-                          _ErrorAlert(message: error),
+                          AppCallout(
+                            tone: AppCalloutTone.danger,
+                            icon: const Icon(Icons.error_outline),
+                            body: error,
+                            liveRegion: true,
+                          ),
                           const SizedBox(height: AppSpacing.s16),
                         ] else if (notice != null) ...<Widget>[
-                          _NoticeAlert(message: notice),
+                          AppCallout(
+                            tone: AppCalloutTone.info,
+                            icon: const Icon(Icons.info_outline),
+                            body: notice,
+                            liveRegion: true,
+                          ),
                           const SizedBox(height: AppSpacing.s16),
                         ],
                         if (showServerField) ...<Widget>[
@@ -250,8 +253,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               controller: _serverController,
                               keyboardType: TextInputType.url,
                               textInputAction: TextInputAction.next,
-                              style: AppText.body(context)
-                                  .copyWith(fontSize: 14.4),
+                              style: AppText.body(context),
                               decoration: const InputDecoration(
                                 hintText: 'http://192.168.1.10:8000',
                               ),
@@ -268,8 +270,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               AutofillHints.username,
                             ],
                             textInputAction: TextInputAction.next,
-                            style: AppText.body(context)
-                                .copyWith(fontSize: 14.4),
+                            style: AppText.body(context),
                             decoration: const InputDecoration(
                               hintText: 'Inserisci il tuo nome utente',
                             ),
@@ -288,26 +289,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               AutofillHints.password,
                             ],
                             textInputAction: TextInputAction.done,
-                            style: AppText.body(context)
-                                .copyWith(fontSize: 14.4),
+                            style: AppText.body(context),
                             decoration: InputDecoration(
                               hintText: '••••••••',
                               suffixIconConstraints: const BoxConstraints(
                                 minWidth: 38,
                                 minHeight: 34,
                               ),
-                              suffixIcon: IconButton(
-                                onPressed: () => setState(
-                                  () => _showPassword = !_showPassword,
-                                ),
-                                tooltip: _showPassword
-                                    ? 'Nascondi password'
-                                    : 'Mostra password',
+                              suffixIcon: AppIconButton(
                                 icon: Icon(
                                   _showPassword
                                       ? Icons.visibility_off_outlined
                                       : Icons.visibility_outlined,
-                                  size: 17,
+                                ),
+                                size: 28,
+                                iconSize: AppSizes.icon,
+                                tooltip: _showPassword
+                                    ? 'Nascondi password'
+                                    : 'Mostra password',
+                                onPressed: () => setState(
+                                  () => _showPassword = !_showPassword,
                                 ),
                               ),
                             ),
@@ -315,15 +316,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           ),
                         ),
                         const SizedBox(height: AppSpacing.s20),
-                        SizedBox(
-                          height: 42,
-                          child: AppButton(
-                            label: 'Accedi',
-                            loading: _submitting,
-                            loadingLabel: 'Verifica in corso...',
-                            expand: true,
-                            onPressed: _submit,
-                          ),
+                        AppButton(
+                          label: 'Accedi',
+                          size: AppButtonSize.lg,
+                          loading: _submitting,
+                          loadingLabel: 'Verifica in corso...',
+                          expand: true,
+                          onPressed: _submit,
                         ),
                         const SizedBox(height: AppSpacing.s22),
                         Container(
@@ -332,10 +331,23 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             border: Border(top: BorderSide(color: t.border)),
                           ),
                           alignment: Alignment.center,
-                          child: Text(
-                            '🔒 Connessione protetta con crittografia bcrypt e JWT',
-                            textAlign: TextAlign.center,
-                            style: AppText.securityBadge(context),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: <Widget>[
+                              Icon(
+                                Icons.lock_outline,
+                                size: AppSizes.iconSm,
+                                color: t.textMuted,
+                              ),
+                              const SizedBox(width: AppSpacing.s6),
+                              Flexible(
+                                child: Text(
+                                  'Connessione protetta con crittografia bcrypt e JWT',
+                                  textAlign: TextAlign.center,
+                                  style: AppText.securityBadge(context),
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -346,6 +358,32 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Tassello-marchio della login: quadrato inchiostro con la candela, gemello
+/// di quello della sidebar.
+class _LoginMark extends StatelessWidget {
+  const _LoginMark({required this.size});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: t.surfaceInverse,
+        borderRadius: BorderRadius.circular(AppRadii.panel),
+      ),
+      child: Icon(
+        Icons.candlestick_chart,
+        size: size * 0.58,
+        color: t.textInverse,
       ),
     );
   }
@@ -372,95 +410,8 @@ class _LabeledField extends StatelessWidget {
   }
 }
 
-/// Alert di errore (`.alert-error`): sfondo/bordo danger, `role=alert`
-/// equivalente via live region.
-class _ErrorAlert extends StatelessWidget {
-  const _ErrorAlert({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final AppTokens t = context.tokens;
-    return Semantics(
-      container: true,
-      liveRegion: true,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: t.dangerBg,
-          border: Border.all(color: t.dangerBorder),
-          borderRadius: BorderRadius.circular(AppRadii.input),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            const Text('⚠️', style: TextStyle(fontSize: 14, height: 1.4)),
-            const SizedBox(width: AppSpacing.s8),
-            Expanded(
-              child: Text(
-                message,
-                style: TextStyle(
-                  color: t.danger,
-                  fontSize: 13.6,
-                  fontWeight: FontWeight.w500,
-                  height: 1.4,
-                  fontFamilyFallback: AppTokens.fontFallback,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Alert informativo una tantum (es. server cambiato): stessi toni del DS
-/// (alone primary), `role=status` equivalente via live region.
-class _NoticeAlert extends StatelessWidget {
-  const _NoticeAlert({required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final AppTokens t = context.tokens;
-    return Semantics(
-      container: true,
-      liveRegion: true,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: t.primaryGlow,
-          border: Border.all(color: t.primary),
-          borderRadius: BorderRadius.circular(AppRadii.input),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            Icon(Icons.info_outline, size: 16, color: t.primary),
-            const SizedBox(width: AppSpacing.s8),
-            Expanded(
-              child: Text(
-                message,
-                style: TextStyle(
-                  color: t.primary,
-                  fontSize: 13.6,
-                  fontWeight: FontWeight.w500,
-                  height: 1.4,
-                  fontFamilyFallback: AppTokens.fontFallback,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Entrata `fade-in-up` (0.3s, 6px), disattivata con `prefers-reduced-motion`.
+/// Entrata `fade-in-up` (320ms, 6px), disattivata con
+/// `prefers-reduced-motion`.
 class _Entrance extends StatelessWidget {
   const _Entrance({required this.child, required this.reduceMotion});
 
@@ -472,7 +423,7 @@ class _Entrance extends StatelessWidget {
     if (reduceMotion) return child;
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(begin: 0, end: 1),
-      duration: const Duration(milliseconds: 300),
+      duration: AppMotion.reveal,
       curve: AppMotion.ease,
       builder: (BuildContext context, double value, Widget? child) {
         return Opacity(

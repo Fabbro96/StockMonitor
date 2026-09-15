@@ -49,18 +49,54 @@ WatchlistStats computeWatchlistStats(List<WatchlistItem> items) {
 }
 
 /// Filtro client-side per ticker o nome, case-insensitive (parità legacy).
+///
+/// Con [market] valorizzato (`IT`/`US`/`EU`) restringe anche al mercato del
+/// titolo, risolto con [watchlistMarketOf] quando il backend non lo espone:
+/// gli strumenti non azionari (nessun mercato) restano fuori da ogni bucket e
+/// si vedono solo senza filtro.
 List<WatchlistItem> filterWatchlistItems(
   List<WatchlistItem> items,
-  String query,
-) {
+  String query, {
+  String? market,
+}) {
   final String needle = query.trim().toUpperCase();
-  if (needle.isEmpty) return items;
+  final String? wanted = market?.toUpperCase();
   return <WatchlistItem>[
     for (final WatchlistItem item in items)
-      if (item.ticker.toUpperCase().contains(needle) ||
-          (item.name ?? '').toUpperCase().contains(needle))
+      if ((wanted == null || watchlistMarketOf(item) == wanted) &&
+          (needle.isEmpty ||
+              item.ticker.toUpperCase().contains(needle) ||
+              (item.name ?? '').toUpperCase().contains(needle)))
         item,
   ];
+}
+
+/// Mercato normalizzato di un titolo (`IT`/`US`/`EU`); `null` per gli
+/// strumenti non azionari, che non appartengono a un listino.
+///
+/// Usa `market` quando presente e riconosciuto, altrimenti ricade sul suffisso
+/// del ticker (`.MI` → IT, `.DE`/`.PA`/`.AS` → EU) e infine su `US`, come la
+/// risoluzione dei tag di mercato.
+String? watchlistMarketOf(WatchlistItem item) {
+  final String? explicit = item.market?.toUpperCase();
+  if (explicit == 'IT' || explicit == 'US' || explicit == 'EU') return explicit!;
+  final String ticker = item.ticker.toUpperCase();
+  if (ticker.endsWith('.MI')) return 'IT';
+  if (ticker.endsWith('.DE') || ticker.endsWith('.PA') || ticker.endsWith('.AS')) {
+    return 'EU';
+  }
+  if (_isNonEquity(ticker)) return null;
+  return 'US';
+}
+
+/// True per le forme non azionarie riconosciute dai tag di mercato: coppie
+/// crypto (`BTC-USD`), valute (`EURUSD=X`), indici (`^GSPC`) e future (`GC=F`).
+bool _isNonEquity(String ticker) {
+  return ticker.startsWith('^') ||
+      ticker.endsWith('-USD') ||
+      ticker.endsWith('-EUR') ||
+      ticker.endsWith('=X') ||
+      ticker.endsWith('=F');
 }
 
 /// Stato della Watchlist con operazioni di mutazione.
@@ -162,10 +198,33 @@ final NotifierProvider<WatchlistFilterController, String> watchlistFilterProvide
       WatchlistFilterController.new,
     );
 
-/// Lista filtrata (match ticker o nome, case-insensitive).
+/// Mercato selezionato nella toolbar (`null` = tutti i mercati).
+class WatchlistMarketFilterController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  /// Aggiorna il filtro di mercato (`IT`/`US`/`EU`, `null` = tutti).
+  void select(String? market) {
+    if (state == market) return;
+    state = market;
+  }
+}
+
+/// Mercato corrente del filtro Watchlist.
+final NotifierProvider<WatchlistMarketFilterController, String?>
+    watchlistMarketFilterProvider =
+    NotifierProvider<WatchlistMarketFilterController, String?>(
+      WatchlistMarketFilterController.new,
+    );
+
+/// Lista filtrata (query su ticker/nome + filtro di mercato).
 final Provider<List<WatchlistItem>> filteredWatchlistProvider =
     Provider<List<WatchlistItem>>((Ref ref) {
       final List<WatchlistItem> items =
           ref.watch(watchlistProvider).value ?? const <WatchlistItem>[];
-      return filterWatchlistItems(items, ref.watch(watchlistFilterProvider));
+      return filterWatchlistItems(
+        items,
+        ref.watch(watchlistFilterProvider),
+        market: ref.watch(watchlistMarketFilterProvider),
+      );
     });

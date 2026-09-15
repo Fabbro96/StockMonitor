@@ -9,14 +9,21 @@ import '../../core/models/portfolio.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_card.dart';
-import '../../widgets/badges.dart';
+import '../../widgets/app_key_value.dart';
+import '../../widgets/app_progress_bar.dart';
+import '../../widgets/app_segmented.dart';
+import '../../widgets/section_header.dart';
 import 'portfolio_edits.dart';
 import 'portfolio_providers.dart';
 
-/// Diametro della donut (`.chart` allocation, 190×190).
+/// Diametro della donut di allocazione (190×190).
 const double _donutSize = 190;
 
-/// Card "Allocazione": toggle Titoli/Mercati, donut e legenda (max 7 voci).
+/// Numero massimo di voci in legenda (oltre: nota "altri N titoli").
+const int _maxLegendEntries = 7;
+
+/// Card "Allocazione": toggle Titoli/Mercati, donut e legenda con barre di
+/// ripartizione.
 ///
 /// La vista Titoli usa i valori live delle modifiche inline pendenti
 /// ([edits]); la vista Mercati usa `summary.market_allocation`.
@@ -29,7 +36,6 @@ class AllocationCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final AppTokens t = context.tokens;
     final AllocationView view = ref.watch(allocationViewProvider);
     final List<Holding> holdings =
         ref.watch(portfolioProvider).value ?? const <Holding>[];
@@ -50,88 +56,35 @@ class AllocationCard extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              Expanded(
-                child: Text('Allocazione', style: AppText.cardTitle(context)),
-              ),
-              AppPill(
-                label: 'Titoli',
-                selected: view == AllocationView.stock,
-                onPressed: () => ref
-                    .read(allocationViewProvider.notifier)
-                    .select(AllocationView.stock),
-              ),
-              const SizedBox(width: AppSpacing.s6),
-              AppPill(
-                label: 'Mercati',
-                selected: view == AllocationView.market,
-                onPressed: () => ref
-                    .read(allocationViewProvider.notifier)
-                    .select(AllocationView.market),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.s16),
-          Center(
-            child: SizedBox(
-              width: _donutSize,
-              height: _donutSize,
-              child: total > 0
-                  ? _Donut(entries: entries, total: total, colors: t.chart.pie)
-                  : CustomPaint(
-                      painter: _DashedRingPainter(color: t.borderStrong),
-                    ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.s16),
-          if (total <= 0)
-            Center(child: Text('Nessun dato', style: AppText.caption(context)))
-          else
-            Column(
-              children: <Widget>[
-                for (int i = 0; i < entries.length && i < 7; i++)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.s8),
-                    child: Row(
-                      children: <Widget>[
-                        Container(
-                          width: 10,
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: t.chart.pie[i % t.chart.pie.length],
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                        ),
-                        const SizedBox(width: AppSpacing.s8),
-                        Expanded(
-                          child: Text(
-                            entries[i].label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: AppText.mono(
-                              context,
-                              size: 12,
-                              weight: FontWeight.w700,
-                              color: t.primary,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: AppSpacing.s6),
-                        Text(
-                          formatPercent(entries[i].value / total * 100),
-                          style: AppText.mono(
-                            context,
-                            size: 12,
-                            weight: FontWeight.w500,
-                            color: t.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+          SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            icon: Icons.donut_large_outlined,
+            overline: 'Portafoglio',
+            title: 'Allocazione',
+            subtitle: view == AllocationView.market
+                ? 'Ripartizione del controvalore di mercato per mercato.'
+                : 'Ripartizione del controvalore di mercato per titolo.',
+            trailing: AppSegmented<AllocationView>(
+              selected: view,
+              dense: true,
+              semanticsLabel: 'Vista allocazione',
+              segments: const <AppSegment<AllocationView>>[
+                AppSegment<AllocationView>(
+                  value: AllocationView.stock,
+                  label: 'Titoli',
+                ),
+                AppSegment<AllocationView>(
+                  value: AllocationView.market,
+                  label: 'Mercati',
+                ),
               ],
+              onSelected: (AllocationView value) => ref
+                  .read(allocationViewProvider.notifier)
+                  .select(value),
             ),
+          ),
+          const SizedBox(height: AppSpacing.s16),
+          _AllocationBody(entries: entries, total: total),
         ],
       ),
     );
@@ -158,9 +111,9 @@ class AllocationCard extends ConsumerWidget {
     PortfolioSummary? summary,
   ) {
     const Map<String, String> labels = <String, String>{
-      'IT': '🇮🇹 Italia',
-      'US': '🇺🇸 USA',
-      'EU': '🇪🇺 Europa',
+      'IT': 'Italia',
+      'US': 'Stati Uniti',
+      'EU': 'Europa',
     };
     final Map<String, double> allocation =
         summary?.marketAllocation ?? const <String, double>{};
@@ -169,6 +122,171 @@ class AllocationCard extends ConsumerWidget {
         if (entry.value > 0)
           (label: labels[entry.key] ?? entry.key, value: entry.value),
     ];
+  }
+}
+
+/// Corpo della card: donut e legenda, affiancati sopra i 620px.
+class _AllocationBody extends StatelessWidget {
+  const _AllocationBody({required this.entries, required this.total});
+
+  final List<({String label, double value})> entries;
+  final double total;
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget donut = _DonutArea(entries: entries, total: total);
+    final Widget legend = _Legend(entries: entries, total: total);
+
+    return LayoutBuilder(
+      builder: (BuildContext context, BoxConstraints constraints) {
+        if (constraints.maxWidth < 620) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Center(child: donut),
+              const SizedBox(height: AppSpacing.s16),
+              legend,
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: <Widget>[
+            donut,
+            const SizedBox(width: AppSpacing.s20),
+            Expanded(child: legend),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// Donut (o anello tratteggiato quando non ci sono dati) con il totale al
+/// centro.
+class _DonutArea extends StatelessWidget {
+  const _DonutArea({required this.entries, required this.total});
+
+  final List<({String label, double value})> entries;
+  final double total;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return SizedBox(
+      width: _donutSize,
+      height: _donutSize,
+      child: Stack(
+        alignment: Alignment.center,
+        children: <Widget>[
+          if (total > 0)
+            _Donut(entries: entries, total: total, colors: t.chart.pie)
+          else
+            CustomPaint(
+              size: const Size.square(_donutSize),
+              painter: _DashedRingPainter(color: t.borderStrong),
+            ),
+          IgnorePointer(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text('Totale', style: AppText.statLabel(context)),
+                const SizedBox(height: AppSpacing.s2),
+                Text(
+                  total > 0 ? formatCurrency(total) : '—',
+                  style: AppText.mono(context, size: 12.5),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Legenda: riga etichetta/percentuale con campione di tinta e barra.
+class _Legend extends StatelessWidget {
+  const _Legend({required this.entries, required this.total});
+
+  final List<({String label, double value})> entries;
+  final double total;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final int shown = math.min(entries.length, _maxLegendEntries);
+    final int hidden = entries.length - shown;
+
+    if (total <= 0) {
+      return Text(
+        'Nessun dato di allocazione disponibile.',
+        style: AppText.caption(context),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        for (int i = 0; i < shown; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.s10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                AppKeyValue(
+                  label: entries[i].label,
+                  value: formatSharePercent(
+                    entries[i].value / total * 100,
+                  ),
+                  divider: false,
+                  dense: true,
+                  trailing: _Swatch(
+                    color: t.chart.pie[i % t.chart.pie.length],
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.s4),
+                // Il valore resta leggibile anche in mono tabulare.
+                AppProgressBar(
+                  value: (entries[i].value / total).clamp(0, 1).toDouble(),
+                  height: 5,
+                  tone: AppProgressTone.neutral,
+                  semanticsLabel:
+                      '${entries[i].label}: '
+                      '${formatSharePercent(entries[i].value / total * 100)}',
+                ),
+              ],
+            ),
+          ),
+        if (hidden > 0)
+          Text(
+            'Altri $hidden titoli non mostrati.',
+            style: AppText.caption(context),
+          ),
+      ],
+    );
+  }
+}
+
+/// Campione di tinta della legenda (quadrato 10×10, raggio 2).
+class _Swatch extends StatelessWidget {
+  const _Swatch({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 10,
+      height: 10,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(AppRadii.xs),
+      ),
+    );
   }
 }
 
@@ -208,15 +326,16 @@ class _Donut extends StatelessWidget {
   }
 }
 
-/// Anello tratteggiato placeholder (`.range-bar-track` style, legacy canvas).
+/// Anello tratteggiato placeholder: stesso diametro e spessore della donut,
+/// tinta `borderStrong`, tratteggio 3/5.
 class _DashedRingPainter extends CustomPainter {
   const _DashedRingPainter({required this.color});
 
   final Color color;
 
-  static const double _strokeWidth = 8;
-  static const double _dash = 6;
-  static const double _gap = 6;
+  static const double _strokeWidth = 6;
+  static const double _dash = 3;
+  static const double _gap = 5;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -228,7 +347,8 @@ class _DashedRingPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = _strokeWidth;
     final double step = (_dash + _gap) / radius;
-    for (double angle = 0; angle < 2 * math.pi; angle += step) {
+    // Stesso punto di partenza della donut (-90°).
+    for (double angle = -math.pi / 2; angle < 1.5 * math.pi; angle += step) {
       canvas.drawArc(
         Rect.fromCircle(center: center, radius: radius),
         angle,

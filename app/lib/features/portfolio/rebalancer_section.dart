@@ -11,13 +11,19 @@ import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_button.dart';
 import '../../widgets/app_card.dart';
+import '../../widgets/app_confirm_dialog.dart';
+import '../../widgets/app_error_panel.dart';
+import '../../widgets/app_market_tag.dart';
+import '../../widgets/app_progress_bar.dart';
 import '../../widgets/badges.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/section_header.dart';
 import '../../widgets/skeleton.dart';
 import '../../widgets/stepper_input.dart';
 import '../../widgets/toast.dart';
 import '../stock_detail/stock_detail_modal.dart' show showStockDetail;
-import 'portfolio_edits.dart' show formatDraftNumber;
+import 'portfolio_edits.dart' show formatDraftNumber, formatSharePercent;
+import 'portfolio_table.dart';
 import 'portfolio_tools_providers.dart';
 
 /// Etichette degli scope del Rebalancer (legacy `SCOPE_LABELS`).
@@ -27,10 +33,11 @@ const Map<String, String> _scopeLabels = <String, String>{
   'CASH': 'Liquidità',
 };
 
-/// Sezione "⚖️ Smart Portfolio Rebalancer" (parità `#rebalancerCard`).
+/// Sezione "Smart Portfolio Rebalancer" (parità `#rebalancerCard`).
 ///
-/// Contiene il form CRUD delle allocazioni target, il campo liquidità e il
-/// piano ordini generato da `POST /portfolio/rebalance/preview`.
+/// Contiene il form CRUD delle allocazioni target, il campo liquidità, il
+/// piano ordini generato da `POST /portfolio/rebalance/preview` e gli
+/// scostamenti correnti/target per bucket.
 class RebalancerSection extends ConsumerStatefulWidget {
   /// Crea la sezione Rebalancer.
   const RebalancerSection({super.key});
@@ -130,30 +137,14 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
   }
 
   Future<void> _deleteTarget(RebalanceTarget target) async {
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
-      barrierColor: context.tokens.scrim,
-      builder: (BuildContext dialogContext) => AlertDialog(
-        title: const Text('Elimina allocazione target'),
-        content: Text(
-          'Sei sicuro di voler eliminare l\'allocazione "${target.name}"?',
-        ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Annulla'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text(
-              'Elimina',
-              style: TextStyle(color: context.tokens.danger),
-            ),
-          ),
-        ],
-      ),
+    final bool confirmed = await showAppConfirm(
+      context,
+      title: 'Elimina allocazione target',
+      message: 'Sei sicuro di voler eliminare l\'allocazione "${target.name}"?',
+      confirmLabel: 'Elimina',
+      destructive: true,
     );
-    if (confirmed != true || !mounted) return;
+    if (!confirmed || !mounted) return;
 
     try {
       await ref.read(portfolioApiProvider).deleteRebalanceTarget(target.id);
@@ -206,8 +197,11 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          const SectionHeader(
-            title: '⚖️ Smart Portfolio Rebalancer',
+          SectionHeader(
+            variant: SectionHeaderVariant.rule,
+            icon: Icons.balance_outlined,
+            overline: 'Strumenti',
+            title: 'Ribilanciatore intelligente',
             subtitle:
                 'Definisci le allocazioni target (es. 40% US Tech, 30% IT '
                 'Dividend, 30% Liquidità) e ottieni gli ordini di '
@@ -230,7 +224,8 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
                 increaseLabel: 'Aumenta (+500 €)',
               ),
               AppButton(
-                label: 'Calcola Ordini ➔',
+                label: 'Calcola ordini',
+                icon: const Icon(Icons.calculate_outlined),
                 size: AppButtonSize.sm,
                 loading: calculating,
                 loadingLabel: 'Calcolo...',
@@ -266,22 +261,22 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
     BuildContext context,
     AsyncValue<List<RebalanceTarget>> async,
   ) {
-    final AppTokens t = context.tokens;
     final Widget content;
     if (async.isLoading && !async.hasValue) {
-      content = const Column(
-        children: <Widget>[SkeletonRow(), SkeletonRow(), SkeletonRow()],
-      );
+      content = const PortfolioTableSkeleton();
     } else if (async.hasError && !async.hasValue) {
-      content = _CenteredNote(
-        text: 'Errore nel caricamento delle allocazioni target.',
-        color: t.danger,
+      content = AppErrorPanel(
+        message: 'Errore nel caricamento delle allocazioni target.',
+        onRetry: () => ref.invalidate(rebalanceTargetsProvider),
       );
     } else {
       final List<RebalanceTarget> targets =
           async.value ?? const <RebalanceTarget>[];
       content = targets.isEmpty
-          ? const _CenteredNote(text: 'Nessuna allocazione target definita.')
+          ? const EmptyState(
+              icon: Icon(Icons.playlist_add),
+              message: 'Nessuna allocazione target definita.',
+            )
           : _targetsTable(context, targets);
     }
 
@@ -289,8 +284,12 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        const _SubsectionTitle('🎯 Allocazioni Target'),
-        const SizedBox(height: AppSpacing.s12),
+        const SectionHeader(
+          dense: true,
+          icon: Icons.track_changes,
+          title: 'Allocazioni target',
+          padding: EdgeInsets.only(bottom: AppSpacing.s12),
+        ),
         Wrap(
           spacing: AppSpacing.s8,
           runSpacing: AppSpacing.s8,
@@ -348,7 +347,8 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
               ),
             ),
             AppButton(
-              label: '➕',
+              label: 'Aggiungi',
+              icon: const Icon(Icons.add),
               variant: AppButtonVariant.ghost,
               size: AppButtonSize.sm,
               tooltip: 'Aggiungi allocazione target',
@@ -364,107 +364,114 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
   }
 
   Widget _targetsTable(BuildContext context, List<RebalanceTarget> targets) {
-    final AppTokens t = context.tokens;
-    final Table table = Table(
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-      columnWidths: const <int, TableColumnWidth>{
-        0: FlexColumnWidth(1.2),
-        1: FlexColumnWidth(1.4),
-        2: FixedColumnWidth(90),
-        3: FixedColumnWidth(50),
-      },
-      border: TableBorder(
-        horizontalInside: BorderSide(color: t.borderSubtle),
-        bottom: BorderSide(color: t.border),
-      ),
-      children: <TableRow>[
-        TableRow(
-          children: <Widget>[
-            _headerCell(context, 'Bucket'),
-            _headerCell(context, 'Scope', alignment: Alignment.center),
-            _headerCell(context, 'Target %', alignment: Alignment.centerRight),
-            _headerCell(context, ''),
-          ],
-        ),
-        for (final RebalanceTarget target in targets)
-          TableRow(
-            children: <Widget>[
-              _bodyCell(
-                context,
-                child: Text(
-                  target.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: AppText.mono(
-                    context,
-                    size: 13,
-                    weight: FontWeight.w700,
-                    color: t.primary,
-                  ),
+    return PortfolioTable(
+      minWidth: 520,
+      child: Column(
+        children: <Widget>[
+          const PortfolioTableHeader(
+            cells: <Widget>[
+              Expanded(flex: 12, child: PortfolioHeaderLabel('Bucket')),
+              SizedBox(
+                width: 140,
+                child: PortfolioHeaderLabel(
+                  'Scope',
+                  alignment: Alignment.center,
                 ),
               ),
-              _bodyCell(
-                context,
-                alignment: Alignment.center,
-                child: Wrap(
-                  spacing: AppSpacing.s6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  alignment: WrapAlignment.center,
-                  children: <Widget>[
-                    AppBadge(
-                      label: _scopeLabels[target.scopeType] ?? target.scopeType,
-                      tone: BadgeTone.warning,
-                    ),
-                    if (target.scopeValue.isNotEmpty)
-                      Text(
-                        target.scopeValue,
-                        style: AppText.mono(
-                          context,
-                          size: 11.5,
-                          weight: FontWeight.w500,
-                          color: t.textMuted,
-                        ),
-                      ),
-                  ],
+              SizedBox(
+                width: 90,
+                child: PortfolioHeaderLabel(
+                  'Target %',
+                  alignment: Alignment.centerRight,
                 ),
               ),
-              _bodyCell(
-                context,
-                alignment: Alignment.centerRight,
-                child: Text(
-                  '${target.targetPercent.toStringAsFixed(1)}%',
-                  style: AppText.mono(
-                    context,
-                    size: 13,
-                    weight: FontWeight.w700,
-                    color: t.primary,
-                  ),
-                ),
-              ),
-              _bodyCell(
-                context,
-                alignment: Alignment.center,
-                child: AppIconButton(
-                  icon: const Text('🗑️', style: TextStyle(fontSize: 14)),
-                  size: 30,
-                  iconSize: 14,
-                  bordered: false,
-                  danger: true,
-                  tooltip: 'Elimina target',
-                  semanticLabel: 'Elimina allocazione ${target.name}',
-                  onPressed: () => unawaited(_deleteTarget(target)),
-                ),
-              ),
+              SizedBox(width: 44, child: PortfolioHeaderLabel('')),
             ],
           ),
-      ],
+          for (final RebalanceTarget target in targets)
+            PortfolioTableRow(
+              cells: <Widget>[
+                Expanded(
+                  flex: 12,
+                  child: Text(
+                    target.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.mono(
+                      context,
+                      size: 13,
+                      weight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 140,
+                  child: PortfolioCell(
+                    alignment: Alignment.center,
+                    child: Wrap(
+                      spacing: AppSpacing.s6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      alignment: WrapAlignment.center,
+                      children: <Widget>[
+                        AppBadge(
+                          label:
+                              _scopeLabels[target.scopeType] ?? target.scopeType,
+                          tone: BadgeTone.warning,
+                        ),
+                        if (target.scopeValue.isNotEmpty)
+                          Text(
+                            target.scopeValue,
+                            style: AppText.mono(
+                              context,
+                              size: 11.5,
+                              weight: FontWeight.w500,
+                              color: context.tokens.textMuted,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 90,
+                  child: PortfolioCell(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      formatSharePercent(target.targetPercent, decimals: 1),
+                      style: AppText.tableCellNum(context).copyWith(
+                        color: context.tokens.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 44,
+                  child: PortfolioCell(
+                    alignment: Alignment.centerRight,
+                    child: PortfolioActionsReveal(
+                      child: AppIconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        size: AppSizes.iconButtonSm,
+                        iconSize: AppSizes.iconSm,
+                        minTargetSize: AppSizes.touchTarget,
+                        tooltip: 'Elimina target',
+                        semanticLabel:
+                            'Elimina allocazione ${target.name}',
+                        danger: true,
+                        onPressed: () => unawaited(_deleteTarget(target)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+        ],
+      ),
     );
-
-    return _scrollableTable(minWidth: 520, table: table);
   }
 
   Widget _buildPlan(BuildContext context, AsyncValue<RebalancePreview?> async) {
-    final AppTokens t = context.tokens;
     final Widget content;
     if (async.isLoading) {
       content = const Padding(
@@ -473,30 +480,36 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
       );
     } else if (async.hasError) {
       final Object? error = async.error;
-      content = _CenteredNote(
-        text: error is ApiException
+      content = AppErrorPanel(
+        message: error is ApiException
             ? error.message
             : 'Errore durante il calcolo del piano',
-        color: t.danger,
+        onRetry: () => unawaited(_calculate()),
       );
     } else {
       final RebalancePreview? plan = async.value;
       if (plan == null) {
-        content = const _CenteredNote(
-          text:
-              'Configura le allocazioni target e clicca "Calcola Ordini" per '
+        content = const EmptyState(
+          icon: Icon(Icons.calculate_outlined),
+          message:
+              'Configura le allocazioni target e clicca "Calcola ordini" per '
               'generare il piano.',
         );
       } else if (plan.orders.isEmpty) {
-        content = _CenteredNote(
-          text: plan.portfolioEmpty
+        content = EmptyState(
+          icon: Icon(
+            plan.portfolioEmpty
+                ? Icons.inventory_2_outlined
+                : Icons.check_circle_outline,
+          ),
+          message: plan.portfolioEmpty
               ? 'Portafoglio vuoto: aggiungi delle posizioni per generare un '
                     'piano di ribilanciamento.'
               : 'Il portafoglio è già allineato alle allocazioni target: '
                     'nessun ordine necessario.',
         );
       } else {
-        content = _planTable(context, plan);
+        content = _planContent(context, plan);
       }
     }
 
@@ -504,284 +517,366 @@ class _RebalancerSectionState extends ConsumerState<RebalancerSection> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        const _SubsectionTitle('📋 Piano di Ribilanciamento'),
-        const SizedBox(height: AppSpacing.s12),
+        const SectionHeader(
+          dense: true,
+          icon: Icons.format_list_numbered,
+          title: 'Piano di ribilanciamento',
+          padding: EdgeInsets.only(bottom: AppSpacing.s12),
+        ),
         content,
       ],
     );
   }
 
-  Widget _planTable(BuildContext context, RebalancePreview plan) {
-    final AppTokens t = context.tokens;
-    final TextStyle caption = AppText.caption(context);
-    final Table table = Table(
-      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-      columnWidths: const <int, TableColumnWidth>{
-        0: FixedColumnWidth(80),
-        1: FlexColumnWidth(1.6),
-        2: FixedColumnWidth(80),
-        3: FixedColumnWidth(120),
-        4: FixedColumnWidth(120),
-      },
-      border: TableBorder(
-        horizontalInside: BorderSide(color: t.borderSubtle),
-        bottom: BorderSide(color: t.border),
-      ),
-      children: <TableRow>[
-        TableRow(
-          children: <Widget>[
-            _headerCell(context, 'Lato', alignment: Alignment.center),
-            _headerCell(context, 'Titolo'),
-            _headerCell(context, 'Quantità', alignment: Alignment.centerRight),
-            _headerCell(
-              context,
-              'Prezzo Stimato',
-              alignment: Alignment.centerRight,
-            ),
-            _headerCell(context, 'Importo', alignment: Alignment.centerRight),
-          ],
-        ),
-        for (final RebalanceOrder order in plan.orders)
-          TableRow(
-            children: <Widget>[
-              _bodyCell(
-                context,
-                alignment: Alignment.center,
-                child: AppBadge.trade(order.side),
-              ),
-              _bodyCell(
-                context,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: <Widget>[
-                    InkWell(
-                      onTap: () =>
-                          unawaited(showStockDetail(context, order.ticker)),
-                      borderRadius: BorderRadius.circular(AppRadii.small),
-                      child: Text(
-                        order.ticker,
-                        style: AppText.mono(
-                          context,
-                          size: 13,
-                          weight: FontWeight.w700,
-                          color: t.primary,
-                        ),
-                      ),
-                    ),
-                    if (order.name.isNotEmpty ||
-                        (order.allocationName?.isNotEmpty ?? false))
-                      Text(
-                        <String>[
-                          if (order.name.isNotEmpty) order.name,
-                          if (order.allocationName?.isNotEmpty ?? false)
-                            order.allocationName!,
-                        ].join(' • '),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: caption,
-                      ),
-                  ],
-                ),
-              ),
-              _bodyCell(
-                context,
-                alignment: Alignment.centerRight,
-                child: Text(
-                  formatDraftNumber(order.quantity),
-                  style: AppText.mono(context, size: 13),
-                ),
-              ),
-              _bodyCell(
-                context,
-                alignment: Alignment.centerRight,
-                child: Text(
-                  formatCurrency(
-                    order.estimatedPrice,
-                    currency: order.currency,
-                  ),
-                  style: AppText.mono(context, size: 13),
-                ),
-              ),
-              _bodyCell(
-                context,
-                alignment: Alignment.centerRight,
-                child: Text(
-                  formatCurrency(
-                    order.estimatedValue,
-                    currency: order.currency,
-                  ),
-                  style: AppText.mono(
-                    context,
-                    size: 13,
-                    weight: FontWeight.w700,
-                    color: order.side == 'BUY' ? t.success : t.danger,
-                  ),
-                ),
-              ),
-            ],
-          ),
-      ],
-    );
-
-    final TextStyle monoPrimary = AppText.mono(
-      context,
-      size: 13,
-      weight: FontWeight.w700,
-      color: t.primary,
-    );
-    final TextStyle monoSuccess = AppText.mono(
-      context,
-      size: 13,
-      weight: FontWeight.w700,
-      color: t.success,
-    );
-    final TextStyle monoDanger = AppText.mono(
-      context,
-      size: 13,
-      weight: FontWeight.w700,
-      color: t.danger,
-    );
-
+  Widget _planContent(BuildContext context, RebalancePreview plan) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: <Widget>[
-        Wrap(
-          alignment: WrapAlignment.spaceBetween,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: AppSpacing.s10,
-          runSpacing: AppSpacing.s4,
-          children: <Widget>[
-            Text.rich(
-              TextSpan(
-                text: 'Valore totale (incl. liquidità): ',
-                children: <InlineSpan>[
-                  TextSpan(
-                    text: formatCurrency(plan.totalValue),
-                    style: monoPrimary,
-                  ),
-                ],
+        _PlanSummary(plan: plan),
+        if (plan.allocations.isNotEmpty) ...<Widget>[
+          const SizedBox(height: AppSpacing.s14),
+          for (final RebalanceAllocation allocation in plan.allocations)
+            _AllocationGauge(allocation: allocation),
+        ],
+        const SizedBox(height: AppSpacing.s14),
+        _ordersTable(context, plan),
+      ],
+    );
+  }
+
+  Widget _ordersTable(BuildContext context, RebalancePreview plan) {
+    final AppTokens t = context.tokens;
+    return PortfolioTable(
+      minWidth: 620,
+      child: Column(
+        children: <Widget>[
+          const PortfolioTableHeader(
+            cells: <Widget>[
+              SizedBox(
+                width: 76,
+                child: PortfolioHeaderLabel(
+                  'Lato',
+                  alignment: Alignment.center,
+                ),
               ),
-              style: caption,
-            ),
-            Text.rich(
-              TextSpan(
-                children: <InlineSpan>[
-                  const TextSpan(text: 'BUY: '),
-                  TextSpan(
-                    text: formatCurrency(plan.totalBuyValue),
-                    style: monoSuccess,
-                  ),
-                  const TextSpan(text: ' • '),
-                  const TextSpan(text: 'SELL: '),
-                  TextSpan(
-                    text: formatCurrency(plan.totalSellValue),
-                    style: monoDanger,
-                  ),
-                ],
+              Expanded(flex: 30, child: PortfolioHeaderLabel('Titolo')),
+              SizedBox(
+                width: 92,
+                child: PortfolioHeaderLabel(
+                  'Quantità',
+                  alignment: Alignment.centerRight,
+                ),
               ),
-              style: caption,
+              SizedBox(
+                width: 118,
+                child: PortfolioHeaderLabel(
+                  'Prezzo stimato',
+                  alignment: Alignment.centerRight,
+                ),
+              ),
+              SizedBox(
+                width: 124,
+                child: PortfolioHeaderLabel(
+                  'Importo',
+                  alignment: Alignment.centerRight,
+                ),
+              ),
+            ],
+          ),
+          for (final RebalanceOrder order in plan.orders)
+            PortfolioTableRow(
+              cells: <Widget>[
+                SizedBox(
+                  width: 76,
+                  child: PortfolioCell(
+                    alignment: Alignment.center,
+                    child: AppBadge.trade(order.side),
+                  ),
+                ),
+                Expanded(
+                  flex: 30,
+                  child: _OrderTickerCell(order: order),
+                ),
+                SizedBox(
+                  width: 92,
+                  child: PortfolioCell(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      formatDraftNumber(order.quantity),
+                      style: AppText.tableCellNum(context),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 118,
+                  child: PortfolioCell(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      formatCurrency(
+                        order.estimatedPrice,
+                        currency: order.currency,
+                      ),
+                      style: AppText.tableCellNum(context),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  width: 124,
+                  child: PortfolioCell(
+                    alignment: Alignment.centerRight,
+                    child: Text(
+                      formatCurrency(
+                        order.estimatedValue,
+                        currency: order.currency,
+                      ),
+                      style: AppText.tableCellNum(context).copyWith(
+                        color: order.side == 'BUY' ? t.successText : t.danger,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+        ],
+      ),
+    );
+  }
+}
+
+// --- Widget privati ---------------------------------------------------------
+
+/// Riepilogo del piano: valore totale, acquisti e vendite.
+class _PlanSummary extends StatelessWidget {
+  const _PlanSummary({required this.plan});
+
+  final RebalancePreview plan;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return Wrap(
+      spacing: AppSpacing.s10,
+      runSpacing: AppSpacing.s10,
+      children: <Widget>[
+        _PlanDatum(
+          label: 'Valore totale (incl. liquidità)',
+          value: formatCurrency(plan.totalValue),
+          color: t.primary,
         ),
-        const SizedBox(height: AppSpacing.s10),
-        _scrollableTable(minWidth: 640, table: table),
+        _PlanDatum(
+          label: 'Acquisti (BUY)',
+          value: formatCurrency(plan.totalBuyValue),
+          color: t.successText,
+        ),
+        _PlanDatum(
+          label: 'Vendite (SELL)',
+          value: formatCurrency(plan.totalSellValue),
+          color: t.danger,
+        ),
       ],
     );
   }
 }
 
-// --- Widget privati condivisi dalla sezione --------------------------------
+class _PlanDatum extends StatelessWidget {
+  const _PlanDatum({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
-class _SubsectionTitle extends StatelessWidget {
-  const _SubsectionTitle(this.title);
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      title,
-      style: AppText.small(context)
-          .copyWith(fontWeight: FontWeight.w700, color: context.tokens.primary),
-    );
-  }
-}
-
-class _CenteredNote extends StatelessWidget {
-  const _CenteredNote({required this.text, this.color});
-
-  final String text;
-  final Color? color;
+  final String label;
+  final String value;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    final AppTokens t = context.tokens;
+    return Container(
       padding: const EdgeInsets.symmetric(
-        horizontal: AppSpacing.s8,
-        vertical: AppSpacing.s18,
+        horizontal: AppSpacing.s12,
+        vertical: AppSpacing.s8,
       ),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: AppText.small(context)
-            .copyWith(color: color ?? context.tokens.textMuted),
+      decoration: BoxDecoration(
+        color: t.surfaceSunken,
+        border: Border.all(color: t.border),
+        borderRadius: BorderRadius.circular(AppRadii.control),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Text(label.toUpperCase(), style: AppText.statLabel(context)),
+          const SizedBox(height: AppSpacing.s4),
+          Text(
+            value,
+            style: AppText.mono(
+              context,
+              size: 15,
+              weight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-Widget _headerCell(
-  BuildContext context,
-  String label, {
-  Alignment alignment = Alignment.centerLeft,
-}) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: AppSpacing.s10,
-      vertical: AppSpacing.s8,
-    ),
-    child: Text(
-      label.toUpperCase(),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      textAlign: _textAlignFor(alignment),
-      style: AppText.tableHeader(context),
-    ),
-  );
+/// Bucket del piano: quota corrente su target con segnaposto e scostamento.
+class _AllocationGauge extends StatelessWidget {
+  const _AllocationGauge({required this.allocation});
+
+  final RebalanceAllocation allocation;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final double current = allocation.currentPercent;
+    final double target = allocation.targetPercent;
+    final double drift = allocation.driftPct;
+    final bool aligned = drift.abs() < 0.5;
+    final String currentLabel = formatSharePercent(current, decimals: 1);
+    final String targetLabel = formatSharePercent(target, decimals: 1);
+
+    final Widget driftBadge;
+    if (aligned) {
+      driftBadge = const AppBadge(
+        label: 'In linea',
+        tone: BadgeTone.success,
+        icon: Icon(Icons.check),
+      );
+    } else if (drift > 0) {
+      driftBadge = const AppBadge(
+        label: 'Da aumentare',
+        tone: BadgeTone.warning,
+        icon: Icon(Icons.arrow_upward),
+      );
+    } else {
+      driftBadge = const AppBadge(
+        label: 'Da ridurre',
+        tone: BadgeTone.warning,
+        icon: Icon(Icons.arrow_downward),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: AppSpacing.s12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: Text(
+                  allocation.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppText.mono(
+                    context,
+                    size: 12.5,
+                    weight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s6),
+              driftBadge,
+              const SizedBox(width: AppSpacing.s8),
+              Text(
+                _signedMoney(allocation.delta),
+                style: AppText.mono(
+                  context,
+                  size: 12,
+                  weight: FontWeight.w600,
+                  color: allocation.delta >= 0
+                      ? t.warning
+                      : t.textSecondary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.s6),
+          AppProgressBar(
+            value: (current / 100).clamp(0, 1).toDouble(),
+            target: (target / 100).clamp(0, 1).toDouble(),
+            height: 5,
+            tone: AppProgressTone.neutral,
+            semanticsLabel:
+                '${allocation.name}: corrente $currentLabel, target '
+                '$targetLabel',
+          ),
+          const SizedBox(height: AppSpacing.s4),
+          Row(
+            children: <Widget>[
+              Text(
+                'Corrente $currentLabel',
+                style: AppText.caption(context),
+              ),
+              const Spacer(),
+              Text('Target $targetLabel', style: AppText.caption(context)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-Widget _bodyCell(
-  BuildContext context, {
-  required Widget child,
-  Alignment alignment = Alignment.centerLeft,
-}) {
-  return Padding(
-    padding: const EdgeInsets.symmetric(
-      horizontal: AppSpacing.s10,
-      vertical: AppSpacing.s8,
-    ),
-    child: Align(alignment: alignment, child: child),
-  );
+/// Cella titolo dell'ordine: tag di mercato, ticker mono e nome/bucket.
+class _OrderTickerCell extends StatelessWidget {
+  const _OrderTickerCell({required this.order});
+
+  final RebalanceOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    final String detail = <String>[
+      if (order.name.isNotEmpty) order.name,
+      if (order.allocationName?.isNotEmpty ?? false) order.allocationName!,
+    ].join(' • ');
+
+    return Row(
+      children: <Widget>[
+        AppMarketTag.forTicker(order.ticker),
+        const SizedBox(width: AppSpacing.s6),
+        InkWell(
+          onTap: () => unawaited(showStockDetail(context, order.ticker)),
+          borderRadius: BorderRadius.circular(AppRadii.small),
+          child: Text(
+            order.ticker,
+            style: AppText.mono(
+              context,
+              size: 13,
+              weight: FontWeight.w700,
+              color: t.primary,
+            ),
+          ),
+        ),
+        if (detail.isNotEmpty) ...<Widget>[
+          const SizedBox(width: AppSpacing.s6),
+          Expanded(
+            child: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.caption(context),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
-TextAlign _textAlignFor(Alignment alignment) {
-  if (alignment == Alignment.centerRight) return TextAlign.right;
-  if (alignment == Alignment.center) return TextAlign.center;
-  return TextAlign.left;
-}
-
-Widget _scrollableTable({required double minWidth, required Table table}) {
-  return LayoutBuilder(
-    builder: (BuildContext context, BoxConstraints constraints) {
-      if (constraints.maxWidth < minWidth) {
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(width: minWidth, child: table),
-        );
-      }
-      return table;
-    },
-  );
+/// Importo firmato (`+1.234,56 €` / `−120,00 €`), mai solo colore.
+String _signedMoney(num? value) {
+  if (value == null || !value.isFinite) return '—';
+  final String formatted = formatCurrency(value.abs());
+  if (value > 0) return '+$formatted';
+  if (value < 0) return '−$formatted';
+  return formatted;
 }

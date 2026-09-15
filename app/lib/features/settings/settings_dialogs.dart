@@ -9,40 +9,7 @@ import '../../widgets/app_button.dart';
 import '../../widgets/toast.dart';
 import 'settings_providers.dart';
 
-/// Dialog di conferma generico (equivalente Flutter dei `confirm()` legacy).
-///
-/// Restituisce `true` solo quando l'utente conferma; `false`/`null` per
-/// annullamento o chiusura con Esc/backdrop.
-Future<bool> showSettingsConfirmDialog(
-  BuildContext context, {
-  required String title,
-  required String message,
-  String confirmLabel = 'Conferma',
-  bool danger = false,
-}) async {
-  final bool? result = await showDialog<bool>(
-    context: context,
-    builder: (BuildContext context) => AlertDialog(
-      title: Text(title, style: AppText.modalTitle(context)),
-      content: Text(message, style: AppText.body(context)),
-      actions: <Widget>[
-        AppButton(
-          label: 'Annulla',
-          variant: AppButtonVariant.ghost,
-          onPressed: () => Navigator.of(context).pop(false),
-        ),
-        AppButton(
-          label: confirmLabel,
-          variant: danger ? AppButtonVariant.danger : AppButtonVariant.primary,
-          onPressed: () => Navigator.of(context).pop(true),
-        ),
-      ],
-    ),
-  );
-  return result ?? false;
-}
-
-/// Apre il dialog "🔑 Reimposta password" per [user] (azione admin).
+/// Apre il dialog "Reimposta password" per [user] (azione admin).
 Future<void> showResetPasswordDialog(BuildContext context, AuthUser user) {
   return showDialog<void>(
     context: context,
@@ -129,7 +96,7 @@ class _ResetPasswordDialogState extends ConsumerState<ResetPasswordDialog> {
     final AppTokens t = context.tokens;
     return AlertDialog(
       title: Text(
-        '🔑 Reimposta password di ${widget.user.username}',
+        'Reimposta password di ${widget.user.username}',
         style: AppText.modalTitle(context),
       ),
       content: SizedBox(
@@ -193,7 +160,8 @@ class _ResetPasswordDialogState extends ConsumerState<ResetPasswordDialog> {
           onPressed: _submitting ? null : () => Navigator.of(context).pop(),
         ),
         AppButton(
-          label: '🔑 Reimposta',
+          label: 'Reimposta',
+          icon: const Icon(Icons.key_outlined),
           loading: _submitting,
           onPressed: _submit,
         ),

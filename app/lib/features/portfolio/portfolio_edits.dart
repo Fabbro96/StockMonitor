@@ -75,3 +75,8 @@ String formatDraftNumber(double value, {int? decimals}) {
       .replaceFirst(RegExp(r'0+$'), '')
       .replaceFirst(RegExp(r'\.$'), '');
 }
+
+/// Percentuale in stile italiano **senza segno**: quote di allocazione, yield
+/// e target (`61,89%`, `40,0%`). Per le variazioni serve `AppDelta`.
+String formatSharePercent(double value, {int decimals = 2}) =>
+    '${value.toStringAsFixed(decimals).replaceAll('.', ',')}%';

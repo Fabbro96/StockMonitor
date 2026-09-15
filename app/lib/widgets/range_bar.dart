@@ -3,8 +3,8 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 
-/// Barra del range 52 settimane (`.range-bar-*`): track 6px, riempimento a
-/// gradiente danger→warning→success al 55%, pin 4×12 nella posizione corrente.
+/// Barra del range 52 settimane: track 5px su `surfaceSunken`, riempimento a
+/// gradiente danger→warning→success, pin 3×11 nella posizione corrente.
 ///
 /// [positionPercent] è la posizione già calcolata (0–100, fuori range viene
 /// clampata). I label [lowLabel]/[highLabel] sono tipicamente i prezzi min/max
@@ -50,11 +50,11 @@ class RangeBar extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           SizedBox(
-            height: 14,
+            height: 13,
             child: LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
                 final double width = constraints.maxWidth;
-                final double pinLeft = (width * percent / 100 - 2).clamp(0, width - 4).toDouble();
+                final double pinLeft = (width * percent / 100 - 1.5).clamp(0, width - 3).toDouble();
                 return Stack(
                   clipBehavior: Clip.none,
                   children: <Widget>[
@@ -65,9 +65,9 @@ class RangeBar extends StatelessWidget {
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(3),
                         child: Container(
-                          height: 6,
+                          height: 5,
                           decoration: BoxDecoration(
-                            color: t.surfaceHover,
+                            color: t.surfaceSunken,
                             border: Border.all(color: t.border),
                             borderRadius: BorderRadius.circular(3),
                           ),
@@ -93,11 +93,12 @@ class RangeBar extends StatelessWidget {
                       top: 1,
                       left: pinLeft,
                       child: Container(
-                        width: 4,
-                        height: 12,
+                        width: 3,
+                        height: 11,
                         decoration: BoxDecoration(
                           color: t.textPrimary,
-                          borderRadius: BorderRadius.circular(2),
+                          border: Border.all(color: t.surface),
+                          borderRadius: BorderRadius.circular(1.5),
                         ),
                       ),
                     ),
@@ -116,7 +117,7 @@ class RangeBar extends StatelessWidget {
                     Flexible(
                       child: Text(
                         lowLabel!,
-                        style: AppText.mono(context, size: 11.2, weight: FontWeight.w500, color: t.textMuted),
+                        style: AppText.mono(context, size: 11, weight: FontWeight.w500, color: t.textMuted),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -128,7 +129,7 @@ class RangeBar extends StatelessWidget {
                       child: Text(
                         highLabel!,
                         textAlign: TextAlign.right,
-                        style: AppText.mono(context, size: 11.2, weight: FontWeight.w500, color: t.textMuted),
+                        style: AppText.mono(context, size: 11, weight: FontWeight.w500, color: t.textMuted),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),

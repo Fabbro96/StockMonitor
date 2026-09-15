@@ -5,17 +5,21 @@ import '../../../core/models/dashboard.dart';
 import '../../../theme/app_theme.dart';
 import '../../../theme/tokens.dart';
 import '../../../widgets/app_button.dart';
+import '../../../widgets/app_delta.dart';
+import '../../../widgets/app_error_panel.dart';
 import '../../../widgets/empty_state.dart';
 import '../../../widgets/skeleton.dart';
-import '../../../widgets/ticker_flag.dart';
 import 'price_flash.dart';
 import 'responsive_wrap.dart';
 
-/// Griglia heatmap (`.heatmap-grid`): tile-bottone con ticker+bandiera,
-/// nome, prezzo e variazione, sfondo/bordo con intensità da
-/// `AppTokens.heatmapTileBackground/Border`.
+/// Griglia heatmap (`.heatmap-grid`): tile-bottone con ticker, nome, prezzo e
+/// variazione firmata; sfondo, bordo e testo arrivano da
+/// `AppTokens.heatmapTileBackground/Border/Foreground` (5 livelli di intensità).
 ///
-/// Stati: skeleton su primo load, `Dati non disponibili.` in errore senza dati,
+/// La variazione usa [AppDelta] (freccia + segno + mono tabulare): la
+/// direzione resta leggibile anche quando il colore non è percepito.
+///
+/// Stati: skeleton su primo load, pannello d'errore in errore senza dati,
 /// empty `Nessun titolo attivo per la heatmap.` con bottone demo.
 class HeatmapGrid extends StatelessWidget {
   /// Crea la griglia.
@@ -26,6 +30,7 @@ class HeatmapGrid extends StatelessWidget {
     required this.failed,
     required this.onOpenStock,
     required this.onSeedDemo,
+    this.onRetry,
   });
 
   /// Titoli della heatmap; `null` finché mai caricati.
@@ -40,8 +45,11 @@ class HeatmapGrid extends StatelessWidget {
   /// Tap su una tile (apre la scheda tecnica).
   final ValueChanged<String> onOpenStock;
 
-  /// Tap su `Inizializza Dati Demo`.
+  /// Tap su `Inizializza dati demo`.
   final VoidCallback onSeedDemo;
+
+  /// Ritenta il caricamento della sezione.
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -56,13 +64,16 @@ class HeatmapGrid extends StatelessWidget {
         children: <Widget>[
           for (var i = 0; i < 4; i++)
             // ~altezza reale della tile con footer impilato su mobile.
-            SkeletonCard(height: compact ? 88 : 80),
+            SkeletonCard(height: compact ? 92 : 84),
         ],
       );
     }
 
     if (items == null && failed) {
-      return const EmptyState(message: 'Dati non disponibili.');
+      return AppErrorPanel(
+        message: 'Heatmap non disponibile.',
+        onRetry: onRetry,
+      );
     }
 
     final List<HeatmapItem> list = items ?? const <HeatmapItem>[];
@@ -71,7 +82,8 @@ class HeatmapGrid extends StatelessWidget {
         message: 'Nessun titolo attivo per la heatmap.',
         actions: <Widget>[
           AppButton(
-            label: '🚀 Inizializza Dati Demo',
+            label: 'Inizializza dati demo',
+            icon: const Icon(Icons.auto_awesome_outlined),
             size: AppButtonSize.sm,
             onPressed: onSeedDemo,
           ),
@@ -79,17 +91,68 @@ class HeatmapGrid extends StatelessWidget {
       );
     }
 
-    return ResponsiveWrap(
-      minItemWidth: 140,
-      mobileMinItemWidth: 150,
-      gap: AppSpacing.s8,
-      mobileGap: AppSpacing.s6,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        for (final HeatmapItem item in list)
-          _HeatmapTile(
-            key: ValueKey<String>(item.ticker),
-            item: item,
-            onTap: () => onOpenStock(item.ticker),
+        ResponsiveWrap(
+          minItemWidth: 140,
+          mobileMinItemWidth: 150,
+          gap: AppSpacing.s8,
+          mobileGap: AppSpacing.s6,
+          children: <Widget>[
+            for (final HeatmapItem item in list)
+              _HeatmapTile(
+                key: ValueKey<String>(item.ticker),
+                item: item,
+                onTap: () => onOpenStock(item.ticker),
+              ),
+          ],
+        ),
+        const SizedBox(height: AppSpacing.s12),
+        const _IntensityLegend(),
+      ],
+    );
+  }
+}
+
+/// Legenda dei cinque livelli di intensità della heatmap.
+class _IntensityLegend extends StatelessWidget {
+  const _IntensityLegend();
+
+  /// Valori campione: due negativi, neutro, due positivi.
+  static const List<(double, String)> _samples = <(double, String)>[
+    (-5, '-5%'),
+    (-2, '-2%'),
+    (0, '0%'),
+    (2, '+2%'),
+    (5, '+5%'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final AppTokens t = context.tokens;
+    return Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: AppSpacing.s10,
+      runSpacing: AppSpacing.s6,
+      children: <Widget>[
+        Text('INTENSITÀ', style: AppText.micro(context).copyWith(color: t.textMuted)),
+        for (final (double value, String label) in _samples)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                width: 11,
+                height: 11,
+                decoration: BoxDecoration(
+                  color: t.heatmapTileBackground(value),
+                  border: Border.all(color: t.heatmapTileBorder(value)),
+                  borderRadius: BorderRadius.circular(AppRadii.xs),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s4),
+              Text(label, style: AppText.mono(context, size: 11, weight: FontWeight.w500, color: t.textMuted)),
+            ],
           ),
       ],
     );
@@ -116,8 +179,7 @@ class _HeatmapTileState extends State<_HeatmapTile> {
     final HeatmapItem item = widget.item;
     final double change = item.changePercent;
     final bool up = change >= 0;
-    final String sign = up ? '+' : '';
-    final String flag = TickerFlags.forMarket(item.market);
+    final Color foreground = t.heatmapTileForeground(change);
     final Color border = _hovered ? t.primary : t.heatmapTileBorder(change);
 
     final Widget price = PriceFlash(
@@ -125,41 +187,30 @@ class _HeatmapTileState extends State<_HeatmapTile> {
       rising: up,
       child: Text(
         formatCurrency(item.currentPrice, currency: item.currency),
-        style: AppText.mono(context, size: 12, weight: FontWeight.w700),
+        style: AppText.mono(context, size: 12, weight: FontWeight.w700, color: foreground),
       ),
     );
-    final Widget changeText = Text(
-      '$sign${change.toStringAsFixed(2)}%',
-      style: AppText.mono(
-        context,
-        size: 12,
-        weight: FontWeight.w700,
-        color: up ? t.successText : t.danger,
-      ),
+    final Widget changeText = AppDelta(
+      value: change,
+      suffix: '%',
+      size: 12,
+      colorOverride: foreground,
     );
 
-    final Widget footer = compact
-        ? Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[price, changeText],
-          )
-        : Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: <Widget>[
-              Flexible(child: price),
-              const SizedBox(width: AppSpacing.s6),
-              Flexible(child: changeText),
-            ],
-          );
+    // Prezzo e variazione su due righe: a larghezze minime (140px) il delta
+    // non viene mai troncato, a differenza della disposizione affiancata.
+    final Widget footer = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[price, changeText],
+    );
 
     return Tooltip(
       message: 'Apri scheda tecnica di ${item.ticker}',
       child: AnimatedContainer(
         duration: AppMotion.effective(context, AppMotion.fast),
         curve: AppMotion.ease,
-        constraints: BoxConstraints(minHeight: compact ? 70 : 80),
+        constraints: BoxConstraints(minHeight: compact ? 74 : 84),
         padding: EdgeInsets.all(compact ? 8 : 10),
         decoration: BoxDecoration(
           color: t.heatmapTileBackground(change),
@@ -178,31 +229,25 @@ class _HeatmapTileState extends State<_HeatmapTile> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Text(
-                        item.ticker,
-                        style: AppText.mono(
-                          context,
-                          size: 13.1,
-                          weight: FontWeight.w700,
-                          color: t.primary,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    Text(flag, style: const TextStyle(fontSize: 12.2, height: 1.2)),
-                  ],
+                Text(
+                  item.ticker,
+                  style: AppText.mono(
+                    context,
+                    size: 13,
+                    weight: FontWeight.w700,
+                    color: foreground,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: AppSpacing.s2),
                 Text(
                   item.name.isEmpty ? item.ticker : item.name,
-                  style: TextStyle(
-                    color: t.textSecondary,
-                    fontSize: 12.2,
-                    fontWeight: FontWeight.w400,
-                    fontFamilyFallback: AppTokens.fontFallback,
+                  style: AppText.caption(context).copyWith(
+                    // Stessa tinta AA-safe di ticker e prezzo: nessuna alpha
+                    // ridotta che abbasserebbe il contrasto sotto soglia.
+                    color: foreground,
+                    fontSize: 12,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

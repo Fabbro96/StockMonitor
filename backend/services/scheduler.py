@@ -96,7 +96,7 @@ async def generate_advice_job():
         logger.info("Borse chiuse: job periodico generazione consigli saltato.")
         return
 
-    logger.info("Avvio job periodico: generazione 5 consigli AI con Gemini 3.7 Flash")
+    logger.info("Avvio job periodico: generazione 5 consigli AI con Gemini 3.8 Flash")
     try:
         async with async_session_maker() as session:
             advisor_service = AdvisorService()

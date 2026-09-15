@@ -143,7 +143,7 @@ async def analyze_stock_on_demand(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Richiede un'analisi istantanea approfondita a Google Gemini 3.7 Flash per un singolo titolo.
+    Richiede un'analisi istantanea approfondita a Google Gemini 3.8 Flash per un singolo titolo.
     """
     _check_rate_limit(f"stock_{ticker.upper()}")
     advisor = AdvisorService()

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"stockmon/internal/advisor"
 	"stockmon/internal/alerts"
 	"stockmon/internal/auth"
 	"stockmon/internal/dashboard"
@@ -30,6 +31,9 @@ import (
 	"stockmon/internal/watchlist"
 	"stockmon/web"
 )
+
+// Version è la versione del backend Go (iniettata nel web UI).
+const Version = "4.1.0"
 
 // gzipMinBytes: sotto questa soglia gzip non conviene (solo overhead).
 const gzipMinBytes = 1024
@@ -247,16 +251,21 @@ func main() {
 	mux.HandleFunc("PUT /api/settings/alerts/{id}", authed(alerts.Update(read, wdb)))
 	mux.HandleFunc("DELETE /api/settings/alerts/{id}", authed(alerts.Delete(read, wdb)))
 
+	mux.HandleFunc("GET /api/advice", authed(advisor.List(conn)))
+	mux.HandleFunc("GET /api/advice/", authed(advisor.List(conn)))
+	mux.HandleFunc("POST /api/advice/generate", authed(advisor.Generate(read, wdb)))
+
 	mux.HandleFunc("GET /api/stocks/search", authed(stocks.Search()))
 	mux.HandleFunc("GET /api/stocks/{ticker}/candles", authed(stocks.Candles(conn)))
 
 	// Build web embedded (server-go/web/dist): registrata DOPO /api/* e
 	// /health così le API hanno sempre precedenza. La query string (?v=1)
 	// non fa parte del match del ServeMux: nessun handling dedicato.
-	indexHTML, err := web.Dist.ReadFile("dist/index.html")
+	indexHTMLRaw, err := web.Dist.ReadFile("dist/index.html")
 	if err != nil {
 		log.Fatalf("web embedded: index.html mancante: %v", err)
 	}
+	indexHTML := []byte(strings.ReplaceAll(string(indexHTMLRaw), "{{VERSION}}", Version))
 	appJS, err := web.Dist.ReadFile("dist/app.js")
 	if err != nil {
 		log.Fatalf("web embedded: app.js mancante: %v", err)

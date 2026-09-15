@@ -4,49 +4,65 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>StockMon Go</title>
-<link rel="stylesheet" href="style.css?v=1">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
-<header class="top">
-<div class="brand">StockMon <span class="tag">Go</span></div>
-<div class="top-right">
-<span id="mkt" class="mkt"></span>
-<button id="refresh" type="button" title="Aggiorna">↻</button>
-<button id="logout" type="button" hidden>Esci</button>
+<header class="sm-top">
+<div class="sm-brand">StockMon <span class="sm-tag">go</span></div>
+<div class="sm-top-right">
+<span id="mkt" class="sm-mkt" aria-label="Stato mercati"></span>
+<button id="refresh" class="sm-icon" type="button" title="Aggiorna" aria-label="Aggiorna i dati">
+<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+</button>
+<button id="logout" class="sm-btn sm-ghost" type="button" hidden>Esci</button>
 </div>
 </header>
-<section id="login" class="card login">
+
+<section id="login" class="sm-card login">
 <h1>Accedi</h1>
 <form id="loginForm">
-<label>Utente<input id="user" name="username" type="text" autocomplete="username" required></label>
-<label>Password<input id="pass" name="password" type="password" autocomplete="current-password" required></label>
-<button type="submit">Login</button>
+<label>Utente<input id="user" class="sm-input" name="username" type="text" autocomplete="username" required></label>
+<label>Password<input id="pass" class="sm-input" name="password" type="password" autocomplete="current-password" required></label>
+<button type="submit" class="sm-btn">Login</button>
 </form>
 <p id="loginErr" class="err" role="alert"></p>
 </section>
+
 <main id="app" hidden>
-<p id="status" class="muted"></p>
-<section class="grid" id="cards">
-<div class="card"><h2>Controvalore</h2><p id="cVal" class="big">—</p><p id="cInv" class="muted"></p></div>
-<div class="card"><h2>P&amp;L totale</h2><p id="cPnl" class="big">—</p><p id="cPnlP" class="muted"></p></div>
-<div class="card"><h2>P&amp;L giorno</h2><p id="cDay" class="big">—</p><p id="cDayP" class="muted"></p></div>
-<div class="card"><h2>Posizioni / Alert</h2><p id="cPos" class="big">—</p><p id="cAlert" class="muted"></p></div>
+<div class="sm-row sm-bar"><span id="status" class="sm-mut sm-num"></span><span class="sm-label">solo lettura</span></div>
+
+<section class="sm-kpis" id="cards">
+<div class="sm-card kpi"><span class="sm-label">Controvalore</span><span id="cVal" class="kpi-val">—</span><span id="cInv" class="kpi-sub sm-mut"></span></div>
+<div class="sm-card kpi"><span class="sm-label">P&amp;L totale</span><span id="cPnl" class="kpi-val">—</span><span id="cPnlP" class="kpi-sub"></span></div>
+<div class="sm-card kpi"><span class="sm-label">P&amp;L giorno</span><span id="cDay" class="kpi-val">—</span><span id="cDayP" class="kpi-sub"></span></div>
+<div class="sm-card kpi"><span class="sm-label">Posizioni / Alert</span><span id="cPos" class="kpi-val">—</span><span id="cAlert" class="kpi-sub sm-mut"></span></div>
 </section>
-<section class="card">
-<div class="row"><h2>Watchlist</h2><span id="wlCount" class="muted"></span></div>
-<div class="tbl-wrap"><table id="wl">
+
+<section class="sm-card">
+<div class="sm-row"><h2 class="sm-label">Mercati</h2><span id="wlCount" class="sm-mut sm-num"></span></div>
+<div class="sm-scroll"><table id="wl" class="sm-table">
 <thead><tr><th>Ticker</th><th class="num">Prezzo</th><th class="num">Δ %</th><th class="num">RSI</th><th>Alert</th></tr></thead>
 <tbody></tbody>
 </table></div>
 </section>
-<section class="card">
-<div class="row"><h2>Grafico 1m</h2><select id="ticker" aria-label="Titolo"></select><span id="stale" class="badge" hidden>cache</span></div>
-<canvas id="chart" height="220"></canvas>
-<p id="chartInfo" class="muted"></p>
+
+<section class="sm-card">
+<div class="sm-row">
+<h2 class="sm-label">Grafico 1m</h2>
+<select id="ticker" class="sm-input sm-num" aria-label="Titolo"></select>
+<span id="stale" class="sm-tag warn" hidden>cache DB</span>
+</div>
+<canvas id="chart" height="220" aria-label="Grafico candele"></canvas>
+<p id="chartInfo" class="sm-mut sm-num"></p>
 </section>
-<section class="card"><h2>Consigli</h2><ul id="adv" class="adv"></ul></section>
+
+<section class="sm-card">
+<h2 class="sm-label">Analisi</h2>
+<ul id="adv" class="adv"></ul>
+</section>
 </main>
+
 <footer>StockMon Go {{VERSION}} · read-only</footer>
-<script src="app.js?v=1" defer></script>
+<script src="app.js?v=3" defer></script>
 </body>
 </html>
